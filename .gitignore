@@ -111,3 +111,6 @@ dist
 
 # TernJS port file
 .tern-port
+
+# rack42u runtime output (firmware bundles)
+.rack/

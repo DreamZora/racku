@@ -1,0 +1,43 @@
+{
+  "name": "rack42u",
+  "version": "0.0.0",
+  "description": "A Bun framework of hot-swappable devices mounted in a 42U-style rack",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DreamZora/rack42u.git"
+  },
+  "engines": {
+    "bun": ">=1.3.13"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./std": "./src/std/index.ts"
+  },
+  "bin": {
+    "rack": "./src/cli.ts"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "check:decisions": "bun scripts/check-decisions.ts",
+    "check": "bun run typecheck && bun run lint && bun run check:decisions && bun test"
+  },
+  "dependencies": {
+    "@standard-schema/spec": "1.1.0",
+    "valibot": "1.5.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.7",
+    "@types/bun": "1.3.13",
+    "typescript": "7.0.2",
+    "zod": "4.6.7"
+  }
+}
