@@ -30,10 +30,11 @@ export async function validate<S extends StandardSchemaV1>(
 }
 
 /**
- * Formats Standard Schema issues as one line per issue, prefixed by the issue path.
+ * Formats Standard Schema issues on one line: each issue is prefixed by its path, and issues
+ * are separated by `; `.
  *
  * @param issues Issues reported by a schema.
- * @returns A human-readable summary.
+ * @returns A human-readable summary, for example `user.name: Required; Too short`.
  */
 export function formatIssues(issues: ReadonlyArray<StandardSchemaV1.Issue>): string {
   return issues

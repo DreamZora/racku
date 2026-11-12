@@ -54,10 +54,13 @@ export class RackError extends Error {
 }
 
 /**
- * Narrows an unknown value to a {@link RackError}-like object with a string code.
+ * Reports whether a value is a {@link RackError} instance.
+ *
+ * Errors from another thread arrive as {@link WireError} objects; revive them with
+ * {@link fromWireError} before testing them.
  *
  * @param value Any caught value.
- * @returns `true` when the value is a `RackError` or carries a string `code`.
+ * @returns `true` when the value is a `RackError`.
  */
 export function isRackError(value: unknown): value is RackError {
   return value instanceof RackError;
@@ -78,8 +81,18 @@ export function toWireError(error: unknown): WireError {
     if (error.data !== undefined && isCloneable(error.data)) wire.data = error.data;
     return wire;
   }
-  const message = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : describeThrown(error);
   return { code: "RACK_DEVICE_FAULT", message };
+}
+
+function describeThrown(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    // `String()` throws for values without a primitive conversion, such as
+    // `Object.create(null)`; the `[object Type]` tag keeps the conversion total.
+    return Object.prototype.toString.call(value);
+  }
 }
 
 /**

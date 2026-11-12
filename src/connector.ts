@@ -42,7 +42,8 @@ export interface ConnectorInfo {
 }
 
 const CONNECTOR_ID = /^[a-z0-9][a-z0-9.-]*\/v\d+$/;
-const MEMBER_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+// ECMAScript IdentifierName without escapes, so `ctx.ports.<need>.<member>` is valid syntax.
+const MEMBER_NAME = /^[\p{ID_Start}$_][\p{ID_Continue}$\u200C\u200D]*$/u;
 
 /**
  * Declares an RPC member.
