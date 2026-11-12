@@ -117,6 +117,13 @@ Measured on 2026-11-12 on the local machine with Bun 1.3.13:
 - The rack base directory must be inside the app directory, otherwise firmware cannot resolve external dependencies.
 - Documentation must state clearly which capabilities P0 does not support, so that they are not mistaken for supported ones.
 
+## Implementation
+
+- Toolchain: `package.json` (scripts, `engines.bun`, and dependencies), `tsconfig.json`, `biome.json`, and `bun.lock`.
+- Decision gate: `scripts/check-decisions.ts`, run by `bun run check:decisions`.
+- Tests: `test/*.test.ts`.
+- The other P0 items are not implemented yet; the "Current state" section of `AGENTS.md` tracks progress.
+
 ## Confirmation
 
 - Drafted by the Agent and revised on 2026-11-12 from measured results.

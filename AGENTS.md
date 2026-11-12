@@ -6,8 +6,8 @@ This file defines the project background, architectural constraints, and working
 
 ## Current state
 
-- The P0 scaffold is in place: `package.json`, `tsconfig.json`, `biome.json`, `bun.lock`, and the first runtime modules under `src/` (`schema.ts`, `connector.ts`, `errors.ts`).
-- P0 still lacks the rack runtime, the CLI, the panel, the standard devices, the tests, and the decision gate; [P0 scope, repository layout, and toolchain](.agents/decisions/261112_043033-p0-scope-and-toolchain.md) fixes the scope and the layout.
+- The P0 scaffold is in place: `package.json`, `tsconfig.json`, `biome.json`, `bun.lock`, the first runtime modules under `src/` (`schema.ts`, `connector.ts`, `errors.ts`) with their tests under `test/`, and the decision gate `scripts/check-decisions.ts`.
+- P0 still lacks the package entry points, the rack runtime, the CLI, the panel, the standard devices, the example app, and `README.md`; [P0 scope, repository layout, and toolchain](.agents/decisions/261112_043033-p0-scope-and-toolchain.md) fixes the scope and the layout.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
 
 ## Project positioning
@@ -87,6 +87,7 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
   - A construction that only makes sense because of a decision references it in a line comment at that spot.
   - A test that pins a decision's behavior references the decision too.
 - **Reference requirements**: a referenced decision must exist and be `accepted`. When a decision is superseded, update every reference in the same change.
+- **Check**: `bun run check:decisions` enforces the location, file name, format, status, and code reference rules above, including that a referenced `#anchor` exists.
 
 ## Development workflow
 
@@ -94,8 +95,21 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 2. If the task requires a decision, or conflicts with an existing one, write a `proposed` decision first and stop until the user confirms. Do not write implementation code before that confirmation.
 3. Implement only what `accepted` decisions cover, do not widen the scope along the way, and reference decisions in code as required.
 4. Put tests and implementation in the same change, using `bun:test`. See the global rules for how documented capabilities map to tests.
-5. Run the checks closest to the change first, then widen them with the scope. Report only commands that actually ran, with their results. Add the concrete commands to this file once P0 sets up the project.
+5. Run the checks closest to the change first, then widen them with the scope; see [Commands](#commands). Report only commands that actually ran, with their results.
 6. Finish by updating `## Implementation` in the affected decisions and the documentation they affect. Commits follow the global rules and list the relevant decisions in `Context:`.
+
+## Commands
+
+| Purpose | Command |
+|---|---|
+| Run all tests | `bun test` |
+| Run one test file | `bun test test/connector.test.ts` |
+| Run the tests whose names match a pattern | `bun test -t "<pattern>"` |
+| Type check | `bun run typecheck` |
+| Check formatting and lint rules | `bun run lint` |
+| Apply formatting and safe lint fixes | `bun run format` |
+| Check decision records and `@decision` references | `bun run check:decisions` |
+| Run the type check, lint, decision gate, and tests in order | `bun run check` |
 
 ## Coding standards
 
@@ -125,6 +139,8 @@ tsconfig.json        TypeScript configuration
 biome.json           formatter and linter configuration
 bun.lock             lockfile
 src/                 framework source; entry points are still being built
+test/                bun:test tests, named *.test.ts
+scripts/             project scripts; check-decisions.ts is the decision gate
 .agents/decisions/   decision records, stored flat as <YYMMDD>_<hhmmss>-<topic>.md
 ```
 

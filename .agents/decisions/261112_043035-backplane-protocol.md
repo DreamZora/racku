@@ -120,6 +120,11 @@ Measured on 2026-11-12 on Bun 1.3.13 on this machine:
 - A reset loses in-memory state, so a device that needs to keep state should put it in a storage device.
 - Fault resets handle crashes only. Detecting a hung device (one that has not crashed but no longer responds) is left to a watchdog in a later stage.
 
+## Implementation
+
+- Error model: `RackError`, `WireError`, `toWireError`, `fromWireError`, `isRackError`, and `isCloneable` in `src/errors.ts`, tested in `test/errors.test.ts`.
+- Channels, boot, routing, RPC, events, draining, and fault handling are not implemented yet.
+
 ## Confirmation
 
 - Drafted by the Agent and revised on 2026-11-12 based on measurement results: the wire format of errors, the error codes for when cloning fails, and the rule that judges a crash by "whether the rack terminated it deliberately" were added.

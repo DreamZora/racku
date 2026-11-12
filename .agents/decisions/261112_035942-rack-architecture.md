@@ -63,6 +63,11 @@ Because devices hold only addresses, a reset or swap of a lower device does not 
 - The gravity rule forbids lower devices from depending on upper ones, so some designs must become event subscriptions.
 - Reliability, management, and multiple-rack capabilities are delivered in stages, each with its own decision at that point.
 
+## Implementation
+
+- Standard Schema validation of connector schemas: `validate`, `formatIssues`, and `isStandardSchema` in `src/schema.ts`, tested in `test/schema.test.ts`.
+- The rack runtime is not implemented yet.
+
 ## Confirmation
 
 - Drafted by the Agent along the direction agreed with the user. On 2026-11-12 the user authorized the Agent to decide routine decisions on its own, and this decision was set to `accepted` on that basis.

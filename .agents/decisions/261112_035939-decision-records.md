@@ -99,3 +99,5 @@ Status: accepted
 ## Implementation
 
 - The "decision records" section of `AGENTS.md` is the operational summary of this specification and links back to this file.
+- `scripts/check-decisions.ts` is the check script that `## Impact` anticipates. It was added as the decision gate of [P0 scope, repository layout, and toolchain](261112_043033-p0-scope-and-toolchain.md#p0-scope); `bun run check:decisions` runs it, and `test/check-decisions.test.ts` tests it.
+- The gate checks flat storage and file names, the fixed first three lines, the status line, the sections and their order, and that every `@decision` reference in code names an existing `accepted` decision and, when an anchor is given, a heading with that GitHub-style anchor.
