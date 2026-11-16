@@ -9,7 +9,7 @@
     "url": "git+https://github.com/DreamZora/rack42u.git"
   },
   "engines": {
-    "bun": ">=1.3.13"
+    "bun": ">=1.4.4"
   },
   "exports": {
     ".": "./src/index.ts",
@@ -36,7 +36,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.7",
-    "@types/bun": "1.3.13",
+    "@types/bun": "1.4.4",
     "typescript": "7.0.2",
     "zod": "4.6.7"
   }
