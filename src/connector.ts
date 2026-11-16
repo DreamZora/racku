@@ -99,6 +99,39 @@ export function connector<const M extends Members>(id: string, members: M): Conn
 }
 
 /**
+ * Reports whether a name is a valid member name, the rule that also applies to the `needs` and
+ * `provides` keys of a device.
+ *
+ * @param name The candidate name.
+ * @returns `true` when the name is an ECMAScript identifier name.
+ */
+export function isIdentifierName(name: string): boolean {
+  return MEMBER_NAME.test(name);
+}
+
+/**
+ * Reports whether a value is a connector created by {@link connector}.
+ *
+ * Connectors cross module copies (a device bundle may carry its own), so the check is
+ * structural instead of `instanceof`.
+ *
+ * @param value Any value.
+ * @returns `true` when the value has a connector id and member specs.
+ */
+export function isConnector(value: unknown): value is Connector {
+  if (typeof value !== "object" || value === null) return false;
+  const { id, members } = value as { id?: unknown; members?: unknown };
+  if (typeof id !== "string" || !CONNECTOR_ID.test(id)) return false;
+  if (typeof members !== "object" || members === null) return false;
+  return Object.values(members).every(
+    (spec) =>
+      typeof spec === "object" &&
+      spec !== null &&
+      ((spec as MemberSpec).kind === "rpc" || (spec as MemberSpec).kind === "event"),
+  );
+}
+
+/**
  * Describes a connector for FRU data and compatibility checks.
  *
  * @param c The connector.
