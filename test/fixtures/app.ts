@@ -130,6 +130,66 @@ export function useRacks(): (spec: RackSpec, options?: StartOptions) => Promise<
   };
 }
 
+/** A `rack` command-line process with its combined output. */
+export class Cli {
+  readonly process: Bun.Subprocess<"ignore", "pipe", "pipe">;
+  output = "";
+
+  /**
+   * Runs `bun src/cli.ts <args>` with the Bun that runs the tests.
+   *
+   * @param args Command-line arguments, for example `["start", "rack.ts"]`.
+   * @param cwd Working directory.
+   * @param env Extra environment variables.
+   * @param command Replaces the whole command line, for running the CLI another way.
+   */
+  constructor(
+    args: string[],
+    cwd: string,
+    env: Record<string, string> = {},
+    command = [process.execPath, join(ROOT, "src", "cli.ts"), ...args],
+  ) {
+    this.process = Bun.spawn(command, {
+      cwd,
+      env: { ...process.env, ...env },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    void this.#pump(this.process.stdout);
+    void this.#pump(this.process.stderr);
+  }
+
+  async #pump(stream: ReadableStream<Uint8Array>): Promise<void> {
+    const decoder = new TextDecoder();
+    for await (const chunk of stream) this.output += decoder.decode(chunk, { stream: true });
+  }
+
+  /** Waits until the output matches `pattern`. */
+  waitFor(pattern: RegExp, timeout = 15_000): Promise<RegExpMatchArray> {
+    return waitFor(() => this.output.match(pattern) ?? undefined, timeout).catch(() => {
+      throw new Error(`no output matching ${pattern} in:\n${this.output}`);
+    });
+  }
+
+  /** Waits for the panel and returns its URL. */
+  async panelUrl(): Promise<string> {
+    const match = await this.waitFor(/panel http listening \{"url":"([^"]+)"\}/);
+    return match[1] as string;
+  }
+
+  /** Resolves with the exit code once the process has exited and its output is read. */
+  async exited(): Promise<number> {
+    const code = await this.process.exited;
+    await Bun.sleep(20);
+    return code;
+  }
+
+  kill(signal: NodeJS.Signals = "SIGINT"): void {
+    this.process.kill(signal);
+  }
+}
+
 /** Polls `check` until it returns a value other than `undefined` or `false`. */
 export async function waitFor<T>(
   check: () => T | undefined | false | Promise<T | undefined | false>,
