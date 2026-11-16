@@ -6,7 +6,7 @@
  * `<file>:<line>: <problem>` line per problem and exits with code 1 when it finds any.
  *
  * @decision .agents/decisions/261112_035939-decision-records.md
- * @decision .agents/decisions/261112_043033-p0-scope-and-toolchain.md#p0-scope
+ * @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#p0-scope
  */
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";

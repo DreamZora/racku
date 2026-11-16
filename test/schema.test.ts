@@ -9,7 +9,7 @@ import { z } from "zod";
 import { formatIssues, isStandardSchema, type StandardSchemaV1, validate } from "../src/schema.ts";
 
 // zod is the "other library": connectors must not depend on valibot.
-// @decision .agents/decisions/261112_043033-p0-scope-and-toolchain.md#toolchain-and-dependencies
+// @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#toolchain-and-dependencies
 describe("validate", () => {
   test("returns the parsed output of a valibot schema", async () => {
     expect(await validate(v.pipe(v.string(), v.trim()), "  kv  ")).toEqual({

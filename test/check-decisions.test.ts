@@ -258,7 +258,7 @@ async function runGate(cwd: string) {
   return { stdout, stderr, exitCode };
 }
 
-// @decision .agents/decisions/261112_043033-p0-scope-and-toolchain.md#commands
+// @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#commands
 describe("command line", () => {
   test("exits 0 and reports what it checked", async () => {
     const root = await repo({

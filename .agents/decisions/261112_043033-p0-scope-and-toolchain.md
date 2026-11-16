@@ -1,6 +1,6 @@
 # Decision: P0 scope, repository layout, and toolchain
 
-Status: accepted
+Status: superseded — replaced by [261115_232410-p0-scope-and-toolchain-bun-1-4-4.md](261115_232410-p0-scope-and-toolchain-bun-1-4-4.md)
 
 ## Background
 

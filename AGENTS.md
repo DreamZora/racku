@@ -7,7 +7,7 @@ This file defines the project background, architectural constraints, and working
 ## Current state
 
 - The P0 scaffold is in place: `package.json`, `tsconfig.json`, `biome.json`, `bun.lock`, the first runtime modules under `src/` (`schema.ts`, `connector.ts`, `errors.ts`) with their tests under `test/`, and the decision gate `scripts/check-decisions.ts`.
-- P0 still lacks the package entry points, the rack runtime, the CLI, the panel, the standard devices, the example app, and `README.md`; [P0 scope, repository layout, and toolchain](.agents/decisions/261112_043033-p0-scope-and-toolchain.md) fixes the scope and the layout.
+- P0 still lacks the package entry points, the rack runtime, the CLI, the panel, the standard devices, the example app, and `README.md`; [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md) fixes the scope and the layout.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
 
 ## Project positioning
@@ -145,7 +145,7 @@ scripts/             project scripts; check-decisions.ts is the decision gate
 ```
 
 - `docs/` does not exist yet; it will hold user-facing project documentation only.
-- The code layout for P0 is fixed by [P0 scope, repository layout, and toolchain](.agents/decisions/261112_043033-p0-scope-and-toolchain.md).
+- The code layout for P0 is fixed by [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md).
 
 ## Maintaining this file
 
