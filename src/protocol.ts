@@ -1,17 +1,23 @@
 /**
- * Messages exchanged between the rack main thread and the Worker that hosts a device.
+ * Messages exchanged between the rack main thread and the Workers that host devices, and between
+ * Workers over links.
  *
- * The control channel (the Worker's own `postMessage`) carries boot, lifecycle hooks, and logs.
- * The data channel (a `MessagePort` transferred at boot) carries calls, results, cancellations,
- * events, and subscriptions. Every message is structured-cloneable; errors travel as
- * {@link WireError}.
+ * The control channel (the Worker's own `postMessage`) carries boot, lifecycle hooks, link
+ * management, metrics, and logs. The data channel (a `MessagePort` transferred at boot) carries
+ * calls from outside the rack. A link (one `MessageChannel` per wire) carries calls, results,
+ * cancellations, subscriptions, events, and hold markers between two devices. Every message is
+ * structured-cloneable; errors travel as {@link WireError}.
  *
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#channels
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#rpc
+ * @decision .agents/decisions/261116_024226-backplane-links.md#channels
+ * @decision .agents/decisions/261116_024226-backplane-links.md#links
+ * @decision .agents/decisions/261116_024226-backplane-links.md#rpc
  */
 import type { ConnectorInfo } from "./connector.ts";
 import type { HookName, LogLevel } from "./device.ts";
 import type { WireError } from "./errors.ts";
+
+/** Most calls a held need queues, and most events a provider queues for a held consumer. */
+export const QUEUE_LIMIT = 10_000;
 
 /** FRU data a Worker reports after loading its firmware. */
 export interface Fru {
@@ -39,6 +45,10 @@ export interface BootRequest {
   u: number;
   config: unknown;
   baseDir: string;
+  /** Timeout of the device's calls that set none, in ms. */
+  callTimeout: number;
+  /** Shared storage of one `Int32`: the number of calls the instance is serving. */
+  gauge: SharedArrayBuffer;
   port: MessagePort;
 }
 
@@ -53,8 +63,133 @@ export interface HookRequest {
   from?: string;
 }
 
+/** Main thread to consumer: a new link for a need, which becomes the need's current link. */
+export interface NeedLinkRequest {
+  id: number;
+  op: "link";
+  need: string;
+  link: number;
+  end: MessagePort;
+  /** `<device>.<port>` at the other end, for messages. */
+  provider: string;
+  /**
+   * The token of the hold the provider instance is in, if any: new calls of the need wait, and a
+   * hold marker with this token goes out on the link first.
+   */
+  hold: number | undefined;
+}
+
+/** Main thread to consumer: queue new calls of a need, and send a hold marker on its link. */
+export interface NeedHoldRequest {
+  id: number;
+  op: "hold";
+  need: string;
+  token: number;
+}
+
+/** Main thread to consumer: send the queued calls of a need on its current link. */
+export interface NeedReleaseRequest {
+  id: number;
+  op: "release";
+  need: string;
+}
+
+/** Main thread to consumer: a link of a need is down; its pending calls fail with `error`. */
+export interface NeedDownRequest {
+  id: number;
+  op: "down";
+  need: string;
+  link: number;
+  error: WireError;
+}
+
+/** Main thread to provider: the provider end of a link from a consumer. */
+export interface AttachRequest {
+  id: number;
+  op: "attach";
+  link: number;
+  end: MessagePort;
+  /** The provided port the link serves. */
+  port: string;
+  /** Name of the consumer device. */
+  consumer: string;
+  /** Whether events go out on the link: the consumer instance is installed. */
+  live: boolean;
+  /** Whether events for the consumer device are queued: its slot is held. */
+  held: boolean;
+}
+
+/** Main thread to provider: queue the events for a consumer device and send hold markers. */
+export interface HoldEventsRequest {
+  id: number;
+  op: "holdEvents";
+  consumer: string;
+  token: number;
+}
+
+/**
+ * Main thread to provider: events for a consumer device go out on these links only, starting
+ * with the events queued while the device was held.
+ */
+export interface LiveRequest {
+  id: number;
+  op: "live";
+  consumer: string;
+  links: number[];
+}
+
+/** Main thread to provider: a consumer instance is gone; abort its calls and close the link. */
+export interface DropRequest {
+  id: number;
+  op: "drop";
+  link: number;
+}
+
+/** Main thread to Worker: whether the instance is the one installed in its slot. */
+export interface InstalledRequest {
+  id: number;
+  op: "installed";
+  installed: boolean;
+}
+
+/** Main thread to Worker: reply once these hold markers arrived and no call is being served. */
+export interface DrainRequest {
+  id: number;
+  op: "drain";
+  markers: Marker[];
+}
+
+/** Main thread to Worker: reply with the call and event counters. */
+export interface MetricsRequest {
+  id: number;
+  op: "metrics";
+}
+
+/** A hold marker a drain waits for: the link it travels on, and the hold it belongs to. */
+export type Marker = [link: number, token: number];
+
 /** A control-channel request. */
-export type ControlRequest = BootRequest | HookRequest;
+export type ControlRequest =
+  | BootRequest
+  | HookRequest
+  | NeedLinkRequest
+  | NeedHoldRequest
+  | NeedReleaseRequest
+  | NeedDownRequest
+  | AttachRequest
+  | HoldEventsRequest
+  | LiveRequest
+  | DropRequest
+  | InstalledRequest
+  | DrainRequest
+  | MetricsRequest;
+
+/** A control-channel request before the sender numbers it. */
+export type ControlPayload = ControlRequest extends infer R
+  ? R extends { id: number }
+    ? Omit<R, "id">
+    : never
+  : never;
 
 /** A control-channel reply, matched to its request by `id`. */
 export type ControlReply = { id: number; ok: true; value: unknown } | ControlFailure;
@@ -77,17 +212,7 @@ export interface LogNotice {
 /** Anything a Worker posts on the control channel. */
 export type ControlNotice = ControlReply | LogNotice;
 
-/** Caller Worker to backplane: call an RPC member of a need. */
-export interface CallFromCaller {
-  t: "call";
-  id: number;
-  need: string;
-  member: string;
-  input: unknown;
-  timeout: number | undefined;
-}
-
-/** Backplane to provider Worker: run an RPC member of a port. */
+/** Backplane to provider, on the data channel: a call from outside the rack. */
 export interface CallToProvider {
   t: "call";
   id: number;
@@ -95,11 +220,11 @@ export interface CallToProvider {
   member: string;
   input: unknown;
   deadline: number;
-  /** Address of the caller: a device name, or `rack` for calls from outside the rack. */
+  /** Address of the caller: `rack` or `panel`. */
   caller: string;
 }
 
-/** The outcome of a call, in either direction. */
+/** The outcome of a call, on the data channel or on a link. */
 export type CallResult = { t: "result"; id: number; ok: true; value: unknown } | CallFailure;
 
 /** A failed call. */
@@ -110,37 +235,49 @@ export interface CallFailure {
   error: WireError;
 }
 
-/** Cancels a call, in either direction. */
+/** Cancels a call, on the data channel or on a link. */
 export interface Cancel {
   t: "cancel";
   id: number;
 }
 
-/** Publisher Worker to backplane: an event on a provided port. */
-export interface Emit {
-  t: "emit";
-  port: string;
-  event: string;
-  payload: unknown;
+/** Consumer to provider on a link: run an RPC member of the linked port. */
+export interface LinkCall {
+  t: "call";
+  /** Unique per link. */
+  id: number;
+  member: string;
+  input: unknown;
+  deadline: number;
 }
 
-/** Backplane to consumer Worker: an event on a need. */
-export interface Deliver {
-  t: "event";
-  need: string;
-  event: string;
-  payload: unknown;
-}
-
-/** Consumer Worker to backplane: start or stop receiving an event of a need. */
+/** Consumer to provider on a link: start or stop receiving an event. */
 export interface Subscription {
   t: "sub" | "unsub";
-  need: string;
   event: string;
 }
 
-/** Data-channel messages a Worker sends. */
-export type DataFromWorker = CallFromCaller | CallResult | Cancel | Emit | Subscription;
+/** Either direction on a link: nothing of the held kind follows until the hold ends. */
+export interface HoldMarker {
+  t: "hold";
+  token: number;
+}
+
+/** Provider to consumer on a link: an event of the linked port. */
+export interface LinkEvent {
+  t: "event";
+  event: string;
+  payload: unknown;
+}
+
+/** What a consumer sends on a link. */
+export type ToProvider = LinkCall | Cancel | Subscription | HoldMarker;
+
+/** What a provider sends on a link. */
+export type ToConsumer = CallResult | LinkEvent | HoldMarker;
 
 /** Data-channel messages the backplane sends. */
-export type DataToWorker = CallToProvider | CallResult | Cancel | Deliver;
+export type DataToWorker = CallToProvider | Cancel;
+
+/** Data-channel messages a Worker sends. */
+export type DataFromWorker = CallResult;

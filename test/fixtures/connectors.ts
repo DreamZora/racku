@@ -82,3 +82,47 @@ export const Life = connector("test.life/v1", {
 export const Watcher = connector("test.watcher/v1", {
   changes: rpc(v.undefined(), v.array(v.string())),
 });
+
+/** Makes calls between devices on demand, to observe links without the rack in the middle. */
+export const Pump = connector("test.pump/v1", {
+  /** Makes `n` echo calls one after another; reports when the first started and the last ended. */
+  burst: rpc(
+    v.object({ n: v.number() }),
+    v.object({ startedAt: v.number(), finishedAt: v.number() }),
+  ),
+  /**
+   * Starts `n` counter increments `gapMs` apart without waiting for them; returns their results
+   * in call order and the longest time one of them took.
+   */
+  incs: rpc(
+    v.object({ n: v.number(), gapMs: v.number() }),
+    v.object({ values: v.array(v.number()), maxMs: v.number() }),
+  ),
+  /** When each `pinged` event from the probe arrived, as millisecond timestamps. */
+  pings: rpc(v.undefined(), v.array(v.number())),
+  /** Blocks the device's Worker for `ms` milliseconds. */
+  spin: rpc(v.object({ ms: v.number() }), v.undefined()),
+});
+
+/** A provider that can be kept busy or crashed, to exercise races around swaps and resets. */
+export const Busy = connector("test.busy/v1", {
+  /** Returns the id of the instance that answers. */
+  whoami: rpc(v.undefined(), v.string()),
+  /** Blocks the device's Worker for `ms` milliseconds. */
+  spin: rpc(v.object({ ms: v.number() }), v.undefined()),
+  /** Exits the device's Worker right after answering. */
+  crash: rpc(v.undefined(), v.undefined()),
+});
+
+/** Calls a busy provider on demand, and can be kept busy or crashed itself. */
+export const Client = connector("test.client/v1", {
+  /** Calls `whoami` and reports the outcome instead of throwing. */
+  call: rpc(
+    v.object({ timeout: v.optional(v.number()) }),
+    v.object({ ok: v.boolean(), by: v.optional(v.string()), code: v.optional(v.string()) }),
+  ),
+  /** Blocks the device's Worker for `ms` milliseconds. */
+  spin: rpc(v.object({ ms: v.number() }), v.undefined()),
+  /** Exits the device's Worker right after answering. */
+  crash: rpc(v.undefined(), v.undefined()),
+});

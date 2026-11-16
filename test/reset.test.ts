@@ -1,7 +1,7 @@
 /**
  * Tests for crash detection and automatic resets.
  *
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#faults-and-resets
+ * @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
  * @decision .agents/decisions/261115_222025-p0-api-details.md#resets
  */
 import { describe, expect, test } from "bun:test";

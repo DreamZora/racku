@@ -2,19 +2,22 @@
  * The main thread's handle on one device instance: a Worker running `worker.ts`, its control
  * channel, and the main-thread end of its data channel.
  *
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#channels
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#faults-and-resets
+ * @decision .agents/decisions/261116_024226-backplane-links.md#channels
+ * @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
+ * @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
  */
 import type { HookName } from "./device.ts";
 import { fromWireError, RackError } from "./errors.ts";
 import type { Firmware } from "./firmware.ts";
+import type { InstanceMetrics } from "./metrics.ts";
 import type {
-  BootRequest,
   ControlNotice,
+  ControlPayload,
   DataFromWorker,
   DataToWorker,
   Fru,
   LogNotice,
+  Marker,
 } from "./protocol.ts";
 
 const WORKER_URL = new URL("./worker.ts", import.meta.url).href;
@@ -33,7 +36,7 @@ export interface Wire {
   port: string;
 }
 
-/** A call the backplane is routing; see `Backplane` in `rack.ts`. */
+/** A call from outside the rack that the backplane is routing; see `Backplane`. */
 export interface RoutedCall {
   readonly id: number;
   settled: boolean;
@@ -58,12 +61,8 @@ export class Instance {
   active = false;
   /** Wiring of this instance's needs; set when the instance is assembled into the rack. */
   wiring = new Map<string, Wire>();
-  /** Calls this instance is processing as a provider, keyed by backplane call id. */
+  /** Calls from outside the rack this instance is serving, keyed by backplane call id. */
   readonly inFlight = new Map<number, RoutedCall>();
-  /** Calls this instance made as a caller and that are not settled, keyed by its own id. */
-  readonly outgoing = new Map<number, RoutedCall>();
-  /** `<need>.<event>` keys this instance subscribed to. */
-  readonly subscriptions = new Set<string>();
   /** Set once the Worker has exited. */
   dead = false;
 
@@ -71,6 +70,8 @@ export class Instance {
   readonly #data: MessagePort;
   /** The Worker's end of the data channel, transferred with the boot request. */
   readonly #bootPort: MessagePort;
+  /** Shared with the Worker, which counts the calls it serves there. */
+  readonly #gauge = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   readonly #host: InstanceHost;
   readonly #requests = new Map<number, Request>();
   readonly #drainWaiters = new Set<() => void>();
@@ -111,6 +112,11 @@ export class Instance {
     this.#data.start();
   }
 
+  /** Calls the instance is serving, from links and from outside the rack. */
+  get serving(): number {
+    return Atomics.load(this.#gauge, 0);
+  }
+
   /**
    * Loads the firmware in the Worker and reads its FRU data.
    *
@@ -121,20 +127,27 @@ export class Instance {
     u: number;
     config: unknown;
     baseDir: string;
+    callTimeout: number;
     timeout: number;
   }): Promise<Fru> {
-    const message: Omit<BootRequest, "id"> = {
-      op: "boot",
-      firmware: this.firmware.url,
-      hash: this.firmware.hash,
-      source: this.firmware.source,
-      name: options.name,
-      u: options.u,
-      config: options.config,
-      baseDir: options.baseDir,
-      port: this.#bootPort,
-    };
-    const fru = (await this.#request(message, options.timeout, "boot", [this.#bootPort])) as Fru;
+    const fru = (await this.request(
+      {
+        op: "boot",
+        firmware: this.firmware.url,
+        hash: this.firmware.hash,
+        source: this.firmware.source,
+        name: options.name,
+        u: options.u,
+        config: options.config,
+        baseDir: options.baseDir,
+        callTimeout: options.callTimeout,
+        gauge: this.#gauge.buffer as SharedArrayBuffer,
+        port: this.#bootPort,
+      },
+      options.timeout,
+      "boot",
+      [this.#bootPort],
+    )) as Fru;
     this.fru = fru;
     this.slot = fru.name;
     return fru;
@@ -152,7 +165,7 @@ export class Instance {
     extra: { state?: unknown; from?: string } = {},
   ): Promise<unknown> {
     try {
-      return await this.#request({ op: "hook", hook, ...extra }, timeout, hook);
+      return await this.request({ op: "hook", hook, ...extra }, timeout, hook);
     } catch (error) {
       const cause =
         error instanceof RackError ? error : new RackError("RACK_HOOK_FAILED", String(error));
@@ -165,51 +178,17 @@ export class Instance {
   }
 
   /**
-   * Posts a data-channel message to the Worker.
+   * Sends a control-channel request and waits for its reply.
    *
-   * @throws DataCloneError when the message cannot be cloned.
+   * @param transfer Ports that move to the Worker with the request.
+   * @throws RackError from the Worker; `RACK_HOOK_FAILED` after `timeout` ms;
+   *   `RACK_DEVICE_FAULT` when the instance is gone or dies first; `RACK_INVALID_CONFIG` when
+   *   the request cannot be cloned, which only the boot config can cause.
    */
-  post(message: DataToWorker): void {
-    if (!this.dead) this.#data.postMessage(message);
-  }
-
-  /** Resolves once {@link inFlight} is empty, or with `false` after `timeout` ms. */
-  drain(timeout: number): Promise<boolean> {
-    if (this.inFlight.size === 0) return Promise.resolve(true);
-    return new Promise((resolve) => {
-      const done = () => {
-        clearTimeout(timer);
-        resolve(true);
-      };
-      const timer = setTimeout(() => {
-        this.#drainWaiters.delete(done);
-        resolve(false);
-      }, timeout);
-      this.#drainWaiters.add(done);
-    });
-  }
-
-  /** Wakes {@link drain} waiters when no call is in flight any more. */
-  checkDrained(): void {
-    if (this.inFlight.size > 0) return;
-    for (const done of [...this.#drainWaiters]) done();
-    this.#drainWaiters.clear();
-  }
-
-  /** Terminates the Worker on purpose; the exit is not treated as a crash. */
-  terminate(): void {
-    if (this.dead) return;
-    this.#deliberate = true;
-    this.#worker.terminate();
-    this.#exit("terminated by the rack");
-  }
-
-  #request(
-    message:
-      | Omit<BootRequest, "id">
-      | { op: "hook"; hook: HookName; state?: unknown; from?: string },
+  request(
+    message: ControlPayload,
     timeout: number,
-    what: string,
+    what: string = message.op,
     transfer: Bun.Transferable[] = [],
   ): Promise<unknown> {
     if (this.dead) {
@@ -233,6 +212,73 @@ export class Instance {
         reject(new RackError("RACK_INVALID_CONFIG", `${this.slot}: config cannot be cloned`));
       }
     });
+  }
+
+  /**
+   * Reads the instance's call and event counters.
+   *
+   * @throws RackError when the instance is gone or does not answer within `timeout` ms.
+   */
+  async metrics(timeout: number): Promise<InstanceMetrics> {
+    return (await this.request({ op: "metrics" }, timeout)) as InstanceMetrics;
+  }
+
+  /**
+   * Posts a data-channel message to the Worker.
+   *
+   * @throws DataCloneError when the message cannot be cloned.
+   */
+  post(message: DataToWorker): void {
+    if (!this.dead) this.#data.postMessage(message);
+  }
+
+  /**
+   * Waits until every hold marker in `markers` has reached the instance and it serves no call,
+   * from links or from outside the rack.
+   *
+   * @returns `true` once drained, `false` after `timeout` ms.
+   */
+  async drain(timeout: number, markers: Marker[] = []): Promise<boolean> {
+    if (this.dead) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeout);
+    });
+    const drained = (async () => {
+      try {
+        await this.request({ op: "drain", markers }, timeout);
+      } catch {
+        // The instance died, which ends its calls too, or it did not answer in time.
+        if (!this.dead) return false;
+      }
+      await this.#externalDrained();
+      return true;
+    })();
+    try {
+      return await Promise.race([drained, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Wakes {@link drain} waiters when no call from outside the rack is in flight any more. */
+  checkDrained(): void {
+    if (this.inFlight.size > 0) return;
+    for (const done of [...this.#drainWaiters]) done();
+    this.#drainWaiters.clear();
+  }
+
+  /** Terminates the Worker on purpose; the exit is not treated as a crash. */
+  terminate(): void {
+    if (this.dead) return;
+    this.#deliberate = true;
+    this.#worker.terminate();
+    this.#exit("terminated by the rack");
+  }
+
+  #externalDrained(): Promise<void> {
+    if (this.inFlight.size === 0) return Promise.resolve();
+    return new Promise((resolve) => this.#drainWaiters.add(resolve));
   }
 
   #onControl(notice: ControlNotice): void {

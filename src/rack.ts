@@ -1,13 +1,15 @@
 /**
  * The rack runtime: assembly, power sequencing, swaps, crash resets, and the rack handle.
  *
- * The main thread only builds firmware, runs Workers, and routes messages; it never imports
- * device code.
+ * The main thread only builds firmware, runs Workers, sets up the links between them, and routes
+ * calls from outside the rack; it never imports device code.
  *
  * @decision .agents/decisions/261112_035942-rack-architecture.md#gravity-rule
  * @decision .agents/decisions/261112_035943-hot-swap.md#the-swap-sequence
  * @decision .agents/decisions/261112_035943-hot-swap.md#the-main-thread-never-loads-device-code
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#faults-and-resets
+ * @decision .agents/decisions/261116_024226-backplane-links.md#wiring-and-routing
+ * @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
+ * @decision .agents/decisions/261116_035534-call-metrics.md#reading
  * @decision .agents/decisions/261112_043034-device-api.md#rack-runtime
  * @decision .agents/decisions/261115_222025-p0-api-details.md#rack-handle
  * @decision .agents/decisions/261115_222025-p0-api-details.md#error-codes
@@ -29,8 +31,9 @@ import {
   type RackManifest,
   type SlotSpec,
 } from "./manifest.ts";
+import type { DeviceMetrics, RackMetrics } from "./metrics.ts";
 import { openHttpPanel, type Panel } from "./panel.ts";
-import type { DataFromWorker, Fru, LogNotice } from "./protocol.ts";
+import type { DataFromWorker, Fru, LogNotice, Marker } from "./protocol.ts";
 
 export type { SlotState } from "./backplane.ts";
 
@@ -45,7 +48,7 @@ export interface SlotStatus {
   firmware: string | null;
   /** Absolute path of the device file. */
   source: string;
-  /** Calls the installed instance is processing. */
+  /** Calls the installed instance is processing, from other devices and from outside the rack. */
   inFlight: number;
   /** Crashes within the last 60 seconds. */
   crashes: number;
@@ -86,7 +89,7 @@ export interface StartOptions {
   logger?: Logger;
   /** Timeout of calls that set none, in ms; default 30 000. */
   callTimeout?: number;
-  /** Timeout of each lifecycle hook and of boot, in ms; default 30 000. */
+  /** Timeout of boot, of each lifecycle hook, and of each metrics request, in ms; default 30 000. */
   hookTimeout?: number;
   /** How long retiring instances may finish their calls, in ms; default 10 000. */
   drainTimeout?: number;
@@ -128,6 +131,15 @@ export interface RackHandle {
   unplug(name: string): Promise<void>;
   /** Adds a listener; returns a function that removes it. */
   subscribe(listener: (event: RackEvent) => void): () => void;
+  /**
+   * Reads the call and event counters of every installed instance over the management bus.
+   * Counters start at zero when an instance boots, so they restart when a device swaps or
+   * resets.
+   *
+   * @returns One entry per device whose installed instance answered within `hookTimeout`,
+   *   ordered by slot from the bottom up; no entries after `stop()`.
+   */
+  metrics(): Promise<RackMetrics>;
   /** Closes the panel and powers devices off from the top down. */
   stop(): Promise<void>;
 }
@@ -169,6 +181,7 @@ class Rack implements InstanceHost {
   readonly #manifest: RackManifest;
   readonly #baseDir: string;
   readonly #logger: Logger;
+  readonly #callTimeout: number;
   readonly #hookTimeout: number;
   readonly #drainTimeout: number;
   readonly #slots = new Map<string, Slot>();
@@ -185,11 +198,14 @@ class Rack implements InstanceHost {
     this.#manifest = manifest;
     this.#baseDir = resolvePath(options.baseDir ?? process.cwd());
     this.#logger = options.logger ?? consoleLogger;
-    const callTimeout = positive("callTimeout", options.callTimeout ?? 30_000);
+    this.#callTimeout = positive("callTimeout", options.callTimeout ?? 30_000);
     this.#hookTimeout = positive("hookTimeout", options.hookTimeout ?? 30_000);
     this.#drainTimeout = positive("drainTimeout", options.drainTimeout ?? 10_000);
-    this.#backplane = new Backplane(this.#slots, callTimeout, (message, device) =>
-      this.#log("warn", message, undefined, device),
+    this.#backplane = new Backplane(
+      this.#slots,
+      this.#instances,
+      this.#callTimeout,
+      this.#hookTimeout,
     );
   }
 
@@ -212,6 +228,7 @@ class Rack implements InstanceHost {
         };
       },
       stop: () => this.#serialize(() => this.#stop()),
+      metrics: () => this.#metrics(),
     });
   }
 
@@ -228,12 +245,11 @@ class Rack implements InstanceHost {
   onExit(instance: Instance, deliberate: boolean, detail: string): void {
     this.#instances.delete(instance);
     const message = `${instance.slot}: instance ${detail}`;
-    this.#backplane.failInFlight(
+    this.#backplane.disconnect(
       instance,
       deliberate ? "RACK_LINK_DOWN" : "RACK_DEVICE_FAULT",
       message,
     );
-    this.#backplane.releaseCaller(instance);
     if (deliberate) return;
     this.#log("error", `${instance.slot} crashed: ${detail}`, {
       firmware: instance.firmware.hash,
@@ -288,6 +304,9 @@ class Rack implements InstanceHost {
       this.#assemble(ready);
       for (const slot of this.#ordered()) {
         const instance = slot.installed as Instance;
+        // Links to the devices below exist already; this links the devices above to it.
+        await this.#backplane.connect(instance);
+        await this.#backplane.install(slot, instance, null);
         await this.#powerOn(instance);
         this.#throwStartFault();
         slot.state = "online";
@@ -619,7 +638,8 @@ class Rack implements InstanceHost {
     slot.state = "swapping";
     let neo: Instance | undefined;
     let deactivated = false;
-    let paused = false;
+    let held = false;
+    let markers: Marker[] = [];
     try {
       neo = await this.#boot(firmware, slot.name, slot.u, slot.config, "RACK_SWAP_REJECTED");
       const fru = neo.fru as Fru;
@@ -632,6 +652,8 @@ class Rack implements InstanceHost {
       }
       neo.wiring = this.#wire(slot.name, slot.u, fru, slot.wiring);
       this.#checkCompatibility(slot, fru);
+      // A standby instance can call its needs from powerOn on; events reach it once installed.
+      await this.#backplane.connect(neo);
       await neo.hook("powerOn", this.#hookTimeout);
       neo.poweredOn = true;
       await neo.hook("selfTest", this.#hookTimeout);
@@ -642,9 +664,9 @@ class Rack implements InstanceHost {
         deactivated = true;
       }
       if (old !== null && !old.dead && old.fru?.snapshot && fru.restore) {
-        this.#backplane.pause(slot);
-        paused = true;
-        if (!(await old.drain(this.#drainTimeout))) {
+        markers = await this.#backplane.hold(slot);
+        held = true;
+        if (!(await this.#backplane.drain(old, markers, this.#drainTimeout))) {
           throw new RackError(
             "RACK_SWAP_REJECTED",
             `${slot.name}: in-flight calls did not finish within ${this.#drainTimeout} ms of the state handover`,
@@ -656,6 +678,19 @@ class Rack implements InstanceHost {
       await neo.hook("activate", this.#hookTimeout);
       neo.active = true;
       this.#requireRunning();
+      // Every switch is held first, so two instances of the slot never both receive new calls.
+      // @decision .agents/decisions/261116_024226-backplane-links.md#wiring-and-routing
+      if (!held) {
+        markers = await this.#backplane.hold(slot);
+        held = true;
+      }
+      // The new instance may have exited while the hold waited; it must not be installed then.
+      if (neo.dead) {
+        throw new RackError(
+          "RACK_SWAP_REJECTED",
+          `${slot.name}: the new instance exited before the switch`,
+        );
+      }
     } catch (error) {
       neo?.terminate();
       const failure = asRackError(error);
@@ -672,7 +707,7 @@ class Rack implements InstanceHost {
         }
         slot.state = "degraded";
       }
-      if (paused) this.#backplane.resume(slot);
+      if (held) await this.#backplane.release(slot);
       slot.busy = false;
       if (old === null) slot.state = "faulted";
       else if (old.dead) this.#recover(slot);
@@ -690,12 +725,15 @@ class Rack implements InstanceHost {
     slot.state = "online";
     slot.error = undefined;
     slot.crashes = [];
-    if (paused) this.#backplane.resume(slot);
-    this.#powered(neo);
-    if (old !== null) await this.#retire(old);
+    await this.#backplane.install(slot, neo, old);
+    if (!neo.dead) this.#powered(neo);
+    if (old !== null) await this.#retire(old, markers);
     slot.busy = false;
     this.#emit({ type: "swap", device: slot.name, action: "swap", from, to: firmware.hash });
     this.#log("info", `${slot.name} swapped`, { from, to: firmware.hash });
+    // A crash while the slot was busy was counted but not reset; the reset starts now.
+    // @decision .agents/decisions/261115_222025-p0-api-details.md#resets
+    if (neo.dead && slot.installed === null) this.#recover(slot);
   }
 
   async #plug(u: number, spec: SlotSpec): Promise<void> {
@@ -725,6 +763,7 @@ class Rack implements InstanceHost {
       }
       this.#checkLayout([...this.#layout(), { name: fru.name, u, height: fru.height }]);
       instance.wiring = this.#wire(fru.name, u, fru, new Map());
+      await this.#backplane.connect(instance);
       await this.#powerOn(instance);
       this.#requireRunning();
     } catch (error) {
@@ -736,7 +775,8 @@ class Rack implements InstanceHost {
     slot.wiring = instance.wiring;
     slot.state = "online";
     this.#slots.set(slot.name, slot);
-    this.#powered(instance);
+    await this.#backplane.install(slot, instance, null);
+    if (!instance.dead) this.#powered(instance);
     this.#emit({ type: "swap", device: slot.name, action: "plug", from: null, to: firmware.hash });
     this.#log("info", `${slot.name} plugged in at U${u}`, { firmware: firmware.hash });
   }
@@ -782,7 +822,14 @@ class Rack implements InstanceHost {
     const instance = new Instance(firmware, name ?? firmware.source, this);
     this.#instances.add(instance);
     try {
-      await instance.boot({ name, u, config, baseDir: this.#baseDir, timeout: this.#hookTimeout });
+      await instance.boot({
+        name,
+        u,
+        config,
+        baseDir: this.#baseDir,
+        callTimeout: this.#callTimeout,
+        timeout: this.#hookTimeout,
+      });
       return instance;
     } catch (error) {
       instance.terminate();
@@ -802,14 +849,19 @@ class Rack implements InstanceHost {
     instance.active = true;
   }
 
-  /** Deactivates if needed, drains, powers off, and terminates an instance. */
-  async #retire(instance: Instance): Promise<void> {
+  /**
+   * Deactivates if needed, drains, powers off, and terminates an instance.
+   *
+   * @param markers Hold markers of the switch that retired the instance; calls sent before
+   *   them still reach it and must finish first.
+   */
+  async #retire(instance: Instance, markers: Marker[] = []): Promise<void> {
     const wasAlive = !instance.dead;
     if (wasAlive) {
       if (instance.active) await this.#bestEffort(instance, "deactivate");
       instance.active = false;
-      if (!(await instance.drain(this.#drainTimeout))) {
-        this.#backplane.failInFlight(
+      if (!(await this.#backplane.drain(instance, markers, this.#drainTimeout))) {
+        this.#backplane.fail(
           instance,
           "RACK_LINK_DOWN",
           `${instance.slot} was powered off before the call finished`,
@@ -891,6 +943,7 @@ class Rack implements InstanceHost {
             "RACK_MANIFEST",
           );
           instance.wiring = slot.wiring;
+          await this.#backplane.connect(instance);
           await this.#powerOn(instance);
           if (this.#phase !== "running" || slot.removed) {
             instance.terminate();
@@ -899,6 +952,15 @@ class Rack implements InstanceHost {
           slot.installed = instance;
           slot.fru = instance.fru as Fru;
           slot.state = "online";
+          await this.#backplane.install(slot, instance, null);
+          if (instance.dead) {
+            // It exited while it was being installed. onExit counted the crash and left the
+            // reset to this loop, which was still running; at the crash limit it set the slot
+            // faulted during the await, which narrowing on the assignment above cannot see.
+            if ((slot.state as SlotState) === "faulted") return;
+            slot.state = "resetting";
+            continue;
+          }
           this.#powered(instance);
           return;
         } catch (error) {
@@ -926,12 +988,32 @@ class Rack implements InstanceHost {
         state: slot.state,
         firmware: slot.installed?.firmware.hash ?? null,
         source: slot.source,
-        inFlight: slot.installed?.inFlight.size ?? 0,
+        inFlight: slot.installed?.serving ?? 0,
         crashes: slot.crashes.filter((time) => now - time < CRASH_WINDOW).length,
       };
       if (slot.error !== undefined) status.error = slot.error;
       return status;
     });
+  }
+
+  async #metrics(): Promise<RackMetrics> {
+    if (this.#phase !== "running") return { devices: [] };
+    const instances: Instance[] = [];
+    for (const slot of this.#ordered()) {
+      if (slot.installed !== null && !slot.removed) instances.push(slot.installed);
+    }
+    const answers = await Promise.allSettled(
+      instances.map((instance) => instance.metrics(this.#hookTimeout)),
+    );
+    const devices: DeviceMetrics[] = [];
+    for (const [index, answer] of answers.entries()) {
+      const instance = instances[index] as Instance;
+      // An instance that died or did not answer in time is left out.
+      if (answer.status === "fulfilled") {
+        devices.push({ device: instance.slot, firmware: instance.firmware.hash, ...answer.value });
+      }
+    }
+    return { devices };
   }
 
   #swapFailed(
@@ -1004,7 +1086,7 @@ function newSlot({ u, config, firmware, instance }: Booted): Slot {
     installed: instance,
     state: "swapping",
     busy: false,
-    paused: false,
+    held: false,
     queue: [],
     crashes: [],
     error: undefined,

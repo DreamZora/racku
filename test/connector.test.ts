@@ -101,7 +101,7 @@ describe("rpc and event", () => {
 });
 
 // FRU data reports each port's connector id and member kinds, and it crosses threads.
-// @decision .agents/decisions/261112_043035-backplane-protocol.md#boot-and-fru
+// @decision .agents/decisions/261116_024226-backplane-links.md#boot-and-fru
 describe("describeConnector", () => {
   test("lists member kinds as structured-cloneable data", () => {
     const info = describeConnector(Kv);

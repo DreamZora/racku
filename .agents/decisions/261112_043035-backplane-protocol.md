@@ -1,6 +1,6 @@
 # Decision: Backplane protocol, error model, and fault handling
 
-Status: accepted
+Status: superseded — replaced by [261116_024226-backplane-links.md](261116_024226-backplane-links.md)
 
 ## Background
 

@@ -1,9 +1,9 @@
 /**
  * Tests for calls, errors, timeouts, cancellation, and events across the backplane.
  *
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#rpc
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#error-model
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#events
+ * @decision .agents/decisions/261116_024226-backplane-links.md#rpc
+ * @decision .agents/decisions/261116_024226-backplane-links.md#error-model
+ * @decision .agents/decisions/261116_024226-backplane-links.md#events
  */
 import { describe, expect, test } from "bun:test";
 import { slot } from "rack42u";
@@ -67,7 +67,7 @@ describe("RPC", () => {
     });
   });
 
-  // @decision .agents/decisions/261112_043035-backplane-protocol.md#where-validation-happens
+  // @decision .agents/decisions/261116_024226-backplane-links.md#where-validation-happens
   test("the provider validates input and output", async () => {
     const { running, relay } = await pair();
     expect(await codeOf(running.call("probe.probe", "double", "twenty"))).toBe(

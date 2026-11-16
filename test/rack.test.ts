@@ -170,7 +170,7 @@ describe("assembly", () => {
     expect(message).toContain("gravity rule");
   });
 
-  // @decision .agents/decisions/261112_043035-backplane-protocol.md#wiring-and-routing
+  // @decision .agents/decisions/261116_024226-backplane-links.md#wiring-and-routing
   test("rejects an ambiguous need, and a patch resolves it", async () => {
     const slots = {
       1: slot("./devices/probe.ts", { name: "a" }),

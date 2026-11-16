@@ -1,7 +1,7 @@
 /**
  * Tests for structured errors and their wire form.
  *
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#error-model
+ * @decision .agents/decisions/261116_024226-backplane-links.md#error-model
  */
 import { describe, expect, test } from "bun:test";
 import {

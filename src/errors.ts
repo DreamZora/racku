@@ -4,7 +4,7 @@
  * `Error` loses custom properties under structured clone, so errors cross threads as plain
  * {@link WireError} objects and are revived into {@link RackError} on arrival.
  *
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#error-model
+ * @decision .agents/decisions/261116_024226-backplane-links.md#error-model
  */
 
 /** Framework error codes. Device-defined codes must not start with `RACK_`. */

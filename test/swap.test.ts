@@ -2,7 +2,7 @@
  * Tests for the swap process: swap, reload, plug, unplug, state handover, and rollback.
  *
  * @decision .agents/decisions/261112_035943-hot-swap.md#the-swap-sequence
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#in-flight-calls-pausing-and-draining
+ * @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
  * @decision .agents/decisions/261115_222025-p0-api-details.md#rack-handle
  * @decision .agents/decisions/261115_222025-p0-api-details.md#error-codes
  */

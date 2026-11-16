@@ -2,18 +2,26 @@
  * Worker host for one `sled` device instance.
  *
  * The rack main thread starts this module in a fresh Worker and boots it with a firmware URL.
- * The host loads the firmware, reports FRU data, runs lifecycle hooks on request, and serves
- * the data channel: it validates RPC input and output for the ports the device provides, sends
- * calls for its needs, and validates the payloads it publishes.
+ * The host loads the firmware, reports FRU data, and runs lifecycle hooks on request. It carries
+ * the device's traffic: calls from outside the rack arrive on the data channel, and calls,
+ * results, subscriptions, and events between devices travel on links that the backplane hands
+ * over the control channel. The host validates RPC input and output for the ports the device
+ * provides and the payloads it publishes, owns the timeouts of the calls the device makes, queues
+ * calls and events while a slot is held, and counts calls and events.
  *
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#channels
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#boot-and-fru
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#where-validation-happens
+ * @decision .agents/decisions/261116_024226-backplane-links.md#links
+ * @decision .agents/decisions/261116_024226-backplane-links.md#boot-and-fru
+ * @decision .agents/decisions/261116_024226-backplane-links.md#rpc
+ * @decision .agents/decisions/261116_024226-backplane-links.md#events
+ * @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
+ * @decision .agents/decisions/261116_024226-backplane-links.md#where-validation-happens
+ * @decision .agents/decisions/261116_035534-call-metrics.md#counters
  * @decision .agents/decisions/261112_043034-device-api.md#device-context
  */
 import { type ConnectorInfo, describeConnector, type EventSpec } from "./connector.ts";
 import {
   type ActivateScope,
+  type CallOptions,
   type DeviceContext,
   type DeviceDefinition,
   type DeviceLog,
@@ -21,47 +29,141 @@ import {
   isDevice,
   type LogLevel,
 } from "./device.ts";
-import { fromWireError, RackError, toWireError, type WireError } from "./errors.ts";
+import { fromWireError, isCloneable, RackError, toWireError } from "./errors.ts";
 import type {
-  BootRequest,
-  CallFromCaller,
-  CallResult,
-  CallToProvider,
-  ControlNotice,
-  ControlReply,
-  ControlRequest,
-  DataFromWorker,
-  DataToWorker,
-  Fru,
-  HookRequest,
+  CalledRpcMetrics,
+  EmittedEventMetrics,
+  InstanceMetrics,
+  NeedMetrics,
+  PortMetrics,
+  ReceivedEventMetrics,
+  ServedRpcMetrics,
+} from "./metrics.ts";
+import {
+  type AttachRequest,
+  type BootRequest,
+  type CallResult,
+  type ControlNotice,
+  type ControlReply,
+  type ControlRequest,
+  type DataToWorker,
+  type DrainRequest,
+  type Fru,
+  type HoldEventsRequest,
+  type HookRequest,
+  type LiveRequest,
+  type Marker,
+  type NeedDownRequest,
+  type NeedHoldRequest,
+  type NeedLinkRequest,
+  QUEUE_LIMIT,
+  type ToConsumer,
+  type ToProvider,
 } from "./protocol.ts";
 import { validate } from "./schema.ts";
 
 // Untyped on purpose: implementations come from device code and are checked at powerOn.
 type Impl = (input: unknown, call: { signal: AbortSignal; deadline: number }) => unknown;
 type EventHandler = (payload: unknown) => void | Promise<void>;
-
-interface Pending {
-  resolve(value: unknown): void;
-  reject(error: unknown): void;
-  cleanup(): void;
-}
+type Outcome = { ok: true; value: unknown } | { ok: false; error: RackError };
 
 interface Booted {
   def: DeviceDefinition;
   ctx: DeviceContext;
-  data: MessagePort;
   name: string;
+}
+
+/** A call the device made through one of its needs. */
+interface Outgoing {
+  readonly need: NeedState;
+  readonly member: string;
+  readonly stats: CalledRpcMetrics;
+  readonly started: number;
+  readonly deadline: number;
+  readonly resolve: (value: unknown) => void;
+  readonly reject: (error: unknown) => void;
+  /** The input until the call goes out on a link. */
+  input: unknown;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  cleanup: (() => void) | undefined;
+  /** The link the call went out on, and its id there; unset while the call waits. */
+  link: NeedLink | undefined;
+  id: number;
+  queued: boolean;
+  settled: boolean;
+}
+
+/** The consumer end of a link. */
+interface NeedLink {
+  readonly id: number;
+  readonly port: MessagePort;
+  /** `<device>.<port>` at the other end, for messages. */
+  readonly provider: string;
+  /** Calls that went out on the link and have no result yet, by their id on the link. */
+  readonly pending: Map<number, Outgoing>;
+  nextId: number;
+}
+
+/** The calls, links, and subscriptions of one need. */
+interface NeedState {
+  readonly name: string;
+  /** The link new calls go out on; unset while the need has no provider instance. */
+  current: NeedLink | undefined;
+  /** Every link of the need that may still bring results, the current one included. */
+  readonly links: Map<number, NeedLink>;
+  /** New calls wait in `queue` instead of going out. */
+  held: boolean;
+  queue: Outgoing[];
+  /** Event handlers by event name; a name is present while it has handlers. */
+  readonly handlers: Map<string, Set<{ handler: EventHandler }>>;
+  readonly calls: Map<string, CalledRpcMetrics>;
+  readonly events: Map<string, ReceivedEventMetrics>;
+}
+
+/** The provider end of a link. */
+interface ConsumerLink {
+  readonly id: number;
+  readonly port: MessagePort;
+  /** The provided port the link serves. */
+  readonly portName: string;
+  /** Name of the consumer device. */
+  readonly consumer: string;
+  readonly subscriptions: Set<string>;
+  /** Events go out on the link: the consumer instance is installed. */
+  live: boolean;
+  /** Calls from the link being served, by their id on the link. */
+  readonly serving: Map<number, AbortController>;
+}
+
+interface QueuedEvent {
+  port: string;
+  event: string;
+  payload: unknown;
 }
 
 let booted: Booted | undefined;
 let impls = new Map<string, Map<string, Impl>>();
 let scope: { controller: AbortController; cancels: Set<() => void> } | undefined;
 const powered = new AbortController();
-const pending = new Map<number, Pending>();
-const serving = new Map<number, AbortController>();
-const handlers = new Map<string, Set<{ handler: EventHandler }>>();
-let nextCallId = 1;
+let callTimeout = 30_000;
+/** Shared with the main thread, which reads the number of calls being served from it. */
+let gauge: Int32Array<ArrayBufferLike> = new Int32Array(1);
+/** Whether this instance is the one installed in its slot; only then do its events go out. */
+let installed = false;
+let since = Date.now();
+/** Calls being served, from links and from outside the rack. */
+let serving = 0;
+/** Calls from outside the rack being served, by backplane call id. */
+const external = new Map<number, AbortController>();
+const needs = new Map<string, NeedState>();
+const consumers = new Map<number, ConsumerLink>();
+/** Events waiting for held consumer devices, by device name. */
+const heldEvents = new Map<string, QueuedEvent[]>();
+/** The token of the last hold marker each link brought. */
+const markers = new Map<number, number>();
+const drains = new Set<{ markers: Marker[]; resolve: () => void }>();
+const served = new Map<string, Map<string, ServedRpcMetrics>>();
+const emitted = new Map<string, Map<string, EmittedEventMetrics>>();
 
 function post(message: ControlNotice): void {
   postMessage(message);
@@ -100,6 +202,17 @@ function guarded(where: string, task: () => unknown): Promise<void> {
   }
 }
 
+/** An error-code counter that accepts any code as a key, `__proto__` included. */
+function errorCounts(): Record<string, number> {
+  return Object.create(null) as Record<string, number>;
+}
+
+function failure(code: string, message: string): Outcome {
+  return { ok: false, error: new RackError(code, message) };
+}
+
+// ---- Control channel ----
+
 addEventListener("message", (event: MessageEvent<ControlRequest>) => {
   void control(event.data);
 });
@@ -107,8 +220,7 @@ addEventListener("message", (event: MessageEvent<ControlRequest>) => {
 async function control(request: ControlRequest): Promise<void> {
   let reply: ControlReply;
   try {
-    const value = request.op === "boot" ? await boot(request) : await runHook(request);
-    reply = { id: request.id, ok: true, value };
+    reply = { id: request.id, ok: true, value: await handle(request) };
   } catch (error) {
     reply = { id: request.id, ok: false, error: toWireError(error) };
   }
@@ -128,6 +240,38 @@ async function control(request: ControlRequest): Promise<void> {
   }
 }
 
+function handle(request: ControlRequest): unknown {
+  switch (request.op) {
+    case "boot":
+      return boot(request);
+    case "hook":
+      return runHook(request);
+    case "link":
+      return linkNeed(request);
+    case "hold":
+      return holdNeed(request);
+    case "release":
+      return setHeld(need(request.need), false);
+    case "down":
+      return downNeed(request);
+    case "attach":
+      return attach(request);
+    case "holdEvents":
+      return holdEvents(request);
+    case "live":
+      return live(request);
+    case "drop":
+      return drop(request.link);
+    case "installed":
+      installed = request.installed;
+      return undefined;
+    case "drain":
+      return drain(request);
+    case "metrics":
+      return snapshot();
+  }
+}
+
 async function boot(request: BootRequest): Promise<Fru> {
   if (booted !== undefined) throw new RackError("RACK_MANIFEST", "the instance is already booted");
   const module = (await import(request.firmware)) as { default?: unknown };
@@ -144,10 +288,16 @@ async function boot(request: BootRequest): Promise<Fru> {
     }
     config = result.value;
   }
+  callTimeout = request.callTimeout;
+  gauge = new Int32Array(request.gauge);
+  since = Date.now();
+  prepare(def);
+  const ctx = makeContext(def, { name, u: request.u, config, request });
+  booted = { def, ctx, name };
   const data = request.port;
-  const ctx = makeContext(def, data, { name, u: request.u, config, request });
-  booted = { def, ctx, data, name };
-  data.addEventListener("message", (event) => onData((event as MessageEvent<DataToWorker>).data));
+  data.addEventListener("message", (event) =>
+    onData(data, (event as MessageEvent<DataToWorker>).data),
+  );
   data.start();
   return {
     model: def.model,
@@ -166,6 +316,58 @@ function describeAll(ports: DeviceDefinition["needs"]): Record<string, Connector
   return result;
 }
 
+/** Creates the state and the zeroed counters of every need and provided port. */
+function prepare(def: DeviceDefinition): void {
+  for (const [port, c] of Object.entries(def.provides)) {
+    const calls = new Map<string, ServedRpcMetrics>();
+    const events = new Map<string, EmittedEventMetrics>();
+    for (const [member, spec] of Object.entries(c.members)) {
+      if (spec.kind === "rpc") {
+        calls.set(member, {
+          kind: "rpc",
+          calls: 0,
+          ok: 0,
+          errors: errorCounts(),
+          active: 0,
+          timeMs: 0,
+        });
+      } else {
+        events.set(member, { kind: "event", emitted: 0, dropped: 0 });
+      }
+    }
+    served.set(port, calls);
+    emitted.set(port, events);
+  }
+  for (const [name, c] of Object.entries(def.needs)) {
+    const state: NeedState = {
+      name,
+      current: undefined,
+      links: new Map(),
+      held: false,
+      queue: [],
+      handlers: new Map(),
+      calls: new Map(),
+      events: new Map(),
+    };
+    for (const [member, spec] of Object.entries(c.members)) {
+      if (spec.kind === "rpc") {
+        state.calls.set(member, {
+          kind: "rpc",
+          calls: 0,
+          ok: 0,
+          errors: errorCounts(),
+          pending: 0,
+          queued: 0,
+          timeMs: 0,
+        });
+      } else {
+        state.events.set(member, { kind: "event", received: 0 });
+      }
+    }
+    needs.set(name, state);
+  }
+}
+
 interface ContextInput {
   name: string;
   u: number;
@@ -173,30 +375,33 @@ interface ContextInput {
   request: BootRequest;
 }
 
-function makeContext(def: DeviceDefinition, data: MessagePort, input: ContextInput): DeviceContext {
+function makeContext(def: DeviceDefinition, input: ContextInput): DeviceContext {
   const ports: Record<string, Record<string, unknown>> = {};
   const on: Record<string, Record<string, unknown>> = {};
   const emit: Record<string, Record<string, unknown>> = {};
-  for (const [need, c] of Object.entries(def.needs)) {
+  for (const [name, c] of Object.entries(def.needs)) {
+    const state = needs.get(name) as NeedState;
     const client: Record<string, unknown> = {};
     const events: Record<string, unknown> = {};
     for (const [member, spec] of Object.entries(c.members)) {
       if (spec.kind === "rpc") {
-        client[member] = (value: unknown, options?: { timeout?: number; signal?: AbortSignal }) =>
-          callOut(data, need, member, value, options);
+        const stats = state.calls.get(member) as CalledRpcMetrics;
+        client[member] = (value: unknown, options?: CallOptions) =>
+          callOut(state, member, stats, value, options);
       } else {
-        events[member] = (handler: EventHandler) => subscribe(data, need, member, handler);
+        events[member] = (handler: EventHandler) => subscribe(state, member, handler);
       }
     }
-    ports[need] = Object.freeze(client);
-    on[need] = Object.freeze(events);
+    ports[name] = Object.freeze(client);
+    on[name] = Object.freeze(events);
   }
   for (const [port, c] of Object.entries(def.provides)) {
     const emitters: Record<string, unknown> = {};
     for (const [member, spec] of Object.entries(c.members)) {
       if (spec.kind === "event") {
+        const stats = emitted.get(port)?.get(member) as EmittedEventMetrics;
         emitters[member] = (payload: unknown) =>
-          emitOut(data, `${input.name}.${port}.${member}`, port, member, spec, payload);
+          emitOut(`${input.name}.${port}.${member}`, port, member, spec, stats, payload);
       }
     }
     emit[port] = Object.freeze(emitters);
@@ -220,173 +425,551 @@ function makeContext(def: DeviceDefinition, data: MessagePort, input: ContextInp
   }) as DeviceContext;
 }
 
+function need(name: string): NeedState {
+  const state = needs.get(name);
+  if (state === undefined) throw new RackError("RACK_NO_ROUTE", `the device has no need ${name}`);
+  return state;
+}
+
+// ---- Calls the device makes ----
+
 function callOut(
-  data: MessagePort,
-  need: string,
+  state: NeedState,
   member: string,
+  stats: CalledRpcMetrics,
   input: unknown,
-  options: { timeout?: number; signal?: AbortSignal } = {},
+  options: CallOptions = {},
 ): Promise<unknown> {
+  const where = `${state.name}.${member}`;
   return new Promise((resolve, reject) => {
     const { timeout, signal } = options;
-    if (timeout !== undefined && !(typeof timeout === "number" && timeout >= 0)) {
-      reject(new RackError("RACK_INVALID_INPUT", `${need}.${member}: timeout must be >= 0 ms`));
+    const valid = timeout === undefined || (typeof timeout === "number" && timeout >= 0);
+    const ms = valid && timeout !== undefined ? timeout : callTimeout;
+    const call: Outgoing = {
+      need: state,
+      member,
+      stats,
+      started: performance.now(),
+      deadline: Date.now() + ms,
+      resolve,
+      reject,
+      input,
+      timer: undefined,
+      cleanup: undefined,
+      link: undefined,
+      id: 0,
+      queued: false,
+      settled: false,
+    };
+    stats.calls++;
+    stats.pending++;
+    if (!valid) {
+      settle(call, failure("RACK_INVALID_INPUT", `${where}: timeout must be >= 0 ms`));
       return;
     }
     if (signal?.aborted) {
-      reject(new RackError("RACK_CANCELLED", `${need}.${member}: call cancelled`));
+      settle(call, failure("RACK_CANCELLED", `${where}: call cancelled`));
       return;
     }
-    const id = nextCallId++;
-    const message: CallFromCaller = { t: "call", id, need, member, input, timeout };
-    try {
-      data.postMessage(message satisfies DataFromWorker);
-    } catch {
-      // DataCloneError: the caller reports uncloneable input locally.
-      reject(new RackError("RACK_INVALID_INPUT", `${need}.${member}: input cannot be cloned`));
-      return;
+    // The caller's host owns the timeout of a call on a link.
+    // @decision .agents/decisions/261116_024226-backplane-links.md#rpc
+    call.timer = setTimeout(() => {
+      const target = call.link?.provider ?? state.name;
+      cancelAtProvider(call);
+      settle(call, failure("RACK_TIMEOUT", `${target}.${member} timed out after ${ms} ms`));
+    }, ms);
+    if (signal !== undefined) {
+      const onAbort = () => {
+        cancelAtProvider(call);
+        settle(call, failure("RACK_CANCELLED", `${where}: call cancelled`));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      call.cleanup = () => signal.removeEventListener("abort", onAbort);
     }
-    const onAbort = () => {
-      pending.delete(id);
-      data.postMessage({ t: "cancel", id } satisfies DataFromWorker);
-      reject(new RackError("RACK_CANCELLED", `${need}.${member}: call cancelled`));
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-    pending.set(id, {
-      resolve,
-      reject,
-      cleanup: () => signal?.removeEventListener("abort", onAbort),
-    });
+    if (state.held) enqueue(state, call);
+    else send(state, call);
   });
 }
 
-function subscribe(
-  data: MessagePort,
-  need: string,
-  event: string,
-  handler: EventHandler,
-): () => void {
-  if (typeof handler !== "function") {
-    throw new RackError("RACK_INVALID_INPUT", `${need}.${event}: the handler must be a function`);
+/** Keeps a call until its need is released. */
+function enqueue(state: NeedState, call: Outgoing): void {
+  const where = `${state.name}.${call.member}`;
+  if (state.queue.length >= QUEUE_LIMIT) {
+    settle(call, failure("RACK_LINK_DOWN", `${where}: the provider is held and the queue is full`));
+    return;
   }
-  const key = `${need}.${event}`;
-  let set = handlers.get(key);
+  try {
+    // A call that goes out later still carries its input as it was when the device called.
+    call.input = structuredClone(call.input);
+  } catch {
+    // DataCloneError: the caller reports uncloneable input locally.
+    settle(call, failure("RACK_INVALID_INPUT", `${where}: input cannot be cloned`));
+    return;
+  }
+  call.queued = true;
+  call.stats.queued++;
+  state.queue.push(call);
+}
+
+function send(state: NeedState, call: Outgoing): void {
+  const where = `${state.name}.${call.member}`;
+  const link = state.current;
+  if (link === undefined) {
+    settle(call, failure("RACK_LINK_DOWN", `${where}: the provider is not online`));
+    return;
+  }
+  const id = link.nextId++;
+  try {
+    link.port.postMessage({
+      t: "call",
+      id,
+      member: call.member,
+      input: call.input,
+      deadline: call.deadline,
+    } satisfies ToProvider);
+  } catch {
+    // DataCloneError: the caller reports uncloneable input locally.
+    settle(call, failure("RACK_INVALID_INPUT", `${where}: input cannot be cloned`));
+    return;
+  }
+  call.input = undefined;
+  call.link = link;
+  call.id = id;
+  link.pending.set(id, call);
+}
+
+function cancelAtProvider(call: Outgoing): void {
+  if (call.settled || call.link === undefined) return;
+  call.link.port.postMessage({ t: "cancel", id: call.id } satisfies ToProvider);
+}
+
+/** Finishes a call once: stops its timer, counts it, and resolves or rejects it. */
+function settle(call: Outgoing, outcome: Outcome): void {
+  if (call.settled) return;
+  call.settled = true;
+  clearTimeout(call.timer);
+  call.cleanup?.();
+  call.link?.pending.delete(call.id);
+  const { stats } = call;
+  if (call.queued) {
+    call.queued = false;
+    stats.queued--;
+    const queue = call.need.queue;
+    const index = queue.indexOf(call);
+    if (index >= 0) queue.splice(index, 1);
+  }
+  stats.pending--;
+  stats.timeMs += performance.now() - call.started;
+  if (outcome.ok) {
+    stats.ok++;
+    call.resolve(outcome.value);
+    return;
+  }
+  const { code } = outcome.error;
+  stats.errors[code] = (stats.errors[code] ?? 0) + 1;
+  call.reject(outcome.error);
+}
+
+/** Holds or releases a need; a release sends the queued calls on the current link in order. */
+function setHeld(state: NeedState, held: boolean): void {
+  state.held = held;
+  if (held) return;
+  const queue = state.queue;
+  state.queue = [];
+  for (const call of queue) {
+    call.queued = false;
+    call.stats.queued--;
+    send(state, call);
+  }
+}
+
+function linkNeed({ need: name, link: id, end, provider, hold }: NeedLinkRequest): void {
+  const state = need(name);
+  const link: NeedLink = { id, port: end, provider, pending: new Map(), nextId: 1 };
+  state.links.set(id, link);
+  state.current = link;
+  end.addEventListener("message", (event) =>
+    onNeedLink(state, link, (event as MessageEvent<ToConsumer>).data),
+  );
+  end.start();
+  // The provider instance learns the subscriptions before any queued call reaches it.
+  for (const event of state.handlers.keys()) {
+    end.postMessage({ t: "sub", event } satisfies ToProvider);
+  }
+  if (hold === undefined) {
+    setHeld(state, false);
+    return;
+  }
+  // The link leads to a held instance: calls wait, and its drain finds this marker at once.
+  state.held = true;
+  end.postMessage({ t: "hold", token: hold } satisfies ToProvider);
+}
+
+function holdNeed({ need: name, token }: NeedHoldRequest): void {
+  const state = need(name);
+  state.held = true;
+  state.current?.port.postMessage({ t: "hold", token } satisfies ToProvider);
+}
+
+function downNeed({ need: name, link: id, error }: NeedDownRequest): void {
+  const state = need(name);
+  const link = state.links.get(id);
+  if (link === undefined) return;
+  state.links.delete(id);
+  if (state.current === link) state.current = undefined;
+  for (const call of [...link.pending.values()]) {
+    settle(call, { ok: false, error: fromWireError(error) });
+  }
+  link.port.close();
+  markers.delete(id);
+  checkDrains();
+}
+
+function onNeedLink(state: NeedState, link: NeedLink, message: ToConsumer): void {
+  switch (message.t) {
+    case "result": {
+      const call = link.pending.get(message.id);
+      if (call === undefined) return;
+      settle(
+        call,
+        message.ok
+          ? { ok: true, value: message.value }
+          : { ok: false, error: fromWireError(message.error) },
+      );
+      return;
+    }
+    case "event":
+      // A replaced link carries the events of an instance that is no longer installed.
+      if (state.current === link) deliver(state, message.event, message.payload);
+      return;
+    case "hold":
+      markers.set(link.id, message.token);
+      checkDrains();
+      return;
+  }
+}
+
+function subscribe(state: NeedState, event: string, handler: EventHandler): () => void {
+  if (typeof handler !== "function") {
+    throw new RackError(
+      "RACK_INVALID_INPUT",
+      `${state.name}.${event}: the handler must be a function`,
+    );
+  }
+  let set = state.handlers.get(event);
   if (set === undefined) {
     set = new Set();
-    handlers.set(key, set);
-    data.postMessage({ t: "sub", need, event } satisfies DataFromWorker);
+    state.handlers.set(event, set);
+    state.current?.port.postMessage({ t: "sub", event } satisfies ToProvider);
   }
   const entry = { handler };
   const own = set;
   own.add(entry);
   return () => {
-    if (!own.delete(entry) || own.size > 0 || handlers.get(key) !== own) return;
-    handlers.delete(key);
-    data.postMessage({ t: "unsub", need, event } satisfies DataFromWorker);
+    if (!own.delete(entry) || own.size > 0 || state.handlers.get(event) !== own) return;
+    state.handlers.delete(event);
+    state.current?.port.postMessage({ t: "unsub", event } satisfies ToProvider);
   };
 }
 
+function deliver(state: NeedState, event: string, payload: unknown): void {
+  const stats = state.events.get(event);
+  if (stats !== undefined) stats.received++;
+  const set = state.handlers.get(event);
+  if (set === undefined) return;
+  for (const { handler } of [...set]) {
+    void guarded(`event handler for ${state.name}.${event}`, () => handler(payload));
+  }
+}
+
+// ---- Events the device emits ----
+
 async function emitOut(
-  data: MessagePort,
   where: string,
   port: string,
   event: string,
   spec: EventSpec,
+  stats: EmittedEventMetrics,
   payload: unknown,
 ): Promise<void> {
   const result = await validate(spec.payload, payload);
   // An event payload is output of the publishing device.
   // @decision .agents/decisions/261115_222025-p0-api-details.md#device-hooks
   if (!result.ok) throw new RackError("RACK_INVALID_OUTPUT", `${where}: ${result.message}`);
-  try {
-    data.postMessage({ t: "emit", port, event, payload: result.value } satisfies DataFromWorker);
-  } catch {
-    // DataCloneError: the payload passed validation but cannot cross threads.
-    throw new RackError("RACK_INVALID_OUTPUT", `${where}: payload cannot be cloned`);
+  const value = result.value;
+  const uncloneable = () =>
+    new RackError("RACK_INVALID_OUTPUT", `${where}: payload cannot be cloned`);
+  if (!installed) {
+    if (!isCloneable(value)) throw uncloneable();
+    stats.emitted++;
+    stats.dropped++;
+    log("warn", `dropped event ${port}.${event} from an instance that is not installed`);
+    return;
   }
+  let cloned = false;
+  const queuedFor = new Set<string>();
+  for (const link of consumers.values()) {
+    if (link.portName !== port) continue;
+    const queue = heldEvents.get(link.consumer);
+    if (queue !== undefined) {
+      // A held consumer gets each event once, whichever of its instances ends up installed.
+      if (queuedFor.has(link.consumer)) continue;
+      queuedFor.add(link.consumer);
+      if (queue.length >= QUEUE_LIMIT) {
+        stats.dropped++;
+        continue;
+      }
+      let copy: unknown;
+      try {
+        copy = structuredClone(value);
+      } catch {
+        throw uncloneable();
+      }
+      queue.push({ port, event, payload: copy });
+      cloned = true;
+      continue;
+    }
+    if (!link.live || !link.subscriptions.has(event)) continue;
+    try {
+      link.port.postMessage({ t: "event", event, payload: value } satisfies ToConsumer);
+    } catch {
+      // DataCloneError: the payload passed validation but cannot cross threads.
+      throw uncloneable();
+    }
+    cloned = true;
+  }
+  // Nothing cloned the payload yet; an uncloneable one still fails the emit.
+  if (!cloned && !isCloneable(value)) throw uncloneable();
+  stats.emitted++;
 }
 
-function onData(message: DataToWorker): void {
+// ---- Links to consumers ----
+
+function attach({ link: id, end, port, consumer, live, held }: AttachRequest): void {
+  const link: ConsumerLink = {
+    id,
+    port: end,
+    portName: port,
+    consumer,
+    subscriptions: new Set(),
+    live,
+    serving: new Map(),
+  };
+  consumers.set(id, link);
+  if (held && !heldEvents.has(consumer)) heldEvents.set(consumer, []);
+  end.addEventListener("message", (event) =>
+    onConsumerLink(link, (event as MessageEvent<ToProvider>).data),
+  );
+  end.start();
+}
+
+function onConsumerLink(link: ConsumerLink, message: ToProvider): void {
   switch (message.t) {
     case "call":
-      void serve(message);
+      void serve(
+        message.id,
+        link.portName,
+        message.member,
+        message.input,
+        message.deadline,
+        link.serving,
+        (reply) => link.port.postMessage(reply),
+      );
       return;
     case "cancel":
-      serving.get(message.id)?.abort(new RackError("RACK_CANCELLED", "call cancelled"));
+      link.serving.get(message.id)?.abort(new RackError("RACK_CANCELLED", "call cancelled"));
       return;
-    case "result":
-      settle(message);
+    case "sub":
+      link.subscriptions.add(message.event);
       return;
-    case "event":
-      deliver(message.need, message.event, message.payload);
+    case "unsub":
+      link.subscriptions.delete(message.event);
+      return;
+    case "hold":
+      markers.set(link.id, message.token);
+      checkDrains();
       return;
   }
 }
 
-function settle(message: CallResult): void {
-  const call = pending.get(message.id);
-  if (call === undefined) return;
-  pending.delete(message.id);
-  call.cleanup();
-  if (message.ok) call.resolve(message.value);
-  else call.reject(fromWireError(message.error));
+function holdEvents({ consumer, token }: HoldEventsRequest): void {
+  if (!heldEvents.has(consumer)) heldEvents.set(consumer, []);
+  for (const link of consumers.values()) {
+    if (link.consumer === consumer)
+      link.port.postMessage({ t: "hold", token } satisfies ToConsumer);
+  }
 }
 
-function deliver(need: string, event: string, payload: unknown): void {
-  const set = handlers.get(`${need}.${event}`);
-  if (set === undefined) return;
-  for (const { handler } of [...set])
-    void guarded(`event handler for ${need}.${event}`, () => handler(payload));
+function live({ consumer, links }: LiveRequest): void {
+  const chosen = new Set(links);
+  for (const link of consumers.values()) {
+    if (link.consumer === consumer) link.live = chosen.has(link.id);
+  }
+  const queue = heldEvents.get(consumer);
+  heldEvents.delete(consumer);
+  for (const { port, event, payload } of queue ?? []) {
+    for (const link of consumers.values()) {
+      if (!link.live || link.consumer !== consumer || link.portName !== port) continue;
+      if (link.subscriptions.has(event)) {
+        link.port.postMessage({ t: "event", event, payload } satisfies ToConsumer);
+      }
+    }
+  }
 }
 
-async function serve(message: CallToProvider): Promise<void> {
+function drop(id: number): void {
+  const link = consumers.get(id);
+  if (link === undefined) return;
+  consumers.delete(id);
+  for (const controller of link.serving.values()) {
+    controller.abort(new RackError("RACK_CANCELLED", "call cancelled"));
+  }
+  link.port.close();
+  markers.delete(id);
+  checkDrains();
+}
+
+// ---- Calls the device serves ----
+
+function onData(data: MessagePort, message: DataToWorker): void {
+  if (message.t === "call") {
+    void serve(
+      message.id,
+      message.port,
+      message.member,
+      message.input,
+      message.deadline,
+      external,
+      (reply) => data.postMessage(reply),
+    );
+  } else {
+    external.get(message.id)?.abort(new RackError("RACK_CANCELLED", "call cancelled"));
+  }
+}
+
+async function serve(
+  id: number,
+  port: string,
+  member: string,
+  input: unknown,
+  deadline: number,
+  registry: Map<number, AbortController>,
+  reply: (result: CallResult) => void,
+): Promise<void> {
   const state = booted;
   if (state === undefined) return;
-  const address = `${state.name}.${message.port}.${message.member}`;
+  const address = `${state.name}.${port}.${member}`;
+  const stats = served.get(port)?.get(member);
+  const started = performance.now();
   const controller = new AbortController();
-  serving.set(message.id, controller);
+  registry.set(id, controller);
+  serving++;
+  Atomics.add(gauge, 0, 1);
+  if (stats !== undefined) {
+    stats.calls++;
+    stats.active++;
+  }
   const timer = setTimeout(
     () => controller.abort(new RackError("RACK_TIMEOUT", `${address}: deadline passed`)),
-    Math.max(0, message.deadline - Date.now()),
+    Math.max(0, deadline - Date.now()),
   );
-  let reply: CallResult;
+  let result: CallResult;
   try {
-    const spec = state.def.provides[message.port]?.members[message.member];
-    const impl = impls.get(message.port)?.get(message.member);
+    const spec = state.def.provides[port]?.members[member];
+    const impl = impls.get(port)?.get(member);
     if (spec?.kind !== "rpc" || impl === undefined) {
       throw new RackError("RACK_NO_ROUTE", `${address} is not an RPC member`);
     }
-    const input = await validate(spec.input, message.input);
-    if (!input.ok) throw new RackError("RACK_INVALID_INPUT", `${address}: ${input.message}`);
-    const value = await impl(input.value, {
-      signal: controller.signal,
-      deadline: message.deadline,
-    });
+    const parsed = await validate(spec.input, input);
+    if (!parsed.ok) throw new RackError("RACK_INVALID_INPUT", `${address}: ${parsed.message}`);
+    const value = await impl(parsed.value, { signal: controller.signal, deadline });
     const output = await validate(spec.output, value);
     if (!output.ok) throw new RackError("RACK_INVALID_OUTPUT", `${address}: ${output.message}`);
-    reply = { t: "result", id: message.id, ok: true, value: output.value };
+    result = { t: "result", id, ok: true, value: output.value };
   } catch (error) {
-    reply = { t: "result", id: message.id, ok: false, error: toWireError(error) };
+    result = { t: "result", id, ok: false, error: toWireError(error) };
   } finally {
     clearTimeout(timer);
-    serving.delete(message.id);
+    registry.delete(id);
   }
   try {
-    state.data.postMessage(reply satisfies DataFromWorker);
+    reply(result);
   } catch {
     // DataCloneError: the provider reports uncloneable output.
-    const error: WireError = {
-      code: "RACK_INVALID_OUTPUT",
-      message: `${address}: output cannot be cloned`,
-    };
-    state.data.postMessage({
+    result = {
       t: "result",
-      id: message.id,
+      id,
       ok: false,
-      error,
-    } satisfies DataFromWorker);
+      error: { code: "RACK_INVALID_OUTPUT", message: `${address}: output cannot be cloned` },
+    };
+    try {
+      reply(result);
+    } catch {
+      // The link is closed: its consumer is gone and nobody waits for the result.
+    }
+  }
+  serving--;
+  Atomics.sub(gauge, 0, 1);
+  if (stats !== undefined) {
+    stats.active--;
+    stats.timeMs += performance.now() - started;
+    if (result.ok) stats.ok++;
+    else stats.errors[result.error.code] = (stats.errors[result.error.code] ?? 0) + 1;
+  }
+  checkDrains();
+}
+
+// ---- Draining and metrics ----
+
+function drain({ markers: expected }: DrainRequest): Promise<void> {
+  return new Promise((resolve) => {
+    drains.add({ markers: expected, resolve });
+    checkDrains();
+  });
+}
+
+/** Resolves the drains whose markers arrived, once no call is being served. */
+function checkDrains(): void {
+  if (drains.size === 0 || serving > 0) return;
+  for (const entry of [...drains]) {
+    // A link that closed brings no marker, and no call either.
+    if (entry.markers.every(([link, token]) => markers.get(link) === token || !hasLink(link))) {
+      drains.delete(entry);
+      entry.resolve();
+    }
   }
 }
+
+function hasLink(id: number): boolean {
+  if (consumers.has(id)) return true;
+  for (const state of needs.values()) if (state.links.has(id)) return true;
+  return false;
+}
+
+function snapshot(): InstanceMetrics {
+  const provides: Record<string, PortMetrics> = {};
+  const needed: Record<string, NeedMetrics> = {};
+  const def = booted?.def;
+  for (const [port, c] of Object.entries(def?.provides ?? {})) {
+    const members: PortMetrics = {};
+    for (const member of Object.keys(c.members)) {
+      const stats = served.get(port)?.get(member) ?? emitted.get(port)?.get(member);
+      if (stats !== undefined) members[member] = stats;
+    }
+    provides[port] = members;
+  }
+  for (const [name, state] of needs) {
+    const members: NeedMetrics = {};
+    for (const member of Object.keys(def?.needs[name]?.members ?? {})) {
+      const stats = state.calls.get(member) ?? state.events.get(member);
+      if (stats !== undefined) members[member] = stats;
+    }
+    needed[name] = members;
+  }
+  return { since, provides, needs: needed };
+}
+
+// ---- Lifecycle hooks ----
 
 async function runHook(request: HookRequest): Promise<unknown> {
   const state = booted;

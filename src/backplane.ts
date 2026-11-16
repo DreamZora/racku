@@ -1,25 +1,35 @@
 /**
- * The backplane: routes calls, results, cancellations, and events between device instances,
- * and holds calls and events for paused slots. It never validates payloads; providers and
- * publishers do that in their own Workers.
+ * The backplane: decides which links connect device instances and keeps them pointed at the
+ * installed instances through swaps, holds, resets, and exits. Calls, results, and events
+ * between devices travel on those links, so the backplane never sees them. It also routes each
+ * call from outside the rack to the installed instance, and holds those calls for held slots. It
+ * never validates payloads; providers and publishers do that in their own Workers.
  *
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#wiring-and-routing
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#rpc
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#events
- * @decision .agents/decisions/261112_043035-backplane-protocol.md#in-flight-calls-pausing-and-draining
+ * @decision .agents/decisions/261116_024226-backplane-links.md#links
+ * @decision .agents/decisions/261116_024226-backplane-links.md#wiring-and-routing
+ * @decision .agents/decisions/261116_024226-backplane-links.md#rpc
+ * @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
+ * @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
  */
 import type { CallOptions } from "./device.ts";
 import { fromWireError, RackError, type WireError } from "./errors.ts";
 import type { Firmware } from "./firmware.ts";
 import type { Instance, RoutedCall, Wire } from "./instance.ts";
 import { parseAddress } from "./manifest.ts";
-import type { CallFromCaller, CallResult, DataFromWorker, Emit, Fru } from "./protocol.ts";
+import {
+  type CallResult,
+  type DataFromWorker,
+  type Fru,
+  type Marker,
+  QUEUE_LIMIT,
+} from "./protocol.ts";
 
 /** Lifecycle state of a slot as reported by `status()`. */
 export type SlotState = "online" | "swapping" | "degraded" | "resetting" | "faulted";
 
 type Outcome = { ok: true; value: unknown } | { ok: false; error: WireError };
 
+/** A call from outside the rack. */
 interface Call extends RoutedCall {
   readonly provider: string;
   readonly port: string;
@@ -33,10 +43,6 @@ interface Call extends RoutedCall {
   queuedIn: Slot | undefined;
   cleanup: (() => void) | undefined;
 }
-
-type Queued =
-  | { kind: "call"; call: Call }
-  | { kind: "event"; need: string; event: string; payload: unknown };
 
 /** One occupied slot of the rack. */
 export interface Slot {
@@ -57,8 +63,10 @@ export interface Slot {
   state: SlotState;
   /** A swap or a reset is running. */
   busy: boolean;
-  paused: boolean;
-  queue: Queued[];
+  /** Calls and events addressed to the slot wait until it is released or switched. */
+  held: boolean;
+  /** Calls from outside the rack that wait while the slot is held. */
+  queue: Call[];
   /** Crash timestamps, pruned to the last 60 seconds when read. */
   crashes: number[];
   error: WireError | undefined;
@@ -66,57 +74,297 @@ export interface Slot {
   removed: boolean;
 }
 
-/** Most calls and events a paused slot holds. */
-export const QUEUE_LIMIT = 10_000;
+/** One link between a need of a consumer instance and a port of a provider instance. */
+interface Link {
+  readonly id: number;
+  readonly consumer: Instance;
+  readonly need: string;
+  readonly provider: Instance;
+  readonly port: string;
+  /** The consumer sends new calls of the need on this link. */
+  current: boolean;
+}
 
-/** Routes data-bus traffic between the instances installed in slots. */
+/** Errors of requests to instances that are gone or going are expected; their exit cleans up. */
+function ignore(): void {}
+
+/** Sets up links between instances and routes calls from outside the rack. */
 export class Backplane {
   readonly #slots: ReadonlyMap<string, Slot>;
+  readonly #instances: ReadonlySet<Instance>;
   readonly #callTimeout: number;
-  readonly #warn: (message: string, device?: string) => void;
+  readonly #requestTimeout: number;
+  readonly #links = new Map<number, Link>();
+  /** The token of the running hold of each held slot, by slot name. */
+  readonly #holds = new Map<string, number>();
+  /** The providers queueing events for each held slot, by slot name. */
+  readonly #eventHolds = new Map<string, Set<Instance>>();
   #nextId = 1;
+  #nextLink = 1;
+  #nextToken = 1;
 
   /**
    * @param slots The rack's slots, keyed by device name; read on every call.
+   * @param instances Every instance whose Worker has not exited, installed or not.
    * @param callTimeout Timeout for calls that set none.
-   * @param warn Writes a warning to the management bus.
+   * @param requestTimeout Timeout of each link-management request to an instance.
    */
   constructor(
     slots: ReadonlyMap<string, Slot>,
+    instances: ReadonlySet<Instance>,
     callTimeout: number,
-    warn: (message: string, device?: string) => void,
+    requestTimeout: number,
   ) {
     this.#slots = slots;
+    this.#instances = instances;
     this.#callTimeout = callTimeout;
-    this.#warn = warn;
+    this.#requestTimeout = requestTimeout;
   }
 
-  /** Handles one data-channel message from an instance. */
-  onData(instance: Instance, message: DataFromWorker): void {
-    switch (message.t) {
-      case "call":
-        this.#fromCaller(instance, message);
-        return;
-      case "cancel": {
-        const call = instance.outgoing.get(message.id) as Call | undefined;
-        instance.outgoing.delete(message.id);
-        // The caller already rejected the call locally; only the provider needs to know.
-        if (call !== undefined) this.#finish(call, undefined, true);
-        return;
-      }
-      case "result":
-        this.#fromProvider(instance, message);
-        return;
-      case "emit":
-        this.#emit(instance, message);
-        return;
-      case "sub":
-        instance.subscriptions.add(`${message.need}.${message.event}`);
-        return;
-      case "unsub":
-        instance.subscriptions.delete(`${message.need}.${message.event}`);
-        return;
+  // ---- Links ----
+
+  /**
+   * Links every need of an instance that has no current link to the instance installed in the
+   * provider slot. A need whose provider slot has no instance stays down until
+   * {@link install} links it.
+   */
+  async connect(instance: Instance): Promise<void> {
+    const work: Promise<unknown>[] = [];
+    for (const [need, wire] of instance.wiring) {
+      if (this.#currentLink(instance, need) !== undefined) continue;
+      const slot = this.#slots.get(wire.provider);
+      const provider = slot?.installed;
+      if (slot === undefined || slot.removed || provider == null || provider.dead) continue;
+      work.push(this.#link(instance, need, provider, wire.port));
     }
+    await Promise.all(work);
+  }
+
+  /**
+   * Switches a slot to `instance`, which the caller has just set as `slot.installed`: every
+   * instance with a need wired to the slot gets a current link to it and sends its held calls
+   * there, events for the slot go to `instance` only, and calls from outside the rack resume.
+   *
+   * @param previous The instance the slot had before, told that it is no longer installed.
+   */
+  async install(slot: Slot, instance: Instance, previous: Instance | null): Promise<void> {
+    // The hold ends first, so the new links go out released.
+    this.#holds.delete(slot.name);
+    slot.held = false;
+    const work: Promise<unknown>[] = [];
+    for (const consumer of this.#instances) {
+      if (consumer.dead || consumer === instance) continue;
+      for (const [need, wire] of consumer.wiring) {
+        if (wire.provider === slot.name) work.push(this.#link(consumer, need, instance, wire.port));
+      }
+    }
+    work.push(this.#liven(slot, instance));
+    work.push(this.#ask(instance, { op: "installed", installed: true }));
+    if (previous !== null && previous !== instance && !previous.dead) {
+      work.push(this.#ask(previous, { op: "installed", installed: false }));
+    }
+    this.#resume(slot);
+    await Promise.all(work);
+  }
+
+  /**
+   * Holds every call and event addressed to the slot: consumers queue their calls, providers
+   * queue their events, and calls from outside the rack wait here. Resolves once every party
+   * has confirmed or its request has timed out; a late request still arrives in order, and the
+   * drain waits for its marker.
+   *
+   * @returns The hold markers a drain of the installed instance must wait for.
+   */
+  async hold(slot: Slot): Promise<Marker[]> {
+    const token = this.#nextToken++;
+    this.#holds.set(slot.name, token);
+    slot.held = true;
+    const target = slot.installed !== null && !slot.installed.dead ? slot.installed : null;
+    const markers: Marker[] = [];
+    const work: Promise<unknown>[] = [];
+    const providers = new Set<Instance>();
+    for (const link of this.#links.values()) {
+      if (target !== null && link.provider === target && link.current) {
+        markers.push([link.id, token]);
+        work.push(this.#ask(link.consumer, { op: "hold", need: link.need, token }));
+      }
+      if (link.consumer.slot === slot.name) {
+        if (link.consumer === target) markers.push([link.id, token]);
+        providers.add(link.provider);
+      }
+    }
+    // Remembered until the hold ends, so every provider that queues events also stops again.
+    const holding = this.#eventHolds.get(slot.name) ?? new Set<Instance>();
+    for (const provider of providers) {
+      holding.add(provider);
+      work.push(this.#ask(provider, { op: "holdEvents", consumer: slot.name, token }));
+    }
+    this.#eventHolds.set(slot.name, holding);
+    await Promise.all(work);
+    return markers;
+  }
+
+  /** Ends a hold without a switch: the installed instance gets its calls and events again. */
+  async release(slot: Slot): Promise<void> {
+    this.#holds.delete(slot.name);
+    slot.held = false;
+    const work: Promise<unknown>[] = [];
+    for (const consumer of this.#instances) {
+      if (consumer.dead) continue;
+      for (const [need, wire] of consumer.wiring) {
+        if (wire.provider === slot.name) work.push(this.#ask(consumer, { op: "release", need }));
+      }
+    }
+    const target = slot.installed !== null && !slot.installed.dead ? slot.installed : null;
+    work.push(this.#liven(slot, target));
+    this.#resume(slot);
+    await Promise.all(work);
+  }
+
+  /**
+   * Waits until the hold markers reached the instance and it serves no call.
+   *
+   * @returns `false` when `timeout` ms passed first.
+   */
+  drain(instance: Instance, markers: Marker[], timeout: number): Promise<boolean> {
+    return instance.drain(timeout, markers);
+  }
+
+  /** Fails every call the instance is serving: at the consumers of its links, and here. */
+  fail(instance: Instance, code: string, message: string): void {
+    this.failInFlight(instance, code, message);
+    for (const link of [...this.#links.values()]) {
+      if (link.provider !== instance) continue;
+      this.#links.delete(link.id);
+      void this.#ask(link.consumer, {
+        op: "down",
+        need: link.need,
+        link: link.id,
+        error: { code, message },
+      });
+    }
+  }
+
+  /**
+   * Removes the links of an instance that exited: its consumers fail the calls pending on them
+   * with `code`, and its providers abort the calls they serve for it.
+   */
+  disconnect(instance: Instance, code: string, message: string): void {
+    this.failInFlight(instance, code, message);
+    for (const link of [...this.#links.values()]) {
+      if (link.provider === instance) {
+        this.#links.delete(link.id);
+        void this.#ask(link.consumer, {
+          op: "down",
+          need: link.need,
+          link: link.id,
+          error: { code, message },
+        });
+      } else if (link.consumer === instance) {
+        this.#links.delete(link.id);
+        void this.#ask(link.provider, { op: "drop", link: link.id });
+      }
+    }
+  }
+
+  #currentLink(consumer: Instance, need: string): Link | undefined {
+    for (const link of this.#links.values()) {
+      if (link.consumer === consumer && link.need === need && link.current) return link;
+    }
+    return undefined;
+  }
+
+  /**
+   * Creates a link and makes it the need's current one.
+   *
+   * Both ends go out at once, with the state of this moment: calls the consumer sends before
+   * the provider attaches wait in the channel, and each instance applies its requests in the
+   * order they were sent. A request that times out still arrives later, so a timeout never
+   * undoes a link; only the exit of either instance removes it, through {@link disconnect}.
+   */
+  #link(consumer: Instance, need: string, provider: Instance, port: string): Promise<unknown> {
+    if (consumer.dead || provider.dead) return Promise.resolve();
+    const id = this.#nextLink++;
+    for (const link of this.#links.values()) {
+      if (link.consumer === consumer && link.need === need) link.current = false;
+    }
+    this.#links.set(id, { id, consumer, need, provider, port, current: true });
+    const consumerSlot = this.#slots.get(consumer.slot);
+    const providerSlot = this.#slots.get(provider.slot);
+    // A link to an instance that is held starts held, behind a marker of that hold.
+    const hold =
+      providerSlot?.installed === provider ? this.#holds.get(providerSlot.name) : undefined;
+    const channel = new MessageChannel();
+    return Promise.all([
+      this.#ask(
+        provider,
+        {
+          op: "attach",
+          link: id,
+          end: channel.port2,
+          port,
+          consumer: consumer.slot,
+          live: consumerSlot?.installed === consumer,
+          held: this.#holds.has(consumer.slot),
+        },
+        [channel.port2],
+      ),
+      this.#ask(
+        consumer,
+        {
+          op: "link",
+          need,
+          link: id,
+          end: channel.port1,
+          provider: `${provider.slot}.${port}`,
+          hold,
+        },
+        [channel.port1],
+      ),
+    ]);
+  }
+
+  /**
+   * Lets events for the slot flow to the links of `instance` only, or to no link when it is
+   * `null`, and ends every event hold for the slot.
+   */
+  async #liven(slot: Slot, instance: Instance | null): Promise<void> {
+    const byProvider = new Map<Instance, number[]>();
+    for (const provider of this.#eventHolds.get(slot.name) ?? []) byProvider.set(provider, []);
+    this.#eventHolds.delete(slot.name);
+    for (const link of this.#links.values()) {
+      if (link.consumer.slot !== slot.name) continue;
+      const links = byProvider.get(link.provider) ?? [];
+      if (link.consumer === instance) links.push(link.id);
+      byProvider.set(link.provider, links);
+    }
+    await Promise.all(
+      [...byProvider].map(([provider, links]) =>
+        this.#ask(provider, { op: "live", consumer: slot.name, links }),
+      ),
+    );
+  }
+
+  /**
+   * Sends a link-management request. A failure means the instance is gone, which its exit
+   * handles, or that it is busy, in which case the request still arrives later, in order.
+   */
+  #ask(
+    instance: Instance,
+    message: Parameters<Instance["request"]>[0],
+    transfer: Bun.Transferable[] = [],
+  ): Promise<void> {
+    if (instance.dead) return Promise.resolve();
+    return instance
+      .request(message, this.#requestTimeout, message.op, transfer)
+      .then(ignore, ignore);
+  }
+
+  // ---- Calls from outside the rack ----
+
+  /** Handles one data-channel message from an instance: the result of a call from outside. */
+  onData(instance: Instance, message: DataFromWorker): void {
+    if (message.t === "result") this.#fromProvider(instance, message);
   }
 
   /**
@@ -179,27 +427,7 @@ export class Backplane {
     });
   }
 
-  /** Holds calls and events addressed to the slot until {@link resume}. */
-  pause(slot: Slot): void {
-    slot.paused = true;
-  }
-
-  /** Hands held calls and events, in order, to whatever instance is installed now. */
-  resume(slot: Slot): void {
-    slot.paused = false;
-    const queue = slot.queue;
-    slot.queue = [];
-    for (const item of queue) {
-      if (item.kind === "call") {
-        item.call.queuedIn = undefined;
-        this.#dispatch(item.call);
-      } else {
-        this.#deliver(slot, item.need, item.event, item.payload);
-      }
-    }
-  }
-
-  /** Fails every call the instance is processing as a provider. */
+  /** Fails every call from outside the rack that the instance is serving. */
   failInFlight(instance: Instance, code: string, message: string): void {
     for (const call of instance.inFlight.values()) {
       this.#finish(call as Call, failure(code, message), false);
@@ -208,37 +436,14 @@ export class Backplane {
     instance.checkDrained();
   }
 
-  /** Drops the calls an exited instance made, cancelling them at their providers. */
-  releaseCaller(instance: Instance): void {
-    for (const call of instance.outgoing.values()) this.#finish(call as Call, undefined, true);
-    instance.outgoing.clear();
-    instance.subscriptions.clear();
-  }
-
-  #fromCaller(caller: Instance, message: CallFromCaller): void {
-    const wire = caller.wiring.get(message.need);
-    if (wire === undefined) {
-      const error = {
-        code: "RACK_NO_ROUTE",
-        message: `${caller.slot}.${message.need} is not wired`,
-      };
-      caller.post({ t: "result", id: message.id, ok: false, error });
-      return;
+  /** Hands calls held for the slot, in order, to whatever instance is installed now. */
+  #resume(slot: Slot): void {
+    const queue = slot.queue;
+    slot.queue = [];
+    for (const call of queue) {
+      call.queuedIn = undefined;
+      this.#dispatch(call);
     }
-    const call = this.#create(
-      wire.provider,
-      wire.port,
-      message.member,
-      message.input,
-      message.timeout,
-      caller.slot,
-      (outcome) => {
-        caller.outgoing.delete(message.id);
-        caller.post({ t: "result", id: message.id, ...outcome });
-      },
-    );
-    caller.outgoing.set(message.id, call);
-    this.#dispatch(call);
   }
 
   #fromProvider(provider: Instance, message: CallResult): void {
@@ -278,8 +483,9 @@ export class Backplane {
       queuedIn: undefined,
       cleanup: undefined,
     };
-    // The backplane owns the timeout: it fails the call and cancels it at the provider.
-    // @decision .agents/decisions/261112_043035-backplane-protocol.md#rpc
+    // The backplane owns the timeout of a call from outside the rack: it fails the call and
+    // cancels it at the provider.
+    // @decision .agents/decisions/261116_024226-backplane-links.md#rpc
     call.timer = setTimeout(() => {
       const where = `${provider}.${port}.${member}`;
       this.#finish(call, failure("RACK_TIMEOUT", `${where} timed out after ${ms} ms`), true);
@@ -294,13 +500,13 @@ export class Backplane {
       this.#finish(call, failure("RACK_LINK_DOWN", `${call.provider} is not in the rack`), false);
       return;
     }
-    if (slot.paused) {
+    if (slot.held) {
       if (slot.queue.length >= QUEUE_LIMIT) {
-        const message = `${slot.name} is paused and its queue is full`;
+        const message = `${slot.name} is held and its queue is full`;
         this.#finish(call, failure("RACK_LINK_DOWN", message), false);
         return;
       }
-      slot.queue.push({ kind: "call", call });
+      slot.queue.push(call);
       call.queuedIn = slot;
       return;
     }
@@ -340,7 +546,7 @@ export class Backplane {
     call.cleanup?.();
     if (call.queuedIn !== undefined) {
       const queue = call.queuedIn.queue;
-      const index = queue.findIndex((item) => item.kind === "call" && item.call === call);
+      const index = queue.indexOf(call);
       if (index >= 0) queue.splice(index, 1);
       call.queuedIn = undefined;
     }
@@ -348,36 +554,6 @@ export class Backplane {
       call.target.post({ t: "cancel", id: call.id });
     }
     if (outcome !== undefined) call.deliver(outcome);
-  }
-
-  #emit(publisher: Instance, message: Emit): void {
-    const slot = this.#slots.get(publisher.slot);
-    if (slot === undefined || slot.installed !== publisher) {
-      const what = `${message.port}.${message.event}`;
-      this.#warn(`dropped event ${what} from an instance that is not installed`, publisher.slot);
-      return;
-    }
-    for (const consumer of this.#slots.values()) {
-      for (const [need, wire] of consumer.wiring) {
-        if (wire.provider === slot.name && wire.port === message.port) {
-          this.#deliver(consumer, need, message.event, message.payload);
-        }
-      }
-    }
-  }
-
-  #deliver(consumer: Slot, need: string, event: string, payload: unknown): void {
-    if (consumer.removed) return;
-    if (consumer.paused) {
-      // Delivery is at most once: past the limit, new events are dropped.
-      if (consumer.queue.length < QUEUE_LIMIT) {
-        consumer.queue.push({ kind: "event", need, event, payload });
-      }
-      return;
-    }
-    const target = consumer.installed;
-    if (target === null || target.dead || !target.subscriptions.has(`${need}.${event}`)) return;
-    target.post({ t: "event", need, event, payload });
   }
 }
 

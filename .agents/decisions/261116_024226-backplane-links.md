@@ -206,6 +206,34 @@ Carried over from the earlier backplane protocol decision; measured on 2026-11-1
   - Rerun the end-to-end benchmark from [Evidence](#evidence) and record its results in `## Implementation`.
   - Add "link" to the terminology table in `AGENTS.md`.
 
+## Implementation
+
+- Messages: `src/protocol.ts`. The control requests that manage links are `link`, `hold`, `release`, and `down` for a need, and `attach`, `holdEvents`, `live`, and `drop` for a provided port. `installed`, `drain`, and `metrics` cover the rest.
+- The backplane: `Backplane` in `src/backplane.ts`. `connect` links a new instance's needs, `install` switches a slot to an instance, `hold` and `release` hold and release a slot, `drain` and `fail` drain an instance or fail its calls, and `disconnect` handles exits. Calls from outside the rack keep their per-call routing there.
+- The Worker side: `src/worker.ts`. It covers outgoing calls with their timeouts and hold queue, the provider ends of links, event fan-out with per-consumer hold queues, hold markers, and drains.
+- The main-thread handle: `Instance` in `src/instance.ts`. It sends control requests with `request`, drains with `drain` (both the markers and the calls from outside the rack), and reads `serving`.
+- `#link` in `src/backplane.ts` sends both ends of a link at once and decides the hold state at that moment. A link to an instance that is held carries the token of that hold, so its consumer queues calls and sends a marker on it first. A request that times out still arrives later, in order, so a timeout never undoes a link; only an exit removes one.
+- Each hold remembers every provider it asked to queue events, and `release` and `install` end the queue at all of them, including providers that no longer have a link to the slot.
+- The rack: cold start, `swap`, reset, `plug`, and retirement call the backplane in `src/rack.ts`. Every swap holds the slot before it installs the new instance.
+- A new instance that exits while the hold before the switch waits is not installed: the swap rolls back with `RACK_SWAP_REJECTED`. An installed instance that exits while its slot is busy, during `install` or the retirement of the old instance, is reset once the swap or the running reset gets to it.
+- `status().inFlight` reads a counter that the Worker keeps in a `SharedArrayBuffer`, so it includes calls on links.
+- A call that waits in a hold queue is cloned when it is queued, so it carries its input as it was when the device made the call.
+- Tests: `test/links.test.ts`, with fixture devices `test/fixtures/devices/pump.ts`, `busy.ts`, and `client.ts`. Its "links through crashes and busy instances" tests cover five races found in review; each of them fails when its fix is taken out. The existing backplane, swap, reset, and panel tests pass unchanged apart from their `@decision` references. The test that calls between devices while the main thread is blocked fails against the earlier relay at commit `a560600`.
+- End-to-end benchmark from [Evidence](#copy-cost), rerun on 2026-11-16 on the same machine against the final implementation, with the counters of [Call and event metrics](261116_035534-call-metrics.md) in place:
+
+  | Payload | Provider schema | Sequential µs, before → after | Pipelined calls/s, before → after | Main-thread CPU µs per call, after |
+  |---|---|---:|---:|---:|
+  | `{ n: 1 }` | `v.unknown()` | 25.2 → 12.6 | 191,326 → 310,171 | 0 |
+  | One order | `v.unknown()` | 46.6 → 24.9 | 60,720 → 107,585 | 0 |
+  | One order | valibot object | 52.4 → 26.6 | 61,322 → 89,240 | 0 |
+  | 64 orders | `v.unknown()` | 1,065 → 510 | 1,765 → 3,760 | 0 |
+  | 64 orders | valibot array | 1,293 → 703 | 1,755 → 2,204 | 0 |
+  | 1024 orders | `v.unknown()` | 18,882 → 9,373 | 107 → 209 | 0 |
+  | `Uint8Array`, 1 MB | `v.unknown()` | 815 → 322 | 1,892 → 3,470 | 0 |
+  | String, 1 MB | `v.unknown()` | 124 → 73 | 27,199 → 35,273 | 0 |
+
+  With valibot schemas, pipelined throughput is now bound by validation in the provider's Worker rather than by copies.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-16 and chose to keep [Rack runtime architecture](261112_035942-rack-architecture.md) as it is, with the note under `## Impact`, instead of superseding it.

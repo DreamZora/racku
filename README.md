@@ -52,6 +52,7 @@ The sections below build a second small app, file by file. The test suite extrac
 | Connector | A named, versioned contract of RPC methods and events, such as `kv/v1`. |
 | Port | One connector on a device, addressed as `<device>.<port>`. |
 | Backplane | The only channel between devices. Devices never import each other. |
+| Link | A direct channel the backplane sets up from one device's need to another device's port. Calls and events between devices travel on links, Worker to Worker, without passing through the rack's main thread. |
 | Patch | An explicit connection, needed when several devices provide the same connector. |
 | Panel | An external port owned by the rack. P0 has an HTTP panel. |
 | Firmware | The hashed bundle a device file is built into; the hash is its version. |
@@ -199,7 +200,7 @@ await running.stop();
 | `baseDir` | working directory | Where relative paths resolve and `.rack/` is written. |
 | `logger` | one line per entry on the console | Receives every log entry. |
 | `callTimeout` | 30 000 ms | Timeout of calls that set none. |
-| `hookTimeout` | 30 000 ms | Timeout of boot and each lifecycle hook. |
+| `hookTimeout` | 30 000 ms | Timeout of boot, each lifecycle hook, and each `metrics()` request. |
 | `drainTimeout` | 10 000 ms | How long a retiring instance may finish its calls. |
 
 The handle returned by `start`:
@@ -212,9 +213,34 @@ The handle returned by `start`:
 | `reload()` | Rebuild all firmware and swap the devices whose hash changed. |
 | `plug(u, slot(...))` / `unplug(name)` | Add a device to a free slot, or remove one that nothing uses. |
 | `subscribe(listener)` | Receive power, swap, fault, and log events. |
+| `metrics()` | Read each device's call and event counters. |
 | `stop()` | Shut down from the top down. |
 
 Management operations run one at a time, in the order they were called. Firmware is written to `.rack/firmware/` under the base directory; keep `.rack/` out of version control.
+
+`metrics()` resolves with `{ devices }`, one entry per device whose installed instance answered, bottom slot first. Each entry has the device name, the `firmware` hash of the instance that counted, `since` (when that instance booted), and counters per member:
+
+```js
+{
+  device: "orders",
+  firmware: "7f3a9c…",
+  since: 1763260000000,
+  provides: { // per provided port and member
+    http: { handle: { kind: "rpc", calls: 812, ok: 809, errors: { RACK_TIMEOUT: 3 }, active: 1, timeMs: 931.2 } },
+  },
+  needs: { // per need and member
+    cache: {
+      get: { kind: "rpc", calls: 790, ok: 790, errors: {}, pending: 0, queued: 0, timeMs: 18.4 },
+      changed: { kind: "event", received: 12 },
+    },
+  },
+}
+```
+
+- For the RPC members a device provides, `calls` counts the calls it served, including calls from `rack.call` and the HTTP panel; `active` counts the ones it is still serving. For the RPC members of its needs, `calls` counts the calls it made; `pending` counts the unfinished ones, and `queued` the ones waiting while the provider is swapped.
+- `ok` counts successes and `errors` counts failures by error code, `RACK_TIMEOUT` and `RACK_CANCELLED` included. `timeMs` is the total duration of the finished calls, so `timeMs / (ok + errors)` is the mean.
+- An event member a device provides counts `emitted` events and `dropped` deliveries; one it needs counts `received` events.
+- Counters live in each device's Worker, which keeps them from the moment its instance boots, so they restart when a device swaps or resets. A device that does not answer within `hookTimeout` is left out.
 
 ## Hot swap and hot reload
 
@@ -223,7 +249,7 @@ Every swap follows the same sequence:
 1. The new firmware boots in a standby instance, and the rack checks that ports other devices or panel routes use still exist with the same connector. If not, the swap is rejected with `RACK_SWAP_REJECTED`.
 2. The new instance runs `powerOn` and `selfTest` while the old one keeps serving.
 3. The old instance runs `deactivate`. If the device has `snapshot`/`restore`, calls to the slot are held while the old instance finishes its calls, and its snapshot is restored into the new instance.
-4. The new instance runs `activate`, and calls switch to it in one step. Held calls are then handed to the new instance; none are lost.
+4. The new instance runs `activate`. Calls to the slot are held for a moment and then switch to it in one step; held calls go to the new instance, and none are lost.
 5. The old instance finishes the calls it still holds, runs `powerOff`, and is terminated. Calls still running after `drainTimeout` fail with `RACK_LINK_DOWN`.
 
 If anything in steps 1–4 fails, the new instance is discarded, the old one is reactivated and keeps serving, and the slot reports `degraded`.

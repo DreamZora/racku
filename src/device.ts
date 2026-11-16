@@ -35,8 +35,8 @@ export type NoPorts = Record<never, Connector>;
 /** Options for an outgoing RPC call. */
 export interface CallOptions {
   /**
-   * Milliseconds before the backplane fails the call with `RACK_TIMEOUT` and cancels it at the
-   * provider; defaults to the rack's `callTimeout`.
+   * Milliseconds before the call fails with `RACK_TIMEOUT` and is cancelled at the provider;
+   * defaults to the rack's `callTimeout`.
    */
   timeout?: number;
   /** Aborting it fails the call at once with `RACK_CANCELLED` and cancels it at the provider. */

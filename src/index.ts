@@ -58,6 +58,16 @@ export {
   type SlotSpec,
   slot,
 } from "./manifest.ts";
+export type {
+  CalledRpcMetrics,
+  DeviceMetrics,
+  EmittedEventMetrics,
+  NeedMetrics,
+  PortMetrics,
+  RackMetrics,
+  ReceivedEventMetrics,
+  ServedRpcMetrics,
+} from "./metrics.ts";
 export {
   type RackEvent,
   type RackHandle,
