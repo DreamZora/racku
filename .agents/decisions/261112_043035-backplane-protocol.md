@@ -123,7 +123,11 @@ Measured on 2026-11-12 on Bun 1.3.13 on this machine:
 ## Implementation
 
 - Error model: `RackError`, `WireError`, `toWireError`, `fromWireError`, `isRackError`, and `isCloneable` in `src/errors.ts`, tested in `test/errors.test.ts`.
-- Channels, boot, routing, RPC, events, draining, and fault handling are not implemented yet.
+- Channels and messages: the message types in `src/protocol.ts`; the Worker side in `src/worker.ts`; the main-thread side in `Instance`, `src/instance.ts`.
+- Boot and FRU: `boot` in `src/worker.ts` and `Instance.boot` in `src/instance.ts`.
+- Wiring, routing, RPC, events, pausing, and draining: `Backplane` in `src/backplane.ts`, with wiring resolved in `src/rack.ts`; tested in `test/backplane.test.ts`, `test/rack.test.ts`, and `test/swap.test.ts`.
+- Faults and resets: `src/rack.ts`, tested in `test/reset.test.ts`.
+- The data channel needs Bun 1.4.4 or later; see [P0 scope, repository layout, and toolchain on Bun 1.4.4](261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#evidence).
 
 ## Confirmation
 

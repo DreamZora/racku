@@ -132,8 +132,10 @@ Measured on 2026-11-15 on the local machine, with probe scripts outside the repo
 
 - Toolchain: `package.json` (scripts, `engines.bun`, and dependencies), `tsconfig.json`, `biome.json`, and `bun.lock`.
 - Decision gate: `scripts/check-decisions.ts`, run by `bun run check:decisions`.
-- Tests: `test/*.test.ts`.
-- The other P0 items are not implemented yet; the "Current state" section of `AGENTS.md` tracks progress.
+- Entry points: `src/index.ts` (`rack42u`), `src/std/index.ts` (`rack42u/std`), and `src/cli.ts` (the `rack` command).
+- Firmware build: `buildFirmware` in `src/firmware.ts`, tested in `test/firmware.test.ts`.
+- Example and documentation: `examples/shop-api`, tested in `test/example.test.ts`; `README.md`, whose app is run by `test/readme.test.ts`.
+- Tests: `test/*.test.ts`, with fixtures in `test/fixtures/`.
 
 ## Confirmation
 

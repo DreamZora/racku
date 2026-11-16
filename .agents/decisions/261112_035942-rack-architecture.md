@@ -66,7 +66,8 @@ Because devices hold only addresses, a reset or swap of a lower device does not 
 ## Implementation
 
 - Standard Schema validation of connector schemas: `validate`, `formatIssues`, and `isStandardSchema` in `src/schema.ts`, tested in `test/schema.test.ts`.
-- The rack runtime is not implemented yet.
+- Rack runtime: assembly, the gravity rule, and power sequencing in `src/rack.ts`; the backplane in `src/backplane.ts`; tested in `test/rack.test.ts`.
+- The power-on self-test is the `selfTest` hook. The circuit breaker, thermal, watchdog, indicator LED, management controller, and top-of-rack switch are not implemented yet.
 
 ## Confirmation
 

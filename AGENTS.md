@@ -6,8 +6,10 @@ This file defines the project background, architectural constraints, and working
 
 ## Current state
 
-- The P0 scaffold is in place: `package.json`, `tsconfig.json`, `biome.json`, `bun.lock`, the first runtime modules under `src/` (`schema.ts`, `connector.ts`, `errors.ts`) with their tests under `test/`, and the decision gate `scripts/check-decisions.ts`.
-- P0 still lacks the package entry points, the rack runtime, the CLI, the panel, the standard devices, the example app, and `README.md`; [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md) fixes the scope and the layout.
+- P0 is complete as scoped by [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md): the `rack42u` and `rack42u/std` entry points, the rack runtime with the `sled` form, firmware builds, swaps, crash resets, the HTTP panel, the `memkv` and `sqlite` standard devices, the `rack start` and `rack dev` commands, the example app `examples/shop-api`, and `README.md`.
+- Details that the earlier decisions left open are fixed by [P0 standard connectors, rack handle shapes, and test fixtures](.agents/decisions/261115_222025-p0-api-details.md).
+- The minimum Bun version is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
+- Everything listed under "not in P0" in the P0 decision, such as the `inline` and `chassis` forms, live manifest edits, and the WebSocket panel, still needs its own decision before work starts.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
 
 ## Project positioning
@@ -110,6 +112,8 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 | Apply formatting and safe lint fixes | `bun run format` |
 | Check decision records and `@decision` references | `bun run check:decisions` |
 | Run the type check, lint, decision gate, and tests in order | `bun run check` |
+| Run the example app | `bun src/cli.ts start examples/shop-api/rack.ts` |
+| Run the example app with hot reload | `bun src/cli.ts dev examples/shop-api/rack.ts` |
 
 ## Coding standards
 
@@ -133,19 +137,32 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 
 ```text
 AGENTS.md            this file; CLAUDE.md is a symlink to it
+README.md            user-facing documentation; test/readme.test.ts runs its app
 LICENSE              MIT
 package.json         manifest, exports, bin, and scripts
 tsconfig.json        TypeScript configuration
 biome.json           formatter and linter configuration
 bun.lock             lockfile
-src/                 framework source; entry points are still being built
+src/                 framework source
+  index.ts           entry point of rack42u
+  cli.ts             the rack command (start, dev); dev.ts holds the file watcher
+  rack.ts            assembly, power sequencing, swaps, resets, and the rack handle
+  backplane.ts       call, event, and queue routing between instances
+  instance.ts        the main thread's handle on one device Worker
+  worker.ts          the Worker host that loads firmware and runs hooks
+  firmware.ts        per-device Bun.build with content hashes
+  panel.ts, http.ts  the HTTP panel and the http/v1 connector
+  std/               entry point of rack42u/std and the standard devices
 test/                bun:test tests, named *.test.ts
+  fixtures/          test devices, connectors, and helpers; no tests
+examples/shop-api/   the example app
 scripts/             project scripts; check-decisions.ts is the decision gate
 .agents/decisions/   decision records, stored flat as <YYMMDD>_<hhmmss>-<topic>.md
 ```
 
 - `docs/` does not exist yet; it will hold user-facing project documentation only.
-- The code layout for P0 is fixed by [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md).
+- The code layout for P0 is fixed by [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md); `test/fixtures/` by [P0 standard connectors, rack handle shapes, and test fixtures](.agents/decisions/261115_222025-p0-api-details.md#test-fixtures).
+- Device files, including `src/std/memkv.ts` and `src/std/sqlite.ts`, import the framework as `rack42u`, never by relative path, so firmware keeps it external.
 
 ## Maintaining this file
 
