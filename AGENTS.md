@@ -15,6 +15,11 @@ This file defines the project background, architectural constraints, and working
   - [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md): cold swaps, restarts, group replacements for contract changes, and changed plans and edited manifests applied to a running rack.
   - [Fallback, rollback, and update history](.agents/decisions/261117_005743-fallback-rollback-and-history.md): probation with passive fallback, `rollback()`, a bounded `history()`, and deleting firmware that nothing needs.
   - [Management endpoint and the rack ctl command](.agents/decisions/261117_005821-management-endpoint.md): `rack ctl` over a Unix socket on Linux and macOS, and over token-protected loopback TCP on Windows or with `--control-port`.
+- P2 is under way on `feat/p2`, with four accepted decisions:
+  - [Design goals and principles](.agents/decisions/261117_062916-design-principles.md): the goals and practices that [Design principles](#design-principles) summarizes.
+  - [Watchdog](.agents/decisions/261117_062959-watchdog.md): an event-loop watchdog for every device, and watchdogs that devices feed from their work loops.
+  - [Bounded backlogs instead of a breaker and thermal](.agents/decisions/261117_063228-bounded-backlogs.md): one bound on the calls and events waiting between devices, `RACK_OVERLOADED`, and no work on expired calls.
+  - [Continuous integration on GitHub Actions](.agents/decisions/261117_063301-continuous-integration.md): the checks on Linux, and the tests on macOS and Windows.
 - The minimum Bun version is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. Everything else on that list, such as the `inline` and `chassis` forms and the WebSocket panel, still needs its own decision before work starts.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
@@ -25,6 +30,41 @@ This file defines the project background, architectural constraints, and working
 - The core contains no logic for a specific application type; such capability can only be a device.
 - The technology stack is Bun, with TypeScript and ESM. Bun is the runtime, the package manager, and the test runner, and its built-in capabilities are preferred.
 - The license is MIT ([License](.agents/decisions/261112_035940-mit-license.md)). Every new dependency must be MIT-compatible.
+
+## Design principles
+
+Rack terms make the system easy to understand; they don't prescribe behavior. Features come from the goals and practices below, as [Design goals and principles](.agents/decisions/261117_062916-design-principles.md) decides.
+
+**Goals**, in this order when they conflict:
+
+1. **Reliability**: the rack keeps serving what it can. Every fault is detected, contained to its device, reported, and recovered from along a defined path.
+2. **Maintainability**: each part can be understood, changed, and tested on its own.
+3. **Observability**: an operator can see what the rack is doing, what it did on its own, and why.
+4. **Extensibility**: builders add capabilities as devices and connectors, without changing the core.
+
+**Simplicity**, after the Linux philosophy:
+
+- One mechanism does one thing and composes with the others.
+- The rack provides mechanisms; devices and manifests set policy.
+- Reuse an existing path before adding a new one.
+- Keep state and interfaces as plain data a person can read: text files, JSON, structured logs, and error codes.
+- Keep options few, each with a safe, documented default.
+
+**Reliability**, after industrial, automotive, and aerospace practice:
+
+- Bound every queue, backlog, retry, record, file, and wait.
+- Give every wait a timeout, and every timeout a defined outcome.
+- Contain faults: a fault in one device must not stop the others or the rack.
+- Fail fast and explicitly, with a structured code. Never fail silently, hang, or retry without limit.
+- Supervise what can hang or crash, within limits. The service manager supervises the rack process.
+- Keep a known-good state to return to, and make every change reversible.
+- Prefer fixed, declared limits and explicit states to adaptive heuristics, so behavior under faults and overload stays predictable and testable.
+- Validate data at every boundary.
+- Test the failure paths, such as crashes, hangs, timeouts, overload, and bad updates, not only the paths that work.
+
+**Within JavaScript's limits**: garbage collection, one event loop per thread, and third-party code rule out the timing guarantees of C on a real-time system. Aim for every known failure mode to have a detection, a bound, a recovery, and a test, and document the limits that remain instead of implying guarantees.
+
+**Borrowed concepts**: adopt a physical concept only when it serves a goal through a mechanism that suits software; reshape or drop the rest. A decision for a feature states the goals it serves, the failure modes it handles, its bounds, how an operator observes it, and how tests exercise its failures.
 
 ## Architecture overview
 
