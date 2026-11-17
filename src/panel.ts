@@ -4,6 +4,7 @@
  *
  * @decision .agents/decisions/261112_043034-device-api.md#panel-http
  * @decision .agents/decisions/261112_035943-hot-swap.md#the-rack-owns-external-connections
+ * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
  */
 import type { CallOptions } from "./device.ts";
 import { RackError } from "./errors.ts";
@@ -15,6 +16,13 @@ export type HttpCall = (address: string, input: unknown, options: CallOptions) =
 /** A running panel. */
 export interface Panel {
   readonly url: URL;
+  /**
+   * Replaces the routes without closing the server, for an edited manifest; open connections
+   * and requests in progress continue.
+   *
+   * @throws RackError `RACK_MANIFEST` when a route pattern is invalid; the old routes stay.
+   */
+  setRoutes(routes: Readonly<Record<string, string>>): void;
   /** Stops accepting connections and waits for open requests. */
   stop(): Promise<void>;
 }
@@ -36,17 +44,17 @@ const STATUS_BY_CODE: Record<string, number> = { RACK_LINK_DOWN: 503, RACK_TIMEO
  * @throws RackError `RACK_MANIFEST` when the server cannot listen or a route pattern is invalid.
  */
 export function openHttpPanel(spec: HttpPanelSpec, call: HttpCall): Panel {
-  const routes: Record<string, (request: Bun.BunRequest) => Promise<Response>> = {};
-  for (const [pattern, address] of Object.entries(spec.routes)) {
-    routes[pattern] = (request) => forward(request, address, call);
-  }
+  const handlers = (table: Readonly<Record<string, string>>) => {
+    const routes: Record<string, (request: Bun.BunRequest) => Promise<Response>> = {};
+    for (const [pattern, address] of Object.entries(table)) {
+      routes[pattern] = (request) => forward(request, address, call);
+    }
+    return routes;
+  };
+  const notFound = () => new Response("Not Found", { status: 404 });
   let server: Bun.Server<undefined>;
   try {
-    server = Bun.serve({
-      port: spec.port,
-      routes,
-      fetch: () => new Response("Not Found", { status: 404 }),
-    });
+    server = Bun.serve({ port: spec.port, routes: handlers(spec.routes), fetch: notFound });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new RackError(
@@ -56,6 +64,14 @@ export function openHttpPanel(spec: HttpPanelSpec, call: HttpCall): Panel {
   }
   return {
     url: server.url,
+    setRoutes(table) {
+      try {
+        server.reload({ routes: handlers(table), fetch: notFound });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new RackError("RACK_MANIFEST", `panel http cannot take the new routes: ${message}`);
+      }
+    },
     stop: () => server.stop(),
   };
 }

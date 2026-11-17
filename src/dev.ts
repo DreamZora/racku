@@ -2,14 +2,18 @@
  * Development mode: watch the base directory and reload the rack after changes.
  *
  * Reloading goes through the swap process, so only devices whose firmware hash changed are
- * replaced; `bun --hot` is not involved.
+ * replaced; `bun --hot` is not involved. An edited manifest is imported again and handed to the
+ * running rack, which moves to its new layout.
  *
  * @decision .agents/decisions/261112_035943-hot-swap.md#firmware
  * @decision .agents/decisions/261115_222025-p0-api-details.md#command-line
+ * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
  */
 import { type FSWatcher, watch } from "node:fs";
 import { resolve, sep } from "node:path";
+import { buildFirmware } from "./firmware.ts";
 import type { LogEntry } from "./log.ts";
+import { isRackManifest, type RackManifest } from "./manifest.ts";
 import type { RackHandle } from "./rack.ts";
 
 /** Milliseconds of quiet after the last change before a reload starts. */
@@ -19,7 +23,7 @@ export const DEBOUNCE_MS = 100;
 export interface WatchOptions {
   /** Directory to watch recursively. */
   baseDir: string;
-  /** Absolute path of the manifest; changes to it only produce a warning. */
+  /** Absolute path of the manifest; an edit to it is imported again and applied. */
   manifestPath: string;
   /** Writes the watcher's own log entries. */
   log: (entry: LogEntry) => void;
@@ -54,11 +58,13 @@ export function watchAndReload(running: RackHandle, options: WatchOptions): () =
     try {
       do {
         again = false;
+        let manifest: RackManifest | undefined;
         if (manifestChanged) {
           manifestChanged = false;
-          log("warn", "the manifest changed; restart the rack to apply it", { manifestPath });
+          manifest = await importManifest(manifestPath, options.baseDir);
+          log("info", "the manifest changed; applying it", { manifestPath });
         }
-        const results = await running.reload();
+        const results = await running.reload(manifest);
         if (results.length === 0) log("info", "reload: no firmware changed");
       } while (again && !closed);
     } catch (error) {
@@ -86,4 +92,19 @@ export function watchAndReload(running: RackHandle, options: WatchOptions): () =
     clearTimeout(timer);
     watcher.close();
   };
+}
+
+/**
+ * Imports an edited manifest file. Bun 1.4.4 keeps returning its first copy of a module, even
+ * for a URL with a new query, so the manifest is bundled like firmware: an edit gives the bundle
+ * a new content hash, and with it a new module, helpers included.
+ *
+ * @throws Error when the file does not build or does not default-export a rack().
+ */
+async function importManifest(manifestPath: string, baseDir: string): Promise<RackManifest> {
+  const bundle = await buildFirmware(manifestPath, baseDir);
+  const manifest = ((await import(bundle.url)) as { default?: unknown }).default;
+  if (!isRackManifest(manifest))
+    throw new Error(`${manifestPath} does not default-export a rack()`);
+  return manifest;
 }

@@ -7,8 +7,9 @@
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#plan-file
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { slot } from "rack42u";
+import { rack, slot } from "rack42u";
 import { memkv } from "rack42u/std";
+import { planRack } from "../src/rack.ts";
 import { Cli, codeOf, errorOf, type TempApp, tempApp, useRacks } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -419,21 +420,32 @@ describe("the rack command with scanned racks", () => {
 });
 
 describe("reloads of scanned racks", () => {
-  test("README.md: reload swaps changed firmware within the same plan, and refuses a changed plan", async () => {
+  test("README.md: under rack start, reload swaps changed files, and a new plan runs once the plan file records it", async () => {
     const app = await exampleApp();
     const { running } = await startRack(SPEC, { baseDir: app.dir });
     await app.write("devices/d.ts", counter("d", "D").replace("let n = 0;", "let n = 100;"));
     const results = await running.reload();
-    expect(results.map((result) => [result.device, result.error?.code ?? null])).toEqual([
-      ["a-d", null],
-    ]);
+    expect(
+      results.map((result) => [result.device, result.mode, result.error?.code ?? null]),
+    ).toEqual([["a-d", "hot", null]]);
     expect(await running.call("a.poke", "inc", "d")).toBe(101);
     await app.write("devices/b.ts", consumer("b", { e: "E", d: "D" }));
-    const changed = await errorOf(running.reload());
-    expect([changed.code, changed.message]).toEqual([
+    const stale = await errorOf(running.reload());
+    expect([stale.code, stale.message]).toEqual([
       "RACK_SWAP_REJECTED",
-      expect.stringContaining("the plan changed: d is new"),
+      expect.stringContaining("test.plan no longer fits the devices: d is new"),
     ]);
+    await planRack(rack("test", SPEC), { baseDir: app.dir }, true);
+    const applied = await running.reload();
+    expect(
+      applied.map((result) => [result.device, result.mode, result.error?.code ?? null]),
+    ).toEqual([
+      ["d", "plug", null],
+      ["b", "hot", null],
+    ]);
+    // b reached the new shared d, which counts from 100 like the edited file, apart from a's copy.
+    const inc = (device: string) => running.call(`${device}.poke`, "inc", "d");
+    expect([await inc("b"), await inc("b"), await inc("a")]).toEqual([101, 102, 102]);
   });
 });
 

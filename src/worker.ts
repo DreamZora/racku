@@ -323,6 +323,7 @@ async function boot(request: BootRequest): Promise<Fru> {
     snapshot: def.snapshot !== undefined,
     restore: def.restore !== undefined,
     priority: def.priority,
+    swap: def.swap,
   };
 }
 
@@ -341,6 +342,7 @@ async function describe(request: DescribeRequest): Promise<Fru> {
     snapshot: def.snapshot !== undefined,
     restore: def.restore !== undefined,
     priority: def.priority,
+    swap: def.swap,
   };
 }
 

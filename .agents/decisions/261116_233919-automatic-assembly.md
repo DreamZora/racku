@@ -242,7 +242,7 @@ If D needed A through a need named `back`, assembly would fail with `cycle: a.d 
 - **The `plan` start option.**
   - `start()` takes `plan: true | "update" | false`.
   - `"update"` is how `rack dev` rewrites the plan file, and `README.md` documents it as well.
-- **Changed plans while running.** Until [Hot swaps, cold swaps, and restarts](261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan) is implemented, `reload()` of a scanned rack only applies a new order. It refuses a plan with other instances or wiring with `RACK_SWAP_REJECTED`, which asks for a restart.
+- **Changed plans while running.** `reload()` of a scanned rack moves to a changed plan as [Hot swaps, cold swaps, and restarts](261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan) describes. Under `rack start`, it does so only once the plan file records the new plan.
 - **Tests:**
   - `test/plan.test.ts` covers the planner and the plan file.
   - `test/assembly.test.ts` covers scanned racks through Workers and through the `rack` command.

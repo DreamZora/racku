@@ -36,6 +36,8 @@ export interface Fru {
   restore: boolean;
   /** Start priority in a scanned rack. */
   priority: number;
+  /** Whether a replacement may overlap the old and the new instance. */
+  swap: "hot" | "cold";
 }
 
 /** Main thread to Worker: load the firmware and report FRU data. */

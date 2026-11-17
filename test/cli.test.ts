@@ -149,14 +149,22 @@ describe("rack dev", () => {
     expect(cli.output).not.toContain("counter swapped");
   });
 
-  test("warns that a manifest change needs a restart", async () => {
+  // README.md, "Running a rack": rack dev applies an edited manifest without a restart.
+  // @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
+  test("README.md: applies an edited manifest without a restart", async () => {
     const created = await app();
     const cli = run(["dev"], created.dir);
-    await cli.panelUrl();
+    const url = await cli.panelUrl();
     await cli.waitFor(/watching /);
-    await created.write("rack.ts", `${MANIFEST}// edited\n`);
-    await cli.waitFor(/the manifest changed; restart the rack to apply it/);
+    expect((await fetch(new URL("/web/echo", url))).status).toBe(200);
+    // Narrow the route to one path: the device keeps serving it, and the panel stops routing
+    // the rest of /web to it.
+    await created.write("rack.ts", MANIFEST.replace('"/web/*"', '"/web/greeting"'));
+    await cli.waitFor(/the manifest changed; applying it/);
     await cli.waitFor(/reload: no firmware changed/);
+    expect(await greeting(url)).toBe("hello");
+    const echo = await fetch(new URL("/web/echo", url));
+    expect([echo.status, await echo.text()]).toEqual([404, "Not Found"]);
   });
 
   test("ignores changes under node_modules and dot directories", async () => {

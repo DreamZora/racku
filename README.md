@@ -258,7 +258,7 @@ Each model has one shared instance, named after the model, and each `own` need g
 - **Several providers:** when several models provide a need's connector, `use` picks one, for example `use: { "kv/v1": "memkv", "a.cache": "redis" }`. A `<model>.<need>` entry wins over a connector id.
 - **Configuration:** `config` gives configuration by instance name or by model, and an instance name wins. A device can also name its own resources after `ctx.slot.name`, so each copy gets its own.
 - **Owners:** `status()` reports, for each copy, the `owner` whose `own` need it serves. In a manifest that places devices by hand, an `own` need must be wired to a device that nothing else is wired to.
-- **Changes:** a scanned rack's instances come and go with its plan, so `plug`, `unplug`, and `swap` with another file fail with `RACK_SWAP_REJECTED`. `reload()` and `rack dev` hot-swap the instances whose files changed. A change to the plan itself, such as a new need, needs a restart for now.
+- **Changes:** a scanned rack's instances come and go with its plan, so `plug`, `unplug`, and `swap` with another file fail with `RACK_SWAP_REJECTED`. `reload()` and `rack dev` replace the instances whose files changed. When the plan itself changes, for example with a new need, the running rack moves to the new plan as [Changed plans and edited manifests](#changed-plans-and-edited-manifests) describes.
 
 ### The plan file
 
@@ -282,7 +282,7 @@ rack plan [manifest]    # print the plan without starting; --write or --check th
 
 On `SIGINT` or `SIGTERM` both commands shut down in order and exit with code 0; a second signal exits at once with code 1. They exit with code 1 when the rack fails to start.
 
-`rack dev` watches the base directory, ignoring `node_modules` and dot directories. After a change it rebuilds every device and swaps the ones whose firmware hash changed, so editing a file that several devices bundle, such as a shared connector, swaps all of them. A device that fails to build keeps running its old firmware. Edits to the manifest itself take effect only after a restart.
+`rack dev` watches the base directory, ignoring `node_modules` and dot directories. After a change it rebuilds every device and replaces the ones whose firmware hash changed, so editing a file that several devices bundle, such as a shared connector, replaces all of them. A device that fails to build keeps running its old firmware. Edits to the manifest itself take effect at once, as [Changed plans and edited manifests](#changed-plans-and-edited-manifests) describes.
 
 From code:
 
@@ -311,8 +311,9 @@ The handle returned by `start`:
 |---|---|
 | `status()` | Each device's slot, height, state, firmware hash, calls in flight, recent crashes, and, for a copy, its `owner`. |
 | `call(address, method, input, options?)` | Call a port from outside the rack. |
-| `swap(name, source?)` | Replace a device, optionally with another device file. |
-| `reload()` | Rebuild all firmware and swap the devices whose hash changed. |
+| `swap(name, source?)` | Replace a device now, optionally with another device file. |
+| `restart(name, { cascade? })` | Stop a device and start it again from scratch; its direct consumers then reload. |
+| `reload(manifest?)` | Rebuild all firmware and replace the devices whose hash changed; with a manifest, also move to its layout. |
 | `plug(u, slot(...))` / `unplug(name)` | Add a device to a free slot, or remove one that nothing uses. |
 | `subscribe(listener)` | Receive power, swap, fault, and log events. |
 | `metrics()` | Read each device's call and event counters. |
@@ -355,6 +356,53 @@ Every swap follows the same sequence:
 5. The old instance finishes the calls it still holds, runs `powerOff`, and is terminated. Calls still running after `drainTimeout` fail with `RACK_LINK_DOWN`.
 
 If anything in steps 1–4 fails, the new instance is discarded, the old one is reactivated and keeps serving, and the slot reports `degraded`.
+
+### Hot swaps, cold swaps, and restarts
+
+The sequence above is a **hot swap**, and `reload()`, `rack dev`, and `swap()` use it by default. Two more kinds replace a device without letting its old and new instances overlap:
+
+| | Hot swap | Cold swap | Restart |
+|---|---|---|---|
+| Old and new instance | Overlap; the new one starts first | Never overlap; the old one stops first | Never overlap |
+| Calls to the device | Held for a moment | Held while it stops and starts | Held while it stops and starts |
+| State | Moves through `snapshot` and `restore` | Moves through `snapshot` and `restore` | Starts fresh |
+| Used for | Every compatible change | Devices that declare `swap: "cold"`, and contract changes | `rack.restart(name)` |
+
+- **Cold swaps.** A device declares `swap: "cold"` when two of its instances must never run at the same time, for example because it holds a file lock or a serial port. Calls that arrive meanwhile wait for the new instance, up to their own timeouts. If the new instance fails to start, the old firmware starts again from its snapshot, and the slot reports `degraded`.
+- **Restarts.** `rack.restart(name)` rebuilds the device from its file and starts it from scratch, without its state. Its direct consumers then reload, keeping their state, so their `powerOn` runs again against the new instance. `{ cascade: false }` leaves the consumers running. If the restarted device fails to start, its old firmware starts again without state.
+- **Contract changes.** A new firmware can change a port that consumers use, for example by moving a connector to `/v2`. When the consumers' new firmware matches the change, as it does when they share the edited connector file, the rack replaces the provider and those consumers together. The group stops top down and starts bottom up, with each device's state carried over. When a consumer's firmware does not match, nothing stops, and the replacement fails with `RACK_SWAP_REJECTED`.
+- **Results.** `reload()` and `restart()` resolve with one result per device, and each result and `swap` event carries a `mode`: `hot`, `cold`, `restart`, `plug`, or `unplug`.
+
+A hot swap hands over everything the rack holds. In-memory state crosses only through `snapshot`, because a Worker's memory cannot move to another Worker.
+
+| Context | How it reaches the new instance |
+|---|---|
+| Calls in flight | They finish on the old instance before it retires |
+| New calls | Held, then sent to the new instance in order |
+| Links to and from other devices | Switched to the new instance in one step |
+| Event subscriptions | Made again by the new instance, usually in `powerOn` |
+| Events sent to it during the hold | Queued, then delivered |
+| HTTP connections | Stay with the panel |
+| Timers and background tasks | Stopped by `deactivate`, started again by `activate` |
+| In-memory state | `snapshot` on the old instance, `restore` on the new one |
+| Open files and sockets | Not handed over: the old instance closes them and the new one opens its own |
+
+### Changed plans and edited manifests
+
+When a scanned rack's plan changes, or `rack dev` sees the manifest change, the running rack moves to the new layout without a restart:
+
+1. Devices that are new are plugged, from the bottom up, and devices that stay move to their new slots without restarting.
+2. Devices whose firmware or configuration changed are replaced.
+3. Needs whose provider changed are rewired. The device keeps running, and only its calls switch to the new provider.
+4. Devices that left are unplugged, from the top down, once nothing uses them.
+5. Panel routes follow the manifest.
+
+- **Failures:** each step leaves a valid rack. A step that fails is reported in the results of `reload()`, and the rest of the rack keeps running.
+- **Under `rack start`:** the plan file decides. A new plan runs only once the file records it, for example after `rack plan --write`.
+- **Restart needed:** renaming the rack, switching between slots and scanned devices, and changing the panel port.
+- **From code:** `reload(manifest)` applies an edited manifest the same way.
+
+### Crashes
 
 When a device crashes (an uncaught exception, an unhandled rejection, or `process.exit`), its calls in flight fail with `RACK_DEVICE_FAULT` and the rack resets it from the same firmware. Calls during the reset fail with `RACK_LINK_DOWN`. In-memory state does not survive a reset, so keep state that matters in a storage device. After more than 3 crashes within 60 seconds, the slot is marked `faulted` until a swap succeeds.
 
@@ -413,8 +461,6 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 ## Not in P0
 
 - Devices run only as `sled` (one Worker each); the `inline` and `chassis` forms are planned.
-- Editing the manifest of a running rack: restart the rack instead.
-- Swapping several devices as one batch, or changing a connector's major version without a restart.
 - A WebSocket panel, streaming HTTP bodies, circuit breakers, rate limiting, watchdogs for hung devices, and a management dashboard.
 - Connecting several racks, and packaging a rack with `bun build --compile`.
 

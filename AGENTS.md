@@ -10,8 +10,10 @@ This file defines the project background, architectural constraints, and working
 - Details that the earlier decisions left open are fixed by [P0 standard connectors, rack handle shapes, and test fixtures](.agents/decisions/261115_222025-p0-api-details.md).
 - Calls and events between devices travel on direct links between Workers, as [Backplane protocol with direct links between devices](.agents/decisions/261116_024226-backplane-links.md) decides; the main thread sets up the links and routes only calls from outside the rack. `rack.metrics()` reads the call and event counters each Worker keeps, as [Call and event metrics](.agents/decisions/261116_035534-call-metrics.md) decides.
 - Calls and results can move `ArrayBuffer`s instead of copying them, and `SharedArrayBuffer`s are shared under rules the README states, as [Transfer and shared buffers for binary data](.agents/decisions/261116_213839-transfer-and-shared-buffers.md) decides.
-- P1 is under way on `feat/p1`. Scanned racks are implemented: a manifest can name directories of device files, and the rack plans shared instances, `own` copies, wiring, and slots, and keeps the plan in a plan file, as [Automatic assembly from scanned device files](.agents/decisions/261116_233919-automatic-assembly.md) decides. Three accepted decisions are not implemented yet:
-  - [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md), including applying a changed plan to a running rack.
+- P1 is under way on `feat/p1`. Two of its accepted decisions are implemented:
+  - [Automatic assembly from scanned device files](.agents/decisions/261116_233919-automatic-assembly.md): a manifest can name directories of device files, and the rack plans shared instances, `own` copies, wiring, and slots, and keeps the plan in a plan file.
+  - [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md): cold swaps, restarts, group replacements for contract changes, and changed plans and edited manifests applied to a running rack.
+- Two accepted P1 decisions are not implemented yet:
   - [Fallback, rollback, and update history](.agents/decisions/261117_005743-fallback-rollback-and-history.md).
   - [Management endpoint and the rack ctl command](.agents/decisions/261117_005821-management-endpoint.md).
 - The minimum Bun version is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.

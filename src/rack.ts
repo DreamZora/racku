@@ -39,7 +39,15 @@ import {
 } from "./manifest.ts";
 import type { DeviceMetrics, RackMetrics } from "./metrics.ts";
 import { openHttpPanel, type Panel } from "./panel.ts";
-import { fitPlan, formatPlan, makePlan, type Plan, type PlanType, parsePlan } from "./plan.ts";
+import {
+  fitPlan,
+  formatPlan,
+  makePlan,
+  type Plan,
+  type PlannedInstance,
+  type PlanType,
+  parsePlan,
+} from "./plan.ts";
 import type { DataFromWorker, Fru, LogNotice, Marker } from "./protocol.ts";
 import { detach, transferList } from "./transfer.ts";
 
@@ -69,6 +77,12 @@ export interface SlotStatus {
 /** What a management operation did to a device. */
 export type SwapAction = "plug" | "unplug" | "swap";
 
+/**
+ * How an instance was replaced: a `hot` swap overlaps the old and the new instance, a `cold`
+ * swap stops the old one first, and a `restart` also starts the new one without the old state.
+ */
+export type ReloadMode = "hot" | "cold" | "restart" | "plug" | "unplug";
+
 /** An event of the rack, delivered to {@link RackHandle.subscribe} listeners. */
 export type RackEvent =
   | { type: "power"; device: string; firmware: string; state: "on" | "off" }
@@ -76,6 +90,7 @@ export type RackEvent =
       type: "swap";
       device: string;
       action: SwapAction;
+      mode: ReloadMode;
       from: string | null;
       to: string | null;
       error?: WireError;
@@ -83,12 +98,19 @@ export type RackEvent =
   | { type: "fault"; device: string; firmware: string; error: WireError; reset: boolean }
   | ({ type: "log" } & LogEntry);
 
-/** One device that {@link RackHandle.reload} tried to swap. */
+/** One device that {@link RackHandle.reload} or {@link RackHandle.restart} tried to replace. */
 export interface ReloadResult {
   device: string;
   from: string | null;
   to: string | null;
+  mode: ReloadMode;
   error?: WireError;
+}
+
+/** Options of {@link RackHandle.restart}. */
+export interface RestartOptions {
+  /** Reload the device's direct consumers after it restarts; default `true`. */
+  cascade?: boolean;
 }
 
 /** Options of {@link start}. */
@@ -128,8 +150,30 @@ export interface RackHandle {
    *   the device is offline or the rack is stopped, or the error the call produced.
    */
   call(address: string, method: string, input: unknown, options?: CallOptions): Promise<unknown>;
-  /** Rebuilds every firmware and swaps only the devices whose hash changed. */
-  reload(): Promise<ReloadResult[]>;
+  /**
+   * Rebuilds every firmware and replaces only the devices whose hash changed: with a hot swap,
+   * with a cold swap for devices that declare `swap: "cold"`, or as a group with the consumers
+   * of a contract that changed. Results come bottom up; a failed device carries `error`.
+   *
+   * A scanned rack also works its plan out again and moves to it: devices are plugged, moved,
+   * rewired, and unplugged as the plan says. With `manifest`, the rack takes over an edited
+   * manifest the same way, as `rack dev` does when the manifest file changes.
+   *
+   * @throws RackError `RACK_SWAP_REJECTED` when the plan file of a rack run by `rack start` no
+   *   longer fits, or when the manifest changes the rack's name, kind, or panel port.
+   */
+  reload(manifest?: RackManifest): Promise<ReloadResult[]>;
+  /**
+   * Stops a device completely and starts it again from scratch, rebuilt from its file and
+   * without its state; then its direct consumers reload to adapt to it, keeping their state.
+   *
+   * @param name The device.
+   * @param options `cascade: false` leaves the consumers running.
+   * @returns One result per device replaced, in order.
+   * @throws RackError `RACK_NO_ROUTE` for an unknown device, or `RACK_SWAP_REJECTED` when the
+   *   device cannot be rebuilt, does not fit, or fails to start; its slot then resets.
+   */
+  restart(name: string, options?: RestartOptions): Promise<ReloadResult[]>;
   /**
    * Replaces a device, optionally with another device file; rolls back on failure.
    *
@@ -199,7 +243,7 @@ interface Layout {
 }
 
 class Rack implements InstanceHost {
-  readonly #manifest: RackManifest;
+  #manifest: RackManifest;
   readonly #baseDir: string;
   readonly #logger: Logger;
   readonly #callTimeout: number;
@@ -249,9 +293,11 @@ class Rack implements InstanceHost {
         this.#phase === "running"
           ? this.#backplane.call(address, method, input, options, "rack")
           : refuse(`${address}.${method}`, options),
-      reload: () => this.#serialize(() => this.#reload()),
+      reload: (manifest?: RackManifest) => this.#serialize(() => this.#reload(manifest)),
       swap: (name: string, source?: string | URL) =>
         this.#serialize(() => this.#swap(name, source)),
+      restart: (name: string, options: RestartOptions = {}) =>
+        this.#serialize(() => this.#restart(name, options.cascade ?? true)),
       plug: (u: number, spec: SlotSpec) => this.#serialize(() => this.#plug(u, spec)),
       unplug: (name: string) => this.#serialize(() => this.#unplug(name)),
       subscribe: (listener: (event: RackEvent) => void) => {
@@ -439,30 +485,28 @@ class Rack implements InstanceHost {
   async #planScanned(
     builds: Map<string, Promise<Firmware>>,
   ): Promise<{ entries: Entry[]; planText: string | undefined }> {
-    const scan = this.#manifest.scan as ScanSpec;
     const models = await this.#scanModels(builds);
     const computed = this.#computePlan(models);
     const { plan, write } = await this.#choosePlan(computed);
     this.#plan = plan;
     this.#patch = patchesOf(plan);
     const entries: Entry[] = plan.instances.map((instance) => {
-      const model = models.get(instance.model) as ModelSource;
-      const own = (key: string) => Object.hasOwn(scan.config, key);
-      const config = own(instance.name)
-        ? scan.config[instance.name]
-        : own(instance.model)
-          ? scan.config[instance.model]
-          : model.config;
-      return {
-        u: instance.u,
-        spec: mountSpec(model.source, { name: instance.name, config }),
-        source: model.source,
-      };
+      const { source } = models.get(instance.model) as ModelSource;
+      const config = this.#configFor(instance, models);
+      return { u: instance.u, spec: mountSpec(source, { name: instance.name, config }), source };
     });
     return {
       entries,
       planText: write ? formatPlan(this.#manifest.name, plan) : undefined,
     };
+  }
+
+  /** The configuration of a planned instance: by its name, then by its model, then the spec's. */
+  #configFor(instance: PlannedInstance, models: ReadonlyMap<string, ModelSource>): unknown {
+    const { config } = this.#manifest.scan as ScanSpec;
+    if (Object.hasOwn(config, instance.name)) return config[instance.name];
+    if (Object.hasOwn(config, instance.model)) return config[instance.model];
+    return models.get(instance.model)?.config;
   }
 
   /** Builds and describes every device file the manifest names, keyed by model name. */
@@ -704,21 +748,31 @@ class Rack implements InstanceHost {
    *
    * @throws RackError `RACK_MANIFEST` when a need cannot be wired.
    */
-  #wire(name: string, u: number, fru: Fru, previous: ReadonlyMap<string, Wire>): Map<string, Wire> {
+  #wire(
+    name: string,
+    u: number,
+    fru: Fru,
+    previous: ReadonlyMap<string, Wire>,
+    frus: ReadonlyMap<string, Fru> = new Map(),
+  ): Map<string, Wire> {
+    // The FRU a provider will have: a group replacement wires against the new ones.
+    const fruOf = (slot: Slot) => frus.get(slot.name) ?? slot.fru;
     const wiring = new Map<string, Wire>();
     for (const [need, info] of Object.entries(fru.needs)) {
       const where = `${name}.${need} (${info.id})`;
-      const kept = previous.get(need);
-      const keptPort = kept && this.#slots.get(kept.provider)?.fru.provides[kept.port];
+      // A patch decides first: when a plan or a manifest changes, its wiring wins.
+      const patch = this.#patch.find(([consumer]) => consumer === `${name}.${need}`);
+      const kept = patch === undefined ? previous.get(need) : undefined;
+      const keptSlot = kept && this.#slots.get(kept.provider);
+      const keptPort = kept && keptSlot && !keptSlot.removed && fruOf(keptSlot).provides[kept.port];
       if (kept !== undefined && keptPort && keptPort.id === info.id && covers(keptPort, info)) {
         wiring.set(need, kept);
         continue;
       }
-      const patch = this.#patch.find(([consumer]) => consumer === `${name}.${need}`);
       if (patch !== undefined) {
         const target = parseAddress(patch[1]);
         const provider = this.#slots.get(target.device);
-        if (provider === undefined) {
+        if (provider === undefined || provider.removed) {
           throw new RackError(
             "RACK_MANIFEST",
             `patch ${where} -> ${patch[1]}: no device ${target.device}`,
@@ -731,7 +785,7 @@ class Rack implements InstanceHost {
             `patch ${where} -> ${patch[1]} breaks the gravity rule: U${provider.u} is not below U${u}`,
           );
         }
-        const port = provider.fru.provides[target.port];
+        const port = fruOf(provider).provides[target.port];
         if (port === undefined || port.id !== info.id) {
           throw new RackError(
             "RACK_MANIFEST",
@@ -746,7 +800,7 @@ class Rack implements InstanceHost {
       let above: string | undefined;
       for (const slot of this.#slots.values()) {
         if (slot.removed || slot.name === name) continue;
-        for (const [port, portInfo] of Object.entries(slot.fru.provides)) {
+        for (const [port, portInfo] of Object.entries(fruOf(slot).provides)) {
           if (portInfo.id !== info.id) continue;
           if (slot.u < u) candidates.push({ slot, port, info: portInfo });
           else above ??= `${slot.name}.${port}`;
@@ -772,24 +826,17 @@ class Rack implements InstanceHost {
    *
    * @throws RackError `RACK_SWAP_REJECTED` otherwise.
    */
-  #checkCompatibility(slot: Slot, fru: Fru): void {
+  #checkCompatibility(slot: Slot, fru: Fru, group: ReadonlySet<string> = new Set()): void {
     for (const consumer of this.#slots.values()) {
-      if (consumer === slot || consumer.removed) continue;
+      if (consumer === slot || consumer.removed || group.has(consumer.name)) continue;
       for (const [need, wire] of consumer.wiring) {
         if (wire.provider !== slot.name) continue;
         const needInfo = consumer.fru.needs[need];
         const port = fru.provides[wire.port];
-        const user = `${consumer.name}.${need}`;
-        if (port === undefined) {
+        if (!fits(port, needInfo)) {
           throw new RackError(
             "RACK_SWAP_REJECTED",
-            `${user} uses ${slot.name}.${wire.port}, which the new firmware does not provide`,
-          );
-        }
-        if (needInfo !== undefined && (port.id !== needInfo.id || !covers(port, needInfo))) {
-          throw new RackError(
-            "RACK_SWAP_REJECTED",
-            `${user} needs ${needInfo.id}; the new ${slot.name}.${wire.port} is ${port.id} with members ${Object.keys(port.members).join(", ")}`,
+            misfit(`${consumer.name}.${need}`, slot.name, wire.port, port, needInfo),
           );
         }
       }
@@ -882,19 +929,26 @@ class Rack implements InstanceHost {
     }
   }
 
-  async #reload(): Promise<ReloadResult[]> {
+  async #reload(manifest?: RackManifest): Promise<ReloadResult[]> {
     this.#requireRunning();
+    if (manifest !== undefined) this.#adopt(manifest);
     const builds = new Map<string, Promise<Firmware>>();
-    if (this.#manifest.scan !== undefined) await this.#replan(builds);
+    let change: Change | undefined;
+    if (this.#manifest.scan !== undefined) {
+      change = await this.#beginChange(await this.#replan(builds), builds);
+    } else if (manifest !== undefined) {
+      change = await this.#beginChange(await this.#targetOf(manifest, builds), builds);
+    }
     const slots = this.#ordered();
     for (const slot of slots) {
       if (!builds.has(slot.source))
         builds.set(slot.source, buildFirmware(slot.source, this.#baseDir));
     }
     await Promise.allSettled(builds.values());
-    const results: ReloadResult[] = [];
+    const results: ReloadResult[] = [...(change?.results ?? [])];
+    const done = new Set<string>();
     for (const slot of slots) {
-      if (slot.removed || this.#phase !== "running") continue;
+      if (slot.removed || this.#phase !== "running" || done.has(slot.name)) continue;
       const from = slot.installed?.firmware.hash ?? null;
       let firmware: Firmware;
       try {
@@ -903,49 +957,280 @@ class Rack implements InstanceHost {
         if (slot.installed !== null && !slot.busy) slot.state = "degraded";
         const failure = new RackError("RACK_SWAP_REJECTED", messageOf(error));
         this.#swapFailed(slot.name, "swap", from, null, failure, slot);
-        results.push({ device: slot.name, from, to: null, error: toWireError(failure) });
+        results.push({
+          device: slot.name,
+          from,
+          to: null,
+          mode: "hot",
+          error: toWireError(failure),
+        });
         continue;
       }
-      if (firmware.hash === slot.firmware.hash) continue;
+      if (firmware.hash === slot.firmware.hash && !change?.forced.has(slot.name)) continue;
+      results.push(...(await this.#replace(slot, firmware, slot.source, builds, done)).results);
+    }
+    if (change !== undefined) results.push(...(await this.#finishChange(change, done, results)));
+    return results;
+  }
+
+  /**
+   * Scans a running scanned rack again and picks the plan it should run now: the computed one,
+   * or under `rack start` the plan file, which must fit the devices.
+   *
+   * @returns The layout to move to.
+   * @throws RackError `RACK_SWAP_REJECTED` when the plan file no longer fits the devices.
+   * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
+   */
+  async #replan(builds: Map<string, Promise<Firmware>>): Promise<Target> {
+    const models = await this.#scanModels(builds);
+    const computed = this.#computePlan(models);
+    let next = computed;
+    if (this.#planMode === true) {
+      // rack start follows the plan file, so a new layout runs once the file records it.
+      // @decision .agents/decisions/261116_233919-automatic-assembly.md#plan-file
+      const path = this.#planPath();
+      const file = Bun.file(path);
+      if (await file.exists()) {
+        const fit = fitPlan(
+          parsePlan(await file.text(), basename(path)),
+          computed,
+          this.#manifest.size,
+        );
+        if (!fit.fits) {
+          throw new RackError(
+            "RACK_SWAP_REJECTED",
+            `${basename(path)} no longer fits the devices: ${fit.differences.join("; ")}; run rack plan --write to apply the new plan`,
+          );
+        }
+        next = fit.plan;
+      }
+    }
+    const devices = new Map<string, TargetDevice>();
+    for (const instance of next.instances) {
+      const { source } = models.get(instance.model) as ModelSource;
+      devices.set(instance.name, {
+        u: instance.u,
+        source,
+        config: this.#configFor(instance, models),
+      });
+    }
+    return { devices, patch: patchesOf(next), plan: next };
+  }
+
+  /**
+   * The layout an edited manifest that places devices by hand asks for.
+   *
+   * @throws RackError `RACK_SWAP_REJECTED` when a device file does not build or two devices
+   *   share a name.
+   */
+  async #targetOf(manifest: RackManifest, builds: Map<string, Promise<Firmware>>): Promise<Target> {
+    const devices = new Map<string, TargetDevice>();
+    for (const { u, spec } of manifest.slots) {
+      const source = resolveSource(spec.source, this.#baseDir);
+      let build = builds.get(source);
+      if (build === undefined) {
+        build = buildFirmware(source, this.#baseDir);
+        builds.set(source, build);
+      }
+      const firmware = await build.catch((error: unknown) => {
+        throw new RackError("RACK_SWAP_REJECTED", messageOf(error));
+      });
+      const name = spec.name ?? (await this.#describeForSwap(firmware)).model;
+      if (devices.has(name)) {
+        throw new RackError(
+          "RACK_SWAP_REJECTED",
+          `two devices are named ${name}; set name in slot()`,
+        );
+      }
+      devices.set(name, { u, source, config: spec.config });
+    }
+    return { devices, patch: manifest.patch, plan: undefined };
+  }
+
+  /**
+   * Starts moving the running rack to a target layout:
+   * - marks the devices that leave, which keep serving until nothing uses them;
+   * - moves the devices that stay to their new slots, which restarts nothing;
+   * - adopts the new wiring, and records changed sources and configurations;
+   * - plugs the devices that arrive, from the bottom up.
+   *
+   * Replacements follow in the caller, and rewiring and unplugging in {@link #finishChange}.
+   * Each step leaves a valid rack.
+   *
+   * @throws RackError `RACK_SWAP_REJECTED` when the devices that stay do not fit their new slots;
+   *   nothing changes then.
+   * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
+   */
+  async #beginChange(target: Target, builds: Map<string, Promise<Firmware>>): Promise<Change> {
+    const current = [...this.#slots.values()].filter((slot) => !slot.removed);
+    const staying = current.filter((slot) => target.devices.has(slot.name));
+    const leaving = current.filter((slot) => !target.devices.has(slot.name));
+    const wanted = (slot: Slot) => target.devices.get(slot.name) as TargetDevice;
+    try {
+      this.#checkLayout(
+        staying.map((slot) => ({ name: slot.name, u: wanted(slot).u, height: slot.height })),
+      );
+    } catch (error) {
+      throw new RackError("RACK_SWAP_REJECTED", asRackError(error).message);
+    }
+    for (const slot of leaving) slot.removed = true;
+    this.#patch = target.patch;
+    const forced = new Set<string>();
+    for (const slot of staying) {
+      const next = wanted(slot);
+      slot.u = next.u;
+      slot.source = next.source;
+      if (!Bun.deepEquals(next.config, slot.config, true)) {
+        slot.config = next.config;
+        forced.add(slot.name);
+      }
+    }
+    const results: ReloadResult[] = [];
+    const arriving = [...target.devices].filter(([name]) => !this.#slots.has(name));
+    arriving.sort(([, a], [, b]) => a.u - b.u);
+    for (const [name, next] of arriving) {
+      let firmware: Firmware | undefined;
       try {
-        await this.#swapSlot(slot, firmware, slot.source);
-        results.push({ device: slot.name, from, to: firmware.hash });
+        let build = builds.get(next.source);
+        if (build === undefined) {
+          build = buildFirmware(next.source, this.#baseDir);
+          builds.set(next.source, build);
+        }
+        firmware = await build;
+        await this.#plugSlot(
+          next.u,
+          mountSpec(next.source, { name, config: next.config }),
+          firmware,
+          name,
+        );
+        results.push({ device: name, from: null, to: firmware.hash, mode: "plug" });
       } catch (error) {
-        results.push({ device: slot.name, from, to: firmware.hash, error: toWireError(error) });
+        const failure = toWireError(asRackError(error));
+        results.push({
+          device: name,
+          from: null,
+          to: firmware?.hash ?? null,
+          mode: "plug",
+          error: failure,
+        });
+      }
+    }
+    return { target, forced, leaving, results };
+  }
+
+  /**
+   * Finishes moving the running rack to a target layout, after the replacements: rewires the
+   * devices that stayed and were not replaced, unplugs the devices that left once nothing uses
+   * them, from the top down, and records the plan of a scanned rack.
+   *
+   * @param replaced Devices the replacements already rewired.
+   * @param earlier Results so far, to tell whether every step succeeded.
+   */
+  async #finishChange(
+    change: Change,
+    replaced: ReadonlySet<string>,
+    earlier: readonly ReloadResult[],
+  ): Promise<ReloadResult[]> {
+    const results: ReloadResult[] = [];
+    for (const slot of this.#ordered()) {
+      const instance = slot.installed;
+      if (slot.removed || replaced.has(slot.name) || instance === null) continue;
+      const hash = instance.firmware.hash;
+      let wiring: Map<string, Wire>;
+      try {
+        wiring = this.#wire(slot.name, slot.u, slot.fru, slot.wiring);
+        const shared = this.#ownershipProblem({ name: slot.name, fru: slot.fru, wiring });
+        if (shared !== undefined) throw new RackError("RACK_SWAP_REJECTED", shared);
+      } catch (error) {
+        const failure = toWireError(asRackError(error));
+        results.push({ device: slot.name, from: hash, to: hash, mode: "hot", error: failure });
+        continue;
+      }
+      const changed = [...wiring].filter(([need, wire]) => {
+        const before = slot.wiring.get(need);
+        return before?.provider !== wire.provider || before?.port !== wire.port;
+      });
+      if (changed.length === 0) continue;
+      slot.wiring = wiring;
+      instance.wiring = wiring;
+      for (const [need, wire] of changed) await this.#backplane.relink(instance, need, wire);
+      this.#log("info", `${slot.name} rewired`, {
+        needs: changed.map(([need, wire]) => `${need} -> ${wire.provider}.${wire.port}`),
+      });
+    }
+    for (const slot of [...change.leaving].sort((a, b) => b.u - a.u)) {
+      const from = slot.installed?.firmware.hash ?? null;
+      const users = this.#usersOf(slot.name);
+      if (users.length > 0) {
+        slot.removed = false;
+        const message = `${slot.name} is still used by ${users.join(", ")}`;
+        const failure = toWireError(new RackError("RACK_SWAP_REJECTED", message));
+        results.push({ device: slot.name, from, to: from, mode: "unplug", error: failure });
+        continue;
+      }
+      await this.#unplugSlot(slot, from);
+      results.push({ device: slot.name, from, to: null, mode: "unplug" });
+    }
+    const routes = this.#manifest.panel.http?.routes;
+    if (this.#panel !== undefined && routes !== undefined) this.#panel.setRoutes(routes);
+    const plan = change.target.plan;
+    if (plan !== undefined) {
+      const complete = [...earlier, ...results].every((result) => result.error === undefined);
+      if (complete) {
+        this.#plan = plan;
+        if (this.#planMode === "update") {
+          await Bun.write(this.#planPath(), formatPlan(this.#manifest.name, plan));
+        }
+      } else {
+        this.#plan = this.#runningPlan(plan);
+        this.#log("warn", "the new plan was applied in part; the plan file is unchanged");
       }
     }
     return results;
   }
 
-  /**
-   * Scans a running scanned rack again and compares the new plan with the running one. Within
-   * the same instances and wiring, a changed order moves slot numbers when the plan file allows
-   * it; no instance restarts for that.
-   *
-   * @throws RackError `RACK_SWAP_REJECTED` when the instances or the wiring changed.
-   */
-  async #replan(builds: Map<string, Promise<Firmware>>): Promise<void> {
-    const computed = this.#computePlan(await this.#scanModels(builds));
-    const running = this.#plan as Plan;
-    const fit = fitPlan(running.instances, computed, this.#manifest.size);
-    if (!fit.fits) {
-      throw new RackError(
-        "RACK_SWAP_REJECTED",
-        `the plan changed: ${fit.differences.join("; ")}; restart the rack to apply it`,
+  /** The plan a scanned rack actually runs, read from its slots. */
+  #runningPlan(target: Plan): Plan {
+    const models = new Map<string, string>();
+    for (const instance of [...(this.#plan?.instances ?? []), ...target.instances]) {
+      models.set(instance.name, instance.model);
+    }
+    const owners = this.#owners();
+    const instances = this.#ordered()
+      .filter((slot) => !slot.removed)
+      .map(
+        (slot): PlannedInstance => ({
+          name: slot.name,
+          model: models.get(slot.name) ?? slot.model,
+          owner: owners.get(slot.name),
+          u: slot.u,
+          height: slot.height,
+          wiring: Object.fromEntries(slot.wiring),
+        }),
       );
+    return { instances, unused: target.unused };
+  }
+
+  /**
+   * Takes over an edited manifest. The rack keeps its name, its kind, and its panel port, which
+   * need a restart to change; its size, devices, wiring, and panel routes follow the new
+   * manifest.
+   *
+   * @throws RackError `RACK_SWAP_REJECTED` for a change that needs a restart.
+   */
+  #adopt(manifest: RackManifest): void {
+    if (!isRackManifest(manifest)) {
+      throw new RackError("RACK_SWAP_REJECTED", "reload() takes a manifest created by rack()");
     }
-    if (fit.sameOrder || this.#planMode === true) return;
-    for (const instance of computed.instances) {
-      const slot = this.#slots.get(instance.name);
-      if (slot !== undefined) slot.u = instance.u;
+    const old = this.#manifest;
+    const restart = (what: string) =>
+      new RackError("RACK_SWAP_REJECTED", `restart the rack to ${what}`);
+    if (manifest.name !== old.name) throw restart("rename it");
+    if ((manifest.scan === undefined) !== (old.scan === undefined)) {
+      throw restart("switch between slots and scanned devices");
     }
-    this.#plan = computed;
-    if (this.#planMode === "update") {
-      await Bun.write(this.#planPath(), formatPlan(this.#manifest.name, computed));
-    }
-    this.#log("info", "the plan's order changed; instances moved to new slots", {
-      slots: computed.instances.map((instance) => `U${instance.u} ${instance.name}`),
-    });
+    if (manifest.panel.http?.port !== old.panel.http?.port) throw restart("change its panel");
+    this.#manifest = manifest;
   }
 
   async #swap(name: string, source: string | URL | undefined): Promise<void> {
@@ -972,7 +1257,489 @@ class Rack implements InstanceHost {
       const failure = new RackError("RACK_SWAP_REJECTED", messageOf(error));
       throw this.#swapFailed(name, "swap", from, null, failure, slot);
     }
-    await this.#swapSlot(slot, firmware, path);
+    const builds = new Map([[path, Promise.resolve(firmware)]]);
+    const { error } = await this.#replace(slot, firmware, path, builds);
+    if (error !== undefined) throw error;
+  }
+
+  /**
+   * Replaces a device with new firmware, choosing the kind of replacement: a group with the
+   * consumers of a contract that the new firmware changes, a cold swap when the old or the new
+   * firmware declares `swap: "cold"`, and a hot swap otherwise.
+   *
+   * @param builds Firmware built for this replacement, by source; consumers of a changed
+   *   contract take their new firmware from it, or are built into it.
+   * @param done Collects the names of the devices replaced, so that a caller can skip them.
+   * @returns One result per device replaced or tried, and the error when the replacement failed.
+   * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#choosing-the-kind-in-reload
+   */
+  async #replace(
+    slot: Slot,
+    firmware: Firmware,
+    source: string,
+    builds: Map<string, Promise<Firmware>>,
+    done: Set<string> = new Set(),
+  ): Promise<{ results: ReloadResult[]; error?: RackError }> {
+    const from = slot.installed?.firmware.hash ?? null;
+    let members: Member[];
+    let cold: boolean;
+    try {
+      const fru = await this.#describeForSwap(firmware);
+      members = await this.#groupFor(slot, firmware, source, fru, builds);
+      cold = members.length > 1 || slot.fru.swap === "cold" || fru.swap === "cold";
+    } catch (error) {
+      if (slot.installed !== null && !slot.busy) slot.state = "degraded";
+      const failure = this.#swapFailed(
+        slot.name,
+        "swap",
+        from,
+        firmware.hash,
+        asRackError(error),
+        slot,
+      );
+      done.add(slot.name);
+      return {
+        results: [
+          { device: slot.name, from, to: firmware.hash, mode: "hot", error: toWireError(failure) },
+        ],
+        error: failure,
+      };
+    }
+    for (const member of members) done.add(member.slot.name);
+    if (!cold) {
+      try {
+        await this.#swapSlot(slot, firmware, source);
+        return { results: [{ device: slot.name, from, to: firmware.hash, mode: "hot" }] };
+      } catch (error) {
+        const failure = asRackError(error);
+        return {
+          results: [
+            {
+              device: slot.name,
+              from,
+              to: firmware.hash,
+              mode: "hot",
+              error: toWireError(failure),
+            },
+          ],
+          error: failure,
+        };
+      }
+    }
+    return this.#replaceAll(members, new Set());
+  }
+
+  /** Runs {@link #replaceCold} and reports one result per member. */
+  async #replaceAll(
+    members: Member[],
+    fresh: ReadonlySet<string>,
+  ): Promise<{ results: ReloadResult[]; error?: RackError }> {
+    const ordered = [...members].sort((a, b) => a.slot.u - b.slot.u);
+    const results = ordered.map(
+      (member): ReloadResult => ({
+        device: member.slot.name,
+        from: member.slot.installed?.firmware.hash ?? null,
+        to: member.firmware.hash,
+        mode: fresh.has(member.slot.name) ? "restart" : "cold",
+      }),
+    );
+    try {
+      await this.#replaceCold(ordered, fresh);
+      return { results };
+    } catch (error) {
+      const failure = asRackError(error);
+      const wire = toWireError(failure);
+      return { results: results.map((result) => ({ ...result, error: wire })), error: failure };
+    }
+  }
+
+  /** Reads what a firmware declares, with the error code of a swap. */
+  async #describeForSwap(firmware: Firmware): Promise<Fru> {
+    try {
+      return await this.#describe(firmware);
+    } catch (error) {
+      throw new RackError("RACK_SWAP_REJECTED", asRackError(error).message);
+    }
+  }
+
+  /**
+   * Collects the devices a replacement must take along: every consumer whose wired needs the
+   * new firmware no longer fits, with that consumer's own new firmware, and so on upward.
+   *
+   * @returns The device itself first, then the consumers it takes along.
+   * @throws RackError `RACK_SWAP_REJECTED` when such a consumer has no new firmware.
+   * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#contract-changes
+   */
+  async #groupFor(
+    slot: Slot,
+    firmware: Firmware,
+    source: string,
+    fru: Fru,
+    builds: Map<string, Promise<Firmware>>,
+  ): Promise<Member[]> {
+    const members: Member[] = [{ slot, firmware, source }];
+    const frus = new Map<string, Fru>([[slot.name, fru]]);
+    for (let index = 0; index < members.length; index++) {
+      const provider = (members[index] as Member).slot;
+      const provides = (frus.get(provider.name) as Fru).provides;
+      for (const consumer of this.#ordered()) {
+        if (consumer.removed || frus.has(consumer.name)) continue;
+        const broken = [...consumer.wiring].find(
+          ([need, wire]) =>
+            wire.provider === provider.name && !fits(provides[wire.port], consumer.fru.needs[need]),
+        );
+        if (broken === undefined) continue;
+        const [need, wire] = broken;
+        const why = misfit(
+          `${consumer.name}.${need}`,
+          provider.name,
+          wire.port,
+          provides[wire.port],
+          consumer.fru.needs[need],
+        );
+        let build = builds.get(consumer.source);
+        if (build === undefined) {
+          build = buildFirmware(consumer.source, this.#baseDir);
+          builds.set(consumer.source, build);
+        }
+        let next: Firmware;
+        try {
+          next = await build;
+        } catch (error) {
+          throw new RackError(
+            "RACK_SWAP_REJECTED",
+            `${why}; ${consumer.name} does not build: ${messageOf(error)}`,
+          );
+        }
+        if (next.hash === consumer.firmware.hash) {
+          throw new RackError(
+            "RACK_SWAP_REJECTED",
+            `${why}; ${consumer.name} has no new firmware to replace with it`,
+          );
+        }
+        members.push({ slot: consumer, firmware: next, source: consumer.source });
+        frus.set(consumer.name, await this.#describeForSwap(next));
+      }
+    }
+    return members;
+  }
+
+  /**
+   * Replaces a group of devices without letting an old and a new instance overlap:
+   * 1. Boots every new instance in standby and checks how it fits. A failure changes nothing.
+   * 2. Stops the old instances from the top down, each held and drained right before it stops,
+   *    so a device that is still finishing calls can reach the devices below it.
+   * 3. Starts the new instances from the bottom up, each restoring its predecessor's snapshot
+   *    unless it is in `fresh`, and installs each one.
+   *
+   * When a start fails, the whole group starts again from its old firmware and snapshots, and
+   * a device whose old firmware fails too is marked faulted.
+   *
+   * @throws RackError the first failure, after every member has been reported.
+   * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#cold-swaps
+   * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#restarts
+   */
+  async #replaceCold(members: Member[], fresh: ReadonlySet<string>): Promise<void> {
+    const ordered = [...members].sort((a, b) => a.slot.u - b.slot.u);
+    const modeOf = (member: Member): ReloadMode =>
+      fresh.has(member.slot.name) ? "restart" : "cold";
+    const fromOf = new Map(ordered.map((m) => [m.slot, m.slot.installed?.firmware.hash ?? null]));
+    const report = (failure: RackError): RackError => {
+      for (const m of ordered) {
+        const from = fromOf.get(m.slot) ?? null;
+        this.#swapFailed(m.slot.name, "swap", from, m.firmware.hash, failure, m.slot, modeOf(m));
+      }
+      return failure;
+    };
+    const busy = ordered.find((m) => m.slot.busy);
+    if (busy !== undefined) {
+      throw report(
+        new RackError("RACK_SWAP_REJECTED", `${busy.slot.name} is resetting; try again later`),
+      );
+    }
+    const before = new Map(ordered.map((m) => [m.slot, snapshotOf(m.slot)]));
+    for (const m of ordered) {
+      m.slot.busy = true;
+      m.slot.state = "swapping";
+    }
+    const neos = new Map<Slot, Instance>();
+    try {
+      for (const m of ordered) {
+        neos.set(
+          m.slot,
+          await this.#boot(m.firmware, m.slot.name, m.slot.u, m.slot.config, "RACK_SWAP_REJECTED"),
+        );
+      }
+      const frus = new Map(
+        ordered.map((m) => [m.slot.name, (neos.get(m.slot) as Instance).fru as Fru]),
+      );
+      const group = new Set(frus.keys());
+      for (const m of ordered) {
+        const neo = neos.get(m.slot) as Instance;
+        const fru = frus.get(m.slot.name) as Fru;
+        if (fru.height !== m.slot.height) {
+          this.#checkLayout(
+            this.#layout().map((item) =>
+              item.name === m.slot.name ? { ...item, height: fru.height } : item,
+            ),
+          );
+        }
+        neo.wiring = this.#wire(m.slot.name, m.slot.u, fru, m.slot.wiring, frus);
+        const shared = this.#ownershipProblem({ name: m.slot.name, fru, wiring: neo.wiring });
+        if (shared !== undefined) throw new RackError("RACK_SWAP_REJECTED", shared);
+        this.#checkCompatibility(m.slot, fru, group);
+      }
+    } catch (error) {
+      for (const neo of neos.values()) neo.terminate();
+      for (const m of ordered) {
+        m.slot.busy = false;
+        const old = m.slot.installed;
+        if (old === null) m.slot.state = "faulted";
+        else if (old.dead) this.#recover(m.slot);
+        else m.slot.state = "degraded";
+      }
+      throw report(asRackError(error));
+    }
+    // Requests are break-before-make here: the old instances stop before the new ones start.
+    // @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#three-ways-to-replace-an-instance
+    const states = new Map<Slot, { state: unknown; from: string }>();
+    for (const m of [...ordered].reverse()) {
+      const restores = ((neos.get(m.slot) as Instance).fru as Fru).restore;
+      const saved = await this.#stopForReplacement(m.slot, restores && !fresh.has(m.slot.name));
+      if (saved !== undefined) states.set(m.slot, saved);
+    }
+    const started: Member[] = [];
+    let failure: RackError | undefined;
+    for (const m of ordered) {
+      const neo = neos.get(m.slot) as Instance;
+      try {
+        await this.#startReplacement(m.slot, neo, states.get(m.slot));
+        await this.#installReplacement(m.slot, neo, m.firmware, m.source);
+        started.push(m);
+      } catch (error) {
+        failure = asRackError(error);
+        break;
+      }
+    }
+    if (failure !== undefined) {
+      await this.#rollBackCold(ordered, neos, before, states, started);
+      for (const m of ordered) m.slot.busy = false;
+      throw report(failure);
+    }
+    for (const m of ordered) {
+      m.slot.busy = false;
+      const from = fromOf.get(m.slot) ?? null;
+      const mode = modeOf(m);
+      this.#emit({
+        type: "swap",
+        device: m.slot.name,
+        action: "swap",
+        mode,
+        from,
+        to: m.firmware.hash,
+      });
+      this.#log("info", `${m.slot.name} ${mode === "restart" ? "restarted" : "swapped cold"}`, {
+        from,
+        to: m.firmware.hash,
+      });
+      // A crash while the slot was busy was counted but not reset; the reset starts now.
+      // @decision .agents/decisions/261115_222025-p0-api-details.md#resets
+      if ((neos.get(m.slot) as Instance).dead && m.slot.installed === null) this.#recover(m.slot);
+    }
+  }
+
+  /**
+   * Stops the installed instance of a slot for a cold replacement: holds the slot, lets the
+   * instance finish its calls, takes its snapshot when asked, powers it off, and terminates it.
+   * The slot stays held, without an instance, until the next one is installed.
+   *
+   * @returns The snapshot and the firmware it came from, when one was taken.
+   */
+  async #stopForReplacement(
+    slot: Slot,
+    takeSnapshot: boolean,
+  ): Promise<{ state: unknown; from: string } | undefined> {
+    const old = slot.installed;
+    const markers = await this.#backplane.hold(slot);
+    if (old === null) return undefined;
+    let saved: { state: unknown; from: string } | undefined;
+    const alive = !old.dead;
+    if (alive) {
+      if (old.active) await this.#bestEffort(old, "deactivate");
+      old.active = false;
+      if (!(await this.#backplane.drain(old, markers, this.#drainTimeout))) {
+        this.#backplane.fail(
+          old,
+          "RACK_LINK_DOWN",
+          `${slot.name} was powered off before the call finished`,
+        );
+      }
+      if (takeSnapshot && old.fru?.snapshot && !old.dead) {
+        try {
+          saved = { state: await old.hook("snapshot", this.#hookTimeout), from: old.firmware.hash };
+        } catch (error) {
+          this.#log("error", `${slot.name}: snapshot failed; the new instance starts without it`, {
+            error: toWireError(error),
+          });
+        }
+      }
+      if (old.poweredOn && !old.dead) await this.#bestEffort(old, "powerOff");
+    }
+    slot.installed = null;
+    old.terminate();
+    if (alive) this.#poweredOff(old);
+    return saved;
+  }
+
+  /** Powers a standby instance on, restoring `saved` when given; throws when any step fails. */
+  async #startReplacement(
+    slot: Slot,
+    instance: Instance,
+    saved: { state: unknown; from: string } | undefined,
+  ): Promise<void> {
+    await this.#backplane.connect(instance);
+    await instance.hook("powerOn", this.#hookTimeout);
+    instance.poweredOn = true;
+    await instance.hook("selfTest", this.#hookTimeout);
+    if (saved !== undefined) await instance.hook("restore", this.#hookTimeout, saved);
+    await instance.hook("activate", this.#hookTimeout);
+    instance.active = true;
+    if (instance.dead) {
+      throw new RackError(
+        "RACK_SWAP_REJECTED",
+        `${slot.name}: the new instance exited while it started`,
+      );
+    }
+  }
+
+  /** Installs a started instance in its slot, which switches the held calls to it. */
+  async #installReplacement(
+    slot: Slot,
+    instance: Instance,
+    firmware: Firmware,
+    source: string,
+  ): Promise<void> {
+    slot.installed = instance;
+    slot.firmware = firmware;
+    slot.fru = instance.fru as Fru;
+    slot.model = slot.fru.model;
+    slot.height = slot.fru.height;
+    slot.wiring = instance.wiring;
+    slot.source = source;
+    slot.state = "online";
+    slot.error = undefined;
+    slot.crashes = [];
+    await this.#backplane.install(slot, instance, null);
+    if (!instance.dead) this.#powered(instance);
+  }
+
+  /**
+   * Brings a group back to its old firmware after a cold replacement failed to start: stops the
+   * new instances already installed, from the top down, then starts the old firmware from the
+   * bottom up with the snapshots taken before. A device whose old firmware fails too is marked
+   * faulted, and the calls held for it fail.
+   */
+  async #rollBackCold(
+    ordered: Member[],
+    neos: ReadonlyMap<Slot, Instance>,
+    before: ReadonlyMap<Slot, SlotRecord>,
+    states: ReadonlyMap<Slot, { state: unknown; from: string }>,
+    started: Member[],
+  ): Promise<void> {
+    for (const m of [...started].reverse()) await this.#stopForReplacement(m.slot, false);
+    // A new instance that powered on may hold what the old firmware needs, such as a lock, so
+    // it powers off before the old firmware starts again.
+    for (const neo of neos.values()) {
+      if (!neo.dead && neo.active) await this.#bestEffort(neo, "deactivate");
+      if (!neo.dead && neo.poweredOn) await this.#bestEffort(neo, "powerOff");
+      neo.terminate();
+    }
+    for (const m of ordered) {
+      const was = before.get(m.slot) as SlotRecord;
+      Object.assign(m.slot, was.fields);
+      if (!was.running) {
+        m.slot.state = "faulted";
+        await this.#backplane.release(m.slot);
+        continue;
+      }
+      try {
+        const instance = await this.#boot(
+          was.fields.firmware,
+          m.slot.name,
+          m.slot.u,
+          m.slot.config,
+          "RACK_SWAP_REJECTED",
+        );
+        instance.wiring = was.fields.wiring;
+        await this.#startReplacement(m.slot, instance, states.get(m.slot));
+        await this.#installReplacement(m.slot, instance, was.fields.firmware, was.fields.source);
+        m.slot.state = "degraded";
+      } catch (error) {
+        this.#log("error", `${m.slot.name}: the old firmware did not start again`, {
+          error: toWireError(error),
+        });
+        m.slot.installed = null;
+        m.slot.state = "faulted";
+        await this.#backplane.release(m.slot);
+      }
+    }
+  }
+
+  /**
+   * Stops a device completely and starts it again from scratch, rebuilt from its file and
+   * without its state, as a cold replacement; then reloads its direct consumers so they run
+   * their `powerOn` again against it.
+   *
+   * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#restarts
+   */
+  async #restart(name: string, cascade: boolean): Promise<ReloadResult[]> {
+    this.#requireRunning();
+    const slot = this.#slots.get(name);
+    if (slot === undefined || slot.removed) {
+      throw new RackError("RACK_NO_ROUTE", `no device named ${name}`);
+    }
+    const from = slot.installed?.firmware.hash ?? null;
+    const builds = new Map<string, Promise<Firmware>>();
+    let members: Member[];
+    try {
+      const build = buildFirmware(slot.source, this.#baseDir);
+      builds.set(slot.source, build);
+      const firmware = await build.catch((error: unknown) => {
+        throw new RackError("RACK_SWAP_REJECTED", messageOf(error));
+      });
+      const fru = await this.#describeForSwap(firmware);
+      members = await this.#groupFor(slot, firmware, slot.source, fru, builds);
+    } catch (error) {
+      throw this.#swapFailed(name, "swap", from, null, asRackError(error), slot, "restart");
+    }
+    const { results, error } = await this.#replaceAll(members, new Set([name]));
+    if (error !== undefined) throw error;
+    if (!cascade) return results;
+    const replaced = new Set(members.map((member) => member.slot.name));
+    for (const consumer of this.#ordered()) {
+      if (consumer.removed || replaced.has(consumer.name)) continue;
+      if (![...consumer.wiring.values()].some((wire) => wire.provider === name)) continue;
+      const current = consumer.firmware;
+      if (consumer.fru.swap === "cold") {
+        const member = { slot: consumer, firmware: current, source: consumer.source };
+        results.push(...(await this.#replaceAll([member], new Set())).results);
+        continue;
+      }
+      const hash = consumer.installed?.firmware.hash ?? null;
+      try {
+        await this.#swapSlot(consumer, current, consumer.source);
+        results.push({ device: consumer.name, from: hash, to: current.hash, mode: "hot" });
+      } catch (failure) {
+        results.push({
+          device: consumer.name,
+          from: hash,
+          to: current.hash,
+          mode: "hot",
+          error: toWireError(failure),
+        });
+      }
+    }
+    return results;
   }
 
   /**
@@ -1086,7 +1853,14 @@ class Rack implements InstanceHost {
     if (!neo.dead) this.#powered(neo);
     if (old !== null) await this.#retire(old, markers);
     slot.busy = false;
-    this.#emit({ type: "swap", device: slot.name, action: "swap", from, to: firmware.hash });
+    this.#emit({
+      type: "swap",
+      device: slot.name,
+      action: "swap",
+      mode: "hot",
+      from,
+      to: firmware.hash,
+    });
     this.#log("info", `${slot.name} swapped`, { from, to: firmware.hash });
     // A crash while the slot was busy was counted but not reset; the reset starts now.
     // @decision .agents/decisions/261115_222025-p0-api-details.md#resets
@@ -1121,6 +1895,11 @@ class Rack implements InstanceHost {
       const failure = new RackError("RACK_SWAP_REJECTED", messageOf(error));
       throw this.#swapFailed(label, "plug", null, null, failure);
     }
+    await this.#plugSlot(u, spec, firmware, label);
+  }
+
+  /** Boots, wires, powers on, and installs a new device at slot `u`. */
+  async #plugSlot(u: number, spec: SlotSpec, firmware: Firmware, label: string): Promise<void> {
     let instance: Instance | undefined;
     try {
       instance = await this.#boot(firmware, spec.name, u, spec.config, "RACK_SWAP_REJECTED");
@@ -1147,7 +1926,14 @@ class Rack implements InstanceHost {
     this.#slots.set(slot.name, slot);
     await this.#backplane.install(slot, instance, null);
     if (!instance.dead) this.#powered(instance);
-    this.#emit({ type: "swap", device: slot.name, action: "plug", from: null, to: firmware.hash });
+    this.#emit({
+      type: "swap",
+      device: slot.name,
+      action: "plug",
+      mode: "plug",
+      from: null,
+      to: firmware.hash,
+    });
     this.#log("info", `${slot.name} plugged in at U${u}`, { firmware: firmware.hash });
   }
 
@@ -1176,13 +1962,19 @@ class Rack implements InstanceHost {
       );
       throw this.#swapFailed(name, "unplug", from, null, inUse);
     }
+    await this.#unplugSlot(slot, from);
+  }
+
+  /** Retires a device that nothing uses any more and removes its slot. */
+  async #unplugSlot(slot: Slot, from: string | null): Promise<void> {
+    const { name } = slot;
     slot.removed = true;
     slot.busy = true;
     const instance = slot.installed;
     slot.installed = null;
     if (instance !== null) await this.#retire(instance);
     this.#slots.delete(name);
-    this.#emit({ type: "swap", device: name, action: "unplug", from, to: null });
+    this.#emit({ type: "swap", device: name, action: "unplug", mode: "unplug", from, to: null });
     this.#log("info", `${name} unplugged`);
   }
 
@@ -1246,7 +2038,11 @@ class Rack implements InstanceHost {
       if (instance.poweredOn && !instance.dead) await this.#bestEffort(instance, "powerOff");
     }
     instance.terminate();
-    if (!wasAlive) return;
+    if (wasAlive) this.#poweredOff(instance);
+  }
+
+  /** Announces that an instance has powered off. */
+  #poweredOff(instance: Instance): void {
     this.#emit({
       type: "power",
       device: instance.slot,
@@ -1402,10 +2198,11 @@ class Rack implements InstanceHost {
     to: string | null,
     error: RackError,
     slot?: Slot,
+    mode: ReloadMode = action === "swap" ? "hot" : action,
   ): RackError {
     const wire = toWireError(error);
     if (slot !== undefined) slot.error = wire;
-    this.#emit({ type: "swap", device, action, from, to, error: wire });
+    this.#emit({ type: "swap", device, action, mode, from, to, error: wire });
     this.#log("error", `${action} of ${device} failed: ${wire.message}`, { code: wire.code });
     return error;
   }
@@ -1448,6 +2245,76 @@ interface Booted {
   config: unknown;
   firmware: Firmware;
   instance: Instance;
+}
+
+/** One device of a replacement, with the firmware it gets. */
+interface Member {
+  slot: Slot;
+  firmware: Firmware;
+  /** Absolute path of the device file the firmware was built from. */
+  source: string;
+}
+
+/** What a slot had before a cold replacement, to restore it when the replacement fails. */
+interface SlotRecord {
+  /** It had an instance, alive or not, to start again. */
+  running: boolean;
+  fields: Pick<Slot, "firmware" | "fru" | "model" | "height" | "wiring" | "source">;
+}
+
+function snapshotOf(slot: Slot): SlotRecord {
+  const { firmware, fru, model, height, wiring, source } = slot;
+  return {
+    running: slot.installed !== null,
+    fields: { firmware, fru, model, height, wiring, source },
+  };
+}
+
+/** Describes why a provided port no longer serves a need. */
+function misfit(
+  user: string,
+  provider: string,
+  portName: string,
+  port: ConnectorInfo | undefined,
+  need: ConnectorInfo | undefined,
+): string {
+  if (port === undefined) {
+    return `${user} uses ${provider}.${portName}, which the new firmware does not provide`;
+  }
+  return `${user} needs ${need?.id}; the new ${provider}.${portName} is ${port.id} with members ${Object.keys(port.members).join(", ")}`;
+}
+
+/** Whether a provided port still serves a need: the same connector, with every member it uses. */
+function fits(port: ConnectorInfo | undefined, need: ConnectorInfo | undefined): boolean {
+  if (need === undefined) return true;
+  return port !== undefined && port.id === need.id && covers(port, need);
+}
+
+/** Where a device of a target layout sits, and what it is made from. */
+interface TargetDevice {
+  u: number;
+  /** Absolute path of the device file. */
+  source: string;
+  config: unknown;
+}
+
+/** A layout to move a running rack to. */
+interface Target {
+  devices: ReadonlyMap<string, TargetDevice>;
+  patch: ReadonlyArray<readonly [string, string]>;
+  /** The plan of a scanned rack that the layout comes from. */
+  plan: Plan | undefined;
+}
+
+/** A change of layout in progress. */
+interface Change {
+  target: Target;
+  /** Devices whose configuration changed, replaced even when their firmware did not. */
+  forced: Set<string>;
+  /** Devices that leave, unplugged once nothing uses them. */
+  leaving: Slot[];
+  /** Results of the plugs so far. */
+  results: ReloadResult[];
 }
 
 /** A device to boot into a slot. */

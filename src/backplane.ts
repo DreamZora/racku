@@ -274,6 +274,20 @@ export class Backplane {
     }
   }
 
+  /**
+   * Points one need of a running instance at another provider: its new calls and its
+   * subscriptions go to the instance installed there, while calls already sent finish where
+   * they went.
+   *
+   * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
+   */
+  async relink(consumer: Instance, need: string, wire: Wire): Promise<void> {
+    const slot = this.#slots.get(wire.provider);
+    const provider = slot?.installed;
+    if (slot === undefined || slot.removed || provider == null || provider.dead) return;
+    await this.#link(consumer, need, provider, wire.port);
+  }
+
   #currentLink(consumer: Instance, need: string): Link | undefined {
     for (const link of this.#links.values()) {
       if (link.consumer === consumer && link.need === need && link.current) return link;

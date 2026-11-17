@@ -150,6 +150,41 @@ Status: accepted
   - A README section on the kinds of reload and how the rack chooses among them.
 - [Fallback, rollback, and update history](261117_005743-fallback-rollback-and-history.md) guards every kind of replacement against defective firmware.
 
+## Implementation
+
+- **Device API and results.**
+  - `swap` is in `DeviceSpec`, and FRU data carries it as `Fru.swap`.
+  - `restart` is on the rack handle, and `ReloadMode` gives the `mode` of `ReloadResult` and of the `swap` event, in `src/rack.ts`.
+- **Choosing the kind** (`src/rack.ts`).
+  - `#replace` picks it, for `reload()` and for `swap()`.
+  - `#groupFor` collects the consumers a contract change takes along.
+  - A device is swapped cold when either its old or its new firmware declares `swap: "cold"`, because either one rules out an overlap.
+- **The cold engine:** `#replaceCold` serves cold swaps, restarts, and group replacements.
+  - Its stop phase holds, drains, and stops one device at a time, from the top down, through `#stopForReplacement`. Holding the whole group at once would leave a consumer's last calls waiting on its provider's hold until `drainTimeout`.
+  - `#startReplacement` and `#installReplacement` start the new instances from the bottom up.
+  - On a failed start, `#rollBackCold` stops the new instances already installed, powers off the ones that powered on, and starts the old firmware from its snapshots.
+  - Powering off first was found by a test: a new instance that took a lock in `powerOn` kept it, and the old firmware could not start again.
+- **Restarts:** `#restart` runs the device's replacement with `fresh` set, then hot-swaps each direct consumer from its current firmware, or cold-swaps it when the consumer declares `swap: "cold"`.
+  - A restart whose new instance fails to start brings the old firmware back without state and marks the slot `degraded`, like a failed cold swap.
+  - That is the reset from the same firmware that [Restarts](#restarts) asks for, and it reports the error the same way a failed swap does.
+- **Applying a changed plan** (`src/rack.ts`).
+  - `#replan` picks the layout of a scanned rack: the computed plan, or under `rack start` the plan file, which must fit the devices.
+  - `#targetOf` gives the layout of an edited manifest that places devices by hand. `#adopt` takes the manifest over.
+  - `#beginChange` marks the devices that leave, moves the ones that stay, records changed configurations, and plugs new devices.
+  - `#finishChange` rewires through `Backplane.relink` in `src/backplane.ts`, unplugs, sets the panel's routes through `Panel.setRoutes` in `src/panel.ts`, and records the plan.
+  - Rewires that succeed are logged, not reported among the results.
+- **Wiring.** A patch now wins over a wire the device already had, so that a changed plan or patch takes effect. A wire to a device that is leaving is never kept.
+- **Edited manifests under `rack dev`.**
+  - `reload(manifest)` on the rack handle takes the edited manifest. `rack dev` imports it again in `src/dev.ts`.
+  - Bun 1.4.4 returns its first copy of a module even for a URL with a new query, unlike the Bun 1.3.13 behavior that [Every device supports hot swap and hot reload](261112_035943-hot-swap.md#evidence) recorded. A probe on 2026-11-17 confirmed it for the entry file itself.
+  - So the manifest is bundled like firmware, and its new content hash gives a new module.
+- **Tests:**
+  - `test/replace.test.ts` covers cold swaps, restarts, and contract changes.
+  - `test/changes.test.ts` covers changed plans and edited manifests.
+  - `test/assembly.test.ts` and `test/cli.test.ts` cover the plan file and `rack dev`.
+  - Twelve parts of the implementation were each taken out in turn, and each time at least one test failed.
+  - Two earlier expectations changed with this decision: a reload result now carries `mode`, and `rack dev` applies an edited manifest instead of warning that it needs a restart.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-17, with a restart that reloads only the device's direct consumers, and with the names `swap: "cold"` and `restart`.

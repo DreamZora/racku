@@ -11,6 +11,7 @@
  * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#shared-and-own-needs
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#start-priority
+ * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#cold-swaps
  */
 import {
   type Connector,
@@ -254,6 +255,13 @@ export interface DeviceSpec<
    * priority down to what it needs. A manifest that places devices by hand ignores it.
    */
   priority?: number;
+  /**
+   * How the rack replaces this device: `"hot"`, the default, starts the new instance before the
+   * old one stops; `"cold"` stops the old instance first, for devices whose two instances must
+   * never run at the same time, such as one that holds a file lock or a serial port. State moves
+   * through `snapshot` and `restore` either way.
+   */
+  swap?: "hot" | "cold";
   /** Returns the implementation of every provided port. Must not start background tasks. */
   powerOn?(ctx: DeviceContext<N, P, ConfigOf<S>>): PortImpls<P> | Promise<PortImpls<P>>;
   /** Fails the power-on self-test by throwing; a failing instance receives no traffic. */
@@ -291,6 +299,7 @@ export interface DeviceDefinition<
   readonly needs: N;
   readonly provides: P;
   readonly priority: number;
+  readonly swap: "hot" | "cold";
 }
 
 /** Lifecycle hooks the rack runs on request, in addition to boot. */
@@ -342,6 +351,10 @@ export function device<
   if (!Number.isSafeInteger(priority)) {
     throw new RackError("RACK_MANIFEST", `device ${model}: priority must be an integer`);
   }
+  const swap = spec.swap ?? "hot";
+  if (swap !== "hot" && swap !== "cold") {
+    throw new RackError("RACK_MANIFEST", `device ${model}: swap must be "hot" or "cold"`);
+  }
   if (spec.config !== undefined && !isStandardSchema(spec.config)) {
     throw new RackError("RACK_MANIFEST", `device ${model}: config must be a Standard Schema`);
   }
@@ -350,7 +363,15 @@ export function device<
       throw new RackError("RACK_MANIFEST", `device ${model}: ${hook} must be a function`);
     }
   }
-  return Object.freeze({ ...spec, [DEVICE]: true as const, height, needs, provides, priority });
+  return Object.freeze({
+    ...spec,
+    [DEVICE]: true as const,
+    height,
+    needs,
+    provides,
+    priority,
+    swap,
+  });
 }
 
 function isNeed(value: unknown): value is Need {

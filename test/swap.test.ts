@@ -328,7 +328,7 @@ describe("reload", () => {
     const results = await running.reload();
     const after = (await running.call("counter.counter", "get", undefined)) as Count;
     expect(results).toEqual([
-      { device: "counter", from: counter?.firmware ?? null, to: after.firmware },
+      { device: "counter", from: counter?.firmware ?? null, to: after.firmware, mode: "hot" },
     ]);
     expect(after).toMatchObject({ n: 1, version: "v2" });
     expect(running.status()[1]?.firmware).toBe(probe?.firmware as string);
