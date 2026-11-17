@@ -9,6 +9,8 @@
  * @decision .agents/decisions/261112_035943-hot-swap.md#lifecycle
  * @decision .agents/decisions/261115_222025-p0-api-details.md#device-hooks
  * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
+ * @decision .agents/decisions/261116_233919-automatic-assembly.md#shared-and-own-needs
+ * @decision .agents/decisions/261116_233919-automatic-assembly.md#start-priority
  */
 import {
   type Connector,
@@ -32,6 +34,64 @@ export type Ports = Record<string, Connector>;
 
 /** Ports of a device that declares none. */
 export type NoPorts = Record<never, Connector>;
+
+/** Brand of own needs; a global symbol, because a bundle may carry its own copy of rack42u. */
+const OWN: unique symbol = Symbol.for("rack42u.own");
+
+/** A need that asks for a copy of its provider that serves only this instance; see {@link own}. */
+export interface Own<C extends Connector = Connector> {
+  readonly [OWN]: true;
+  /** The connector the need calls. */
+  readonly connector: C;
+}
+
+/** A need: a connector, which shares the provider, or `own(connector)`, which gets a copy. */
+export type Need = Connector | Own;
+
+/** Needs keyed by need name. */
+export type Needs = Record<string, Need>;
+
+/** The connector a need calls, whether it shares its provider or owns a copy. */
+export type NeedConnector<T> = T extends Own<infer C> ? C : T extends Connector ? T : never;
+
+/**
+ * Asks for a copy of the provider that serves only this consumer instance. In a scanned rack,
+ * the plan creates the copy, named `<consumer>-<need>`; in a manifest that places devices by
+ * hand, the need must be wired to an instance that no other need is wired to.
+ *
+ * @param connector The connector the need calls.
+ * @returns The need, for the `needs` of a device.
+ * @throws RackError `RACK_MANIFEST` when `connector` is not a connector.
+ */
+export function own<C extends Connector>(connector: C): Own<C> {
+  if (!isConnector(connector)) throw new RackError("RACK_MANIFEST", "own() requires a connector");
+  return Object.freeze({ [OWN]: true as const, connector });
+}
+
+/**
+ * Reports whether a need is an own need created by {@link own}.
+ *
+ * @param value Any value, typically an entry of a device's `needs`.
+ * @returns `true` when the value carries the own brand.
+ */
+export function isOwn(value: unknown): value is Own {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { [OWN]?: unknown })[OWN] === true &&
+    isConnector((value as { connector?: unknown }).connector)
+  );
+}
+
+/**
+ * Returns the connector a need calls.
+ *
+ * @param need A connector or an own need.
+ * @returns The connector.
+ */
+export function needConnector(need: Need): Connector {
+  return isOwn(need) ? need.connector : need;
+}
 
 /** Options for an outgoing RPC call. */
 export interface CallOptions {
@@ -145,11 +205,11 @@ export interface ActivateScope {
 }
 
 /** The first argument of every hook. */
-export interface DeviceContext<N extends Ports = Ports, P extends Ports = Ports, C = unknown> {
+export interface DeviceContext<N extends Needs = Needs, P extends Ports = Ports, C = unknown> {
   /** RPC clients for every need, for example `ctx.ports.db.query(input, { timeout })`. */
-  readonly ports: { readonly [K in keyof N]: PortClient<N[K]["members"]> };
+  readonly ports: { readonly [K in keyof N]: PortClient<NeedConnector<N[K]>["members"]> };
   /** Event subscriptions for every need; events reach only the installed instance. */
-  readonly on: { readonly [K in keyof N]: PortEvents<N[K]["members"]> };
+  readonly on: { readonly [K in keyof N]: PortEvents<NeedConnector<N[K]>["members"]> };
   /** Event publishers for every provided port; the payload is validated before it is sent. */
   readonly emit: { readonly [K in keyof P]: PortEmitter<P[K]["members"]> };
   /** The validated configuration. */
@@ -171,7 +231,7 @@ export type ConfigOf<S> = S extends StandardSchemaV1 ? StandardSchemaV1.InferOut
 
 /** What a device file passes to {@link device}. */
 export interface DeviceSpec<
-  N extends Ports = NoPorts,
+  N extends Needs = NoPorts,
   P extends Ports = NoPorts,
   S extends StandardSchemaV1 | undefined = undefined,
 > {
@@ -179,12 +239,21 @@ export interface DeviceSpec<
   model: string;
   /** Number of U the device occupies; default 1. */
   height?: number;
-  /** Connectors this device calls, keyed by need name. */
+  /**
+   * Connectors this device calls, keyed by need name. A plain connector shares its provider;
+   * `own(connector)` asks for a copy of the provider for this instance alone.
+   */
   needs?: N;
   /** Connectors this device implements, keyed by port name. */
   provides?: P;
   /** Configuration schema; the Worker validates the slot's configuration with it at boot. */
   config?: S;
+  /**
+   * Start priority in a scanned rack, an integer; default 0. Among the devices whose order the
+   * dependency graph leaves open, a higher priority starts earlier, and a device passes its
+   * priority down to what it needs. A manifest that places devices by hand ignores it.
+   */
+  priority?: number;
   /** Returns the implementation of every provided port. Must not start background tasks. */
   powerOn?(ctx: DeviceContext<N, P, ConfigOf<S>>): PortImpls<P> | Promise<PortImpls<P>>;
   /** Fails the power-on self-test by throwing; a failing instance receives no traffic. */
@@ -213,7 +282,7 @@ export const DEVICE: unique symbol = Symbol.for("rack42u.device");
 
 /** A device definition, the default export of a device file. */
 export interface DeviceDefinition<
-  N extends Ports = Ports,
+  N extends Needs = Needs,
   P extends Ports = Ports,
   S extends StandardSchemaV1 | undefined = StandardSchemaV1 | undefined,
 > extends DeviceSpec<N, P, S> {
@@ -221,6 +290,7 @@ export interface DeviceDefinition<
   readonly height: number;
   readonly needs: N;
   readonly provides: P;
+  readonly priority: number;
 }
 
 /** Lifecycle hooks the rack runs on request, in addition to boot. */
@@ -251,7 +321,7 @@ const HOOKS: readonly HookName[] = [
  * @throws RackError `RACK_MANIFEST` when a field is malformed; the device then fails to boot.
  */
 export function device<
-  N extends Ports = NoPorts,
+  N extends Needs = NoPorts,
   P extends Ports = NoPorts,
   S extends StandardSchemaV1 | undefined = undefined,
 >(spec: DeviceSpec<N, P, S>): DeviceDefinition<N, P, S> {
@@ -266,8 +336,12 @@ export function device<
   if (!Number.isInteger(height) || height < 1) {
     throw new RackError("RACK_MANIFEST", `device ${model}: height must be a positive integer`);
   }
-  const needs = checkPorts(model, "needs", spec.needs);
-  const provides = checkPorts(model, "provides", spec.provides);
+  const needs = checkPorts(model, "needs", spec.needs, isNeed);
+  const provides = checkPorts(model, "provides", spec.provides, isConnector);
+  const priority = spec.priority ?? 0;
+  if (!Number.isSafeInteger(priority)) {
+    throw new RackError("RACK_MANIFEST", `device ${model}: priority must be an integer`);
+  }
   if (spec.config !== undefined && !isStandardSchema(spec.config)) {
     throw new RackError("RACK_MANIFEST", `device ${model}: config must be a Standard Schema`);
   }
@@ -276,10 +350,19 @@ export function device<
       throw new RackError("RACK_MANIFEST", `device ${model}: ${hook} must be a function`);
     }
   }
-  return Object.freeze({ ...spec, [DEVICE]: true as const, height, needs, provides });
+  return Object.freeze({ ...spec, [DEVICE]: true as const, height, needs, provides, priority });
 }
 
-function checkPorts<T extends Ports>(model: string, field: string, ports: T | undefined): T {
+function isNeed(value: unknown): value is Need {
+  return isConnector(value) || isOwn(value);
+}
+
+function checkPorts<T extends Needs>(
+  model: string,
+  field: string,
+  ports: T | undefined,
+  valid: (value: unknown) => boolean,
+): T {
   if (ports === undefined) return {} as T;
   if (typeof ports !== "object" || ports === null) {
     throw new RackError("RACK_MANIFEST", `device ${model}: ${field} must be an object`);
@@ -288,8 +371,9 @@ function checkPorts<T extends Ports>(model: string, field: string, ports: T | un
     if (!isIdentifierName(name)) {
       throw new RackError("RACK_MANIFEST", `device ${model}: ${field} key "${name}" is invalid`);
     }
-    if (!isConnector(value)) {
-      throw new RackError("RACK_MANIFEST", `device ${model}: ${field}.${name} is not a connector`);
+    if (!valid(value)) {
+      const what = field === "needs" ? "a connector or own(connector)" : "a connector";
+      throw new RackError("RACK_MANIFEST", `device ${model}: ${field}.${name} is not ${what}`);
     }
   }
   return ports;

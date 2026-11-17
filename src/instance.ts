@@ -154,6 +154,22 @@ export class Instance {
   }
 
   /**
+   * Loads the firmware and reads what the device declares, without a configuration or a context.
+   * The instance can only be terminated afterwards.
+   *
+   * @decision .agents/decisions/261116_233919-automatic-assembly.md#scanned-manifests
+   * @throws RackError `RACK_MANIFEST` when the firmware does not default-export a device, or
+   *   `RACK_HOOK_FAILED` when the Worker does not answer within `timeout` ms.
+   */
+  async describe(timeout: number): Promise<Fru> {
+    return (await this.request(
+      { op: "describe", firmware: this.firmware.url, source: this.firmware.source },
+      timeout,
+      "describe",
+    )) as Fru;
+  }
+
+  /**
    * Runs a lifecycle hook in the Worker.
    *
    * @returns The hook's result (the state, for `snapshot`).

@@ -19,16 +19,23 @@ import type { WireError } from "./errors.ts";
 /** Most calls a held need queues, and most events a provider queues for a held consumer. */
 export const QUEUE_LIMIT = 10_000;
 
+/** A need in FRU data: its connector, and whether it owns a copy of its provider. */
+export interface NeedInfo extends ConnectorInfo {
+  own: boolean;
+}
+
 /** FRU data a Worker reports after loading its firmware. */
 export interface Fru {
   model: string;
   /** The device name: the slot's name, or the model when the slot names none. */
   name: string;
   height: number;
-  needs: Record<string, ConnectorInfo>;
+  needs: Record<string, NeedInfo>;
   provides: Record<string, ConnectorInfo>;
   snapshot: boolean;
   restore: boolean;
+  /** Start priority in a scanned rack. */
+  priority: number;
 }
 
 /** Main thread to Worker: load the firmware and report FRU data. */
@@ -50,6 +57,19 @@ export interface BootRequest {
   /** Shared storage of one `Int32`: the number of calls the instance is serving. */
   gauge: SharedArrayBuffer;
   port: MessagePort;
+}
+
+/**
+ * Main thread to Worker: load the firmware and report what the device declares, without
+ * validating a configuration or preparing a context. The Worker is terminated afterwards.
+ */
+export interface DescribeRequest {
+  id: number;
+  op: "describe";
+  /** `file:` URL of the firmware bundle. */
+  firmware: string;
+  /** Device file the firmware was built from, for messages. */
+  source: string;
 }
 
 /** Main thread to Worker: run a lifecycle hook. */
@@ -171,6 +191,7 @@ export type Marker = [link: number, token: number];
 /** A control-channel request. */
 export type ControlRequest =
   | BootRequest
+  | DescribeRequest
   | HookRequest
   | NeedLinkRequest
   | NeedHoldRequest

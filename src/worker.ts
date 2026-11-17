@@ -30,7 +30,9 @@ import {
   type DeviceLog,
   type HookName,
   isDevice,
+  isOwn,
   type LogLevel,
+  needConnector,
 } from "./device.ts";
 import { fromWireError, isCloneable, RackError, toWireError } from "./errors.ts";
 import type {
@@ -50,6 +52,7 @@ import {
   type ControlReply,
   type ControlRequest,
   type DataToWorker,
+  type DescribeRequest,
   type DrainRequest,
   type Fru,
   type HoldEventsRequest,
@@ -58,6 +61,7 @@ import {
   type Marker,
   type NeedDownRequest,
   type NeedHoldRequest,
+  type NeedInfo,
   type NeedLinkRequest,
   QUEUE_LIMIT,
   type ToConsumer,
@@ -253,6 +257,8 @@ function handle(request: ControlRequest): unknown {
   switch (request.op) {
     case "boot":
       return boot(request);
+    case "describe":
+      return describe(request);
     case "hook":
       return runHook(request);
     case "link":
@@ -312,14 +318,41 @@ async function boot(request: BootRequest): Promise<Fru> {
     model: def.model,
     name,
     height: def.height,
-    needs: describeAll(def.needs),
-    provides: describeAll(def.provides),
+    needs: describeNeeds(def.needs),
+    provides: describeProvides(def.provides),
     snapshot: def.snapshot !== undefined,
     restore: def.restore !== undefined,
+    priority: def.priority,
   };
 }
 
-function describeAll(ports: DeviceDefinition["needs"]): Record<string, ConnectorInfo> {
+async function describe(request: DescribeRequest): Promise<Fru> {
+  const module = (await import(request.firmware)) as { default?: unknown };
+  const def = module.default;
+  if (!isDevice(def)) {
+    throw new RackError("RACK_MANIFEST", `${request.source} does not default-export a device()`);
+  }
+  return {
+    model: def.model,
+    name: def.model,
+    height: def.height,
+    needs: describeNeeds(def.needs),
+    provides: describeProvides(def.provides),
+    snapshot: def.snapshot !== undefined,
+    restore: def.restore !== undefined,
+    priority: def.priority,
+  };
+}
+
+function describeNeeds(needs: DeviceDefinition["needs"]): Record<string, NeedInfo> {
+  const result: Record<string, NeedInfo> = {};
+  for (const [name, need] of Object.entries(needs)) {
+    result[name] = { ...describeConnector(needConnector(need)), own: isOwn(need) };
+  }
+  return result;
+}
+
+function describeProvides(ports: DeviceDefinition["provides"]): Record<string, ConnectorInfo> {
   const result: Record<string, ConnectorInfo> = {};
   for (const [name, c] of Object.entries(ports)) result[name] = describeConnector(c);
   return result;
@@ -347,7 +380,8 @@ function prepare(def: DeviceDefinition): void {
     served.set(port, calls);
     emitted.set(port, events);
   }
-  for (const [name, c] of Object.entries(def.needs)) {
+  for (const [name, need] of Object.entries(def.needs)) {
+    const c = needConnector(need);
     const state: NeedState = {
       name,
       current: undefined,
@@ -388,7 +422,8 @@ function makeContext(def: DeviceDefinition, input: ContextInput): DeviceContext 
   const ports: Record<string, Record<string, unknown>> = {};
   const on: Record<string, Record<string, unknown>> = {};
   const emit: Record<string, Record<string, unknown>> = {};
-  for (const [name, c] of Object.entries(def.needs)) {
+  for (const [name, need] of Object.entries(def.needs)) {
+    const c = needConnector(need);
     const state = needs.get(name) as NeedState;
     const client: Record<string, unknown> = {};
     const events: Record<string, unknown> = {};
@@ -1015,7 +1050,8 @@ function snapshot(): InstanceMetrics {
   }
   for (const [name, state] of needs) {
     const members: NeedMetrics = {};
-    for (const member of Object.keys(def?.needs[name]?.members ?? {})) {
+    const need = def?.needs[name];
+    for (const member of Object.keys(need === undefined ? {} : needConnector(need).members)) {
       const stats = state.calls.get(member) ?? state.events.get(member);
       if (stats !== undefined) members[member] = stats;
     }

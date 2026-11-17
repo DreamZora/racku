@@ -99,6 +99,16 @@ export function connector<const M extends Members>(id: string, members: M): Conn
 }
 
 /**
+ * Reports whether a string is a well-formed connector id, `<name>/v<major>`.
+ *
+ * @param id The candidate id.
+ * @returns `true` when the id has the form that {@link connector} accepts.
+ */
+export function isConnectorId(id: string): boolean {
+  return typeof id === "string" && CONNECTOR_ID.test(id);
+}
+
+/**
  * Reports whether a name is a valid member name, the rule that also applies to the `needs` and
  * `provides` keys of a device.
  *

@@ -223,6 +223,32 @@ If D needed A through a need named `back`, assembly would fail with `cycle: a.d 
     - runs without a plan file
   - A README section on scanned manifests, and the new module in the `AGENTS.md` layout.
 
+## Implementation
+
+- **Device API.**
+  - `own`, `isOwn`, `needConnector`, and `priority` are in `src/device.ts`.
+  - FRU data carries them as `NeedInfo.own` and `Fru.priority`, in `src/protocol.ts`.
+- **Reading FRU data for planning.**
+  - The `describe` control request is answered by `describe` in `src/worker.ts`, and sent by `Instance.describe` in `src/instance.ts`.
+  - `#describe` in `src/rack.ts` uses it and caches the result by firmware hash, so a reload describes only changed firmware.
+- **The planner and the plan file:** `makePlan`, `formatPlan`, `parsePlan`, and `fitPlan` in `src/plan.ts`. The planner is pure, so its tests need no Workers.
+- **Scanned manifests:** the `devices`, `roots`, `use`, and `config` fields of `rack()` in `src/manifest.ts`.
+- **The rack** (`src/rack.ts`):
+  - `#prepare` boots and wires the devices, and `#planScanned`, `#scanModels`, `#computePlan`, and `#choosePlan` work out the plan.
+  - A plan compiles to slots and patches, so the existing assembly checks its wiring, the gravity rule, and connector coverage.
+  - `#ownershipProblem` checks `own` needs in hand-placed manifests, at start, plug, and swap.
+  - `#owners` supplies `owner` in `status()`.
+- **Commands:** `rack plan` with `--write` and `--check`, and `--no-plan`, in `src/cli.ts`. `rack plan` goes through `planRack` in `src/rack.ts`, which boots and wires every device as `start()` does and then terminates them.
+- **The `plan` start option.**
+  - `start()` takes `plan: true | "update" | false`.
+  - `"update"` is how `rack dev` rewrites the plan file, and `README.md` documents it as well.
+- **Changed plans while running.** Until [Hot swaps, cold swaps, and restarts](261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan) is implemented, `reload()` of a scanned rack only applies a new order. It refuses a plan with other instances or wiring with `RACK_SWAP_REJECTED`, which asks for a restart.
+- **Tests:**
+  - `test/plan.test.ts` covers the planner and the plan file.
+  - `test/assembly.test.ts` covers scanned racks through Workers and through the `rack` command.
+  - `test/device.test.ts` and `test/manifest.test.ts` cover the API additions.
+  - Ten parts of the implementation were each taken out in turn, and each time at least one test failed.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-17, after shaping it in review:

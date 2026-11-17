@@ -14,8 +14,12 @@
  * @decision .agents/decisions/261115_222025-p0-api-details.md#rack-handle
  * @decision .agents/decisions/261115_222025-p0-api-details.md#error-codes
  * @decision .agents/decisions/261115_222025-p0-api-details.md#resets
+ * @decision .agents/decisions/261116_233919-automatic-assembly.md#scanned-manifests
+ * @decision .agents/decisions/261116_233919-automatic-assembly.md#plan-file
  */
-import { resolve as resolvePath } from "node:path";
+import type { Dirent } from "node:fs";
+import { readdir } from "node:fs/promises";
+import { basename, join, resolve as resolvePath } from "node:path";
 import { Backplane, type Slot, type SlotState } from "./backplane.ts";
 import type { ConnectorInfo } from "./connector.ts";
 import type { CallOptions } from "./device.ts";
@@ -27,12 +31,15 @@ import {
   checkDeviceName,
   isRackManifest,
   isSlotSpec,
+  slot as mountSpec,
   parseAddress,
   type RackManifest,
+  type ScanSpec,
   type SlotSpec,
 } from "./manifest.ts";
 import type { DeviceMetrics, RackMetrics } from "./metrics.ts";
 import { openHttpPanel, type Panel } from "./panel.ts";
+import { fitPlan, formatPlan, makePlan, type Plan, type PlanType, parsePlan } from "./plan.ts";
 import type { DataFromWorker, Fru, LogNotice, Marker } from "./protocol.ts";
 import { detach, transferList } from "./transfer.ts";
 
@@ -53,6 +60,8 @@ export interface SlotStatus {
   inFlight: number;
   /** Crashes within the last 60 seconds. */
   crashes: number;
+  /** For a copy that serves an `own` need: the instance whose need it serves. */
+  owner?: string;
   /** The last failed swap or crash. */
   error?: WireError;
 }
@@ -94,6 +103,17 @@ export interface StartOptions {
   hookTimeout?: number;
   /** How long retiring instances may finish their calls, in ms; default 10 000. */
   drainTimeout?: number;
+  /**
+   * How a scanned rack uses its plan file, `<rack name>.plan` in the base directory:
+   * - `true`, the default: follow the file while it fits the dependency graph, write it when it
+   *   is missing, and refuse to start when it no longer fits.
+   * - `"update"`: rewrite the file whenever the graph and the priorities give another plan, as
+   *   `rack dev` does.
+   * - `false`: neither read nor write it; the graph and the priorities alone give the plan.
+   *
+   * A rack whose manifest places devices by hand has no plan file and ignores this option.
+   */
+  plan?: boolean | "update";
 }
 
 /** A running rack. */
@@ -185,6 +205,13 @@ class Rack implements InstanceHost {
   readonly #callTimeout: number;
   readonly #hookTimeout: number;
   readonly #drainTimeout: number;
+  readonly #planMode: boolean | "update";
+  /** Patches in effect: the manifest's, or the wiring of a scanned rack's plan. */
+  #patch: ReadonlyArray<readonly [string, string]>;
+  /** The plan a scanned rack runs. */
+  #plan: Plan | undefined;
+  /** FRU data of firmware described for planning, by hash. */
+  readonly #described = new Map<string, Fru>();
   readonly #slots = new Map<string, Slot>();
   readonly #backplane: Backplane;
   readonly #listeners = new Set<(event: RackEvent) => void>();
@@ -202,6 +229,11 @@ class Rack implements InstanceHost {
     this.#callTimeout = positive("callTimeout", options.callTimeout ?? 30_000);
     this.#hookTimeout = positive("hookTimeout", options.hookTimeout ?? 30_000);
     this.#drainTimeout = positive("drainTimeout", options.drainTimeout ?? 10_000);
+    this.#planMode = options.plan ?? true;
+    if (this.#planMode !== true && this.#planMode !== false && this.#planMode !== "update") {
+      throw new RackError("RACK_MANIFEST", 'start option plan must be true, false, or "update"');
+    }
+    this.#patch = manifest.patch;
     this.#backplane = new Backplane(
       this.#slots,
       this.#instances,
@@ -274,35 +306,8 @@ class Rack implements InstanceHost {
 
   async start(): Promise<void> {
     try {
-      const entries = this.#manifest.slots.map(({ u, spec }) => ({
-        u,
-        spec,
-        source: resolveSource(spec.source, this.#baseDir),
-      }));
-      const builds = new Map<string, Promise<Firmware>>();
-      for (const { source } of entries) {
-        if (!builds.has(source)) builds.set(source, buildFirmware(source, this.#baseDir));
-      }
-      await Promise.allSettled(builds.values());
-      const booted = await Promise.allSettled(
-        entries.map(async (entry) => {
-          const firmware = await builds.get(entry.source)?.catch((error: unknown) => {
-            throw new RackError("RACK_MANIFEST", messageOf(error));
-          });
-          if (firmware === undefined) throw new RackError("RACK_MANIFEST", "missing firmware");
-          const instance = await this.#boot(
-            firmware,
-            entry.spec.name,
-            entry.u,
-            entry.spec.config,
-            "RACK_MANIFEST",
-          );
-          return { u: entry.u, config: entry.spec.config, firmware, instance };
-        }),
-      );
-      for (const result of booted) if (result.status === "rejected") throw result.reason;
-      const ready = booted.map((result) => (result as PromiseFulfilledResult<Booted>).value);
-      this.#assemble(ready);
+      const planText = await this.#prepare();
+      if (planText !== undefined) await Bun.write(this.#planPath(), planText);
       for (const slot of this.#ordered()) {
         const instance = slot.installed as Instance;
         // Links to the devices below exist already; this links the devices above to it.
@@ -328,6 +333,268 @@ class Rack implements InstanceHost {
     } catch (error) {
       await this.#abortStart();
       throw error;
+    }
+  }
+
+  /**
+   * Works out the plan without powering anything on: boots and wires every device the way
+   * `start()` does, reports the plan, and terminates the instances again.
+   */
+  async dryRun(write: boolean): Promise<PlanReport> {
+    try {
+      await this.#prepare();
+      const scanned = this.#plan;
+      if (scanned === undefined) {
+        const instances = this.#ordered().map((slot) => ({
+          name: slot.name,
+          model: slot.model,
+          owner: this.#owners().get(slot.name),
+          u: slot.u,
+          height: slot.height,
+          wiring: Object.fromEntries(slot.wiring),
+        }));
+        return {
+          text: formatPlan(this.#manifest.name, { instances, unused: [] }),
+          unused: [],
+          file: undefined,
+        };
+      }
+      const path = this.#planPath();
+      const text = formatPlan(this.#manifest.name, scanned);
+      const file = { path, state: "missing" as PlanFileState, differences: [] as string[] };
+      const existing = Bun.file(path);
+      if (await existing.exists()) {
+        const fit = fitPlan(
+          parsePlan(await existing.text(), basename(path)),
+          scanned,
+          this.#manifest.size,
+        );
+        if (!fit.fits) file.differences = fit.differences;
+        file.state = !fit.fits ? "differs" : fit.sameOrder ? "fits" : "reordered";
+      }
+      if (write) {
+        await Bun.write(path, text);
+        file.state = "fits";
+        file.differences = [];
+      }
+      return { text, unused: [...scanned.unused], file };
+    } finally {
+      await this.#abortStart();
+    }
+  }
+
+  /**
+   * Boots and wires every device of the manifest, or of a scanned rack's plan, without powering
+   * any on.
+   *
+   * @returns The new text of the plan file when it is to be written.
+   */
+  async #prepare(): Promise<string | undefined> {
+    const builds = new Map<string, Promise<Firmware>>();
+    let entries: Entry[];
+    let planText: string | undefined;
+    if (this.#manifest.scan === undefined) {
+      entries = this.#manifest.slots.map(({ u, spec }) => ({
+        u,
+        spec,
+        source: resolveSource(spec.source, this.#baseDir),
+      }));
+    } else {
+      ({ entries, planText } = await this.#planScanned(builds));
+    }
+    for (const { source } of entries) {
+      if (!builds.has(source)) builds.set(source, buildFirmware(source, this.#baseDir));
+    }
+    await Promise.allSettled(builds.values());
+    const booted = await Promise.allSettled(
+      entries.map(async (entry) => {
+        const firmware = await builds.get(entry.source)?.catch((error: unknown) => {
+          throw new RackError("RACK_MANIFEST", messageOf(error));
+        });
+        if (firmware === undefined) throw new RackError("RACK_MANIFEST", "missing firmware");
+        const instance = await this.#boot(
+          firmware,
+          entry.spec.name,
+          entry.u,
+          entry.spec.config,
+          "RACK_MANIFEST",
+        );
+        return { u: entry.u, config: entry.spec.config, firmware, instance };
+      }),
+    );
+    for (const result of booted) if (result.status === "rejected") throw result.reason;
+    const ready = booted.map((result) => (result as PromiseFulfilledResult<Booted>).value);
+    this.#assemble(ready);
+    return planText;
+  }
+
+  // ---- Scanned racks ----
+
+  /**
+   * Scans the devices of a scanned rack, works out its plan, and lets the plan file decide which
+   * plan runs.
+   *
+   * @returns The slots to boot, and the new text of the plan file when it is to be written.
+   */
+  async #planScanned(
+    builds: Map<string, Promise<Firmware>>,
+  ): Promise<{ entries: Entry[]; planText: string | undefined }> {
+    const scan = this.#manifest.scan as ScanSpec;
+    const models = await this.#scanModels(builds);
+    const computed = this.#computePlan(models);
+    const { plan, write } = await this.#choosePlan(computed);
+    this.#plan = plan;
+    this.#patch = patchesOf(plan);
+    const entries: Entry[] = plan.instances.map((instance) => {
+      const model = models.get(instance.model) as ModelSource;
+      const own = (key: string) => Object.hasOwn(scan.config, key);
+      const config = own(instance.name)
+        ? scan.config[instance.name]
+        : own(instance.model)
+          ? scan.config[instance.model]
+          : model.config;
+      return {
+        u: instance.u,
+        spec: mountSpec(model.source, { name: instance.name, config }),
+        source: model.source,
+      };
+    });
+    return {
+      entries,
+      planText: write ? formatPlan(this.#manifest.name, plan) : undefined,
+    };
+  }
+
+  /** Builds and describes every device file the manifest names, keyed by model name. */
+  async #scanModels(builds: Map<string, Promise<Firmware>>): Promise<Map<string, ModelSource>> {
+    const scan = this.#manifest.scan as ScanSpec;
+    const found: { source: string; config: unknown; variant: string | undefined }[] = [];
+    for (const entry of scan.devices) {
+      if (typeof entry === "string") {
+        for (const source of await deviceFiles(resolvePath(this.#baseDir, entry))) {
+          found.push({ source, config: undefined, variant: undefined });
+        }
+      } else {
+        const source = resolveSource(entry.source, this.#baseDir);
+        found.push({ source, config: entry.config, variant: entry.name });
+      }
+    }
+    for (const { source } of found) {
+      if (!builds.has(source)) builds.set(source, buildFirmware(source, this.#baseDir));
+    }
+    const described = await Promise.all(
+      found.map(async (item) => {
+        const firmware = await (builds.get(item.source) as Promise<Firmware>).catch(
+          (error: unknown) => {
+            throw new RackError("RACK_MANIFEST", messageOf(error));
+          },
+        );
+        return { ...item, firmware, fru: await this.#describe(firmware) };
+      }),
+    );
+    const models = new Map<string, ModelSource>();
+    for (const item of described) {
+      const name = item.variant ?? item.fru.model;
+      const explicit = item.variant !== undefined || item.config !== undefined;
+      const existing = models.get(name);
+      if (existing !== undefined) {
+        // A file that a directory scan finds and a spec also names is one model; the spec's
+        // configuration wins.
+        if (existing.source === item.source && !(existing.explicit && explicit)) {
+          if (explicit) models.set(name, { ...existing, config: item.config, explicit });
+          continue;
+        }
+        throw new RackError(
+          "RACK_MANIFEST",
+          `two device files declare model ${name}: ${existing.source} and ${item.source}`,
+        );
+      }
+      const { fru } = item;
+      models.set(name, {
+        type: {
+          name,
+          height: fru.height,
+          priority: fru.priority,
+          needs: fru.needs,
+          provides: fru.provides,
+        },
+        source: item.source,
+        config: item.config,
+        explicit,
+      });
+    }
+    return models;
+  }
+
+  /** Reads what a firmware declares, booting it once in a Worker that is terminated after. */
+  async #describe(firmware: Firmware): Promise<Fru> {
+    const known = this.#described.get(firmware.hash);
+    if (known !== undefined) return known;
+    const instance = new Instance(firmware, firmware.source, this);
+    try {
+      const fru = await instance.describe(this.#hookTimeout);
+      this.#described.set(firmware.hash, fru);
+      return fru;
+    } catch (error) {
+      throw new RackError("RACK_MANIFEST", `${firmware.source}: ${asRackError(error).message}`);
+    } finally {
+      instance.terminate();
+    }
+  }
+
+  /** Works out the plan from the models, the roots, and the panel routes that name models. */
+  #computePlan(models: ReadonlyMap<string, ModelSource>): Plan {
+    const scan = this.#manifest.scan as ScanSpec;
+    const roots = [...scan.roots];
+    for (const address of Object.values(this.#manifest.panel.http?.routes ?? {})) {
+      const { device } = parseAddress(address);
+      if (models.has(device) && !roots.includes(device)) roots.push(device);
+    }
+    const types = new Map<string, PlanType>();
+    for (const [name, model] of models) types.set(name, model.type);
+    return makePlan({ types, roots, use: scan.use, size: this.#manifest.size });
+  }
+
+  /**
+   * Lets the plan file decide which plan runs: the file while it fits the graph, the computed
+   * plan otherwise or without a file, as the `plan` start option says.
+   *
+   * @throws RackError `RACK_MANIFEST` when the file no longer fits and may not be rewritten.
+   */
+  async #choosePlan(computed: Plan): Promise<{ plan: Plan; write: boolean }> {
+    if (this.#planMode === false) return { plan: computed, write: false };
+    const path = this.#planPath();
+    const name = basename(path);
+    const file = Bun.file(path);
+    if (!(await file.exists())) return { plan: computed, write: true };
+    const fit = fitPlan(parsePlan(await file.text(), name), computed, this.#manifest.size);
+    if (fit.fits && fit.sameOrder) return { plan: fit.plan, write: false };
+    if (this.#planMode === "update") {
+      const differences = fit.fits ? ["the priorities give another order"] : fit.differences;
+      this.#log("info", `${name} changed`, { differences });
+      return { plan: computed, write: true };
+    }
+    if (fit.fits) {
+      this.#log("info", `${name} keeps its order; rack plan --write applies the priorities`);
+      return { plan: fit.plan, write: false };
+    }
+    throw new RackError(
+      "RACK_MANIFEST",
+      `${name} no longer fits the devices: ${fit.differences.join("; ")}; run rack plan --write or rack dev to rewrite it`,
+    );
+  }
+
+  #planPath(): string {
+    return join(this.#baseDir, `${this.#manifest.name}.plan`);
+  }
+
+  /** Rejects management operations that would change a scanned rack outside its plan. */
+  #requireHandPlaced(): void {
+    if (this.#manifest.scan !== undefined) {
+      throw new RackError(
+        "RACK_SWAP_REJECTED",
+        `rack ${this.#manifest.name} is scanned: its instances come and go with its plan; change the device files or the manifest and reload`,
+      );
     }
   }
 
@@ -387,7 +654,9 @@ class Rack implements InstanceHost {
       slot.wiring = this.#wire(slot.name, slot.u, slot.fru, new Map());
       (slot.installed as Instance).wiring = slot.wiring;
     }
-    for (const [consumer] of this.#manifest.patch) {
+    const shared = this.#ownershipProblem();
+    if (shared !== undefined) throw new RackError("RACK_MANIFEST", shared);
+    for (const [consumer] of this.#patch) {
       const { device, port: need } = parseAddress(consumer);
       if (this.#slots.get(device)?.fru.needs[need] === undefined) {
         throw new RackError(
@@ -445,7 +714,7 @@ class Rack implements InstanceHost {
         wiring.set(need, kept);
         continue;
       }
-      const patch = this.#manifest.patch.find(([consumer]) => consumer === `${name}.${need}`);
+      const patch = this.#patch.find(([consumer]) => consumer === `${name}.${need}`);
       if (patch !== undefined) {
         const target = parseAddress(patch[1]);
         const provider = this.#slots.get(target.device);
@@ -553,6 +822,51 @@ class Rack implements InstanceHost {
     return users;
   }
 
+  /**
+   * Names an `own` need whose provider is also wired to another need, if there is one.
+   *
+   * @param change A device whose wiring is about to change, with its new FRU and wiring.
+   * @decision .agents/decisions/261116_233919-automatic-assembly.md#shared-and-own-needs
+   */
+  #ownershipProblem(change?: {
+    name: string;
+    fru: Fru;
+    wiring: ReadonlyMap<string, Wire>;
+  }): string | undefined {
+    const users = new Map<string, string[]>();
+    const owners = new Map<string, string>();
+    const consider = (name: string, fru: Fru, wiring: ReadonlyMap<string, Wire>) => {
+      for (const [need, wire] of wiring) {
+        const user = `${name}.${need}`;
+        users.set(wire.provider, [...(users.get(wire.provider) ?? []), user]);
+        if (fru.needs[need]?.own) owners.set(wire.provider, user);
+      }
+    };
+    for (const slot of this.#slots.values()) {
+      if (!slot.removed && slot.name !== change?.name) consider(slot.name, slot.fru, slot.wiring);
+    }
+    if (change !== undefined) consider(change.name, change.fru, change.wiring);
+    for (const [provider, owner] of owners) {
+      const others = (users.get(provider) ?? []).filter((user) => user !== owner);
+      if (others.length > 0) {
+        return `${owner} owns ${provider}, but ${others.join(", ")} ${others.length === 1 ? "is" : "are"} wired to it too`;
+      }
+    }
+    return undefined;
+  }
+
+  /** Maps each copy that serves an `own` need to the instance whose need it serves. */
+  #owners(): Map<string, string> {
+    const owners = new Map<string, string>();
+    for (const slot of this.#slots.values()) {
+      if (slot.removed) continue;
+      for (const [need, wire] of slot.wiring) {
+        if (slot.fru.needs[need]?.own) owners.set(wire.provider, slot.name);
+      }
+    }
+    return owners;
+  }
+
   // ---- Management operations ----
 
   /** Runs management operations one at a time, in call order. */
@@ -570,8 +884,9 @@ class Rack implements InstanceHost {
 
   async #reload(): Promise<ReloadResult[]> {
     this.#requireRunning();
-    const slots = this.#ordered();
     const builds = new Map<string, Promise<Firmware>>();
+    if (this.#manifest.scan !== undefined) await this.#replan(builds);
+    const slots = this.#ordered();
     for (const slot of slots) {
       if (!builds.has(slot.source))
         builds.set(slot.source, buildFirmware(slot.source, this.#baseDir));
@@ -602,8 +917,47 @@ class Rack implements InstanceHost {
     return results;
   }
 
+  /**
+   * Scans a running scanned rack again and compares the new plan with the running one. Within
+   * the same instances and wiring, a changed order moves slot numbers when the plan file allows
+   * it; no instance restarts for that.
+   *
+   * @throws RackError `RACK_SWAP_REJECTED` when the instances or the wiring changed.
+   */
+  async #replan(builds: Map<string, Promise<Firmware>>): Promise<void> {
+    const computed = this.#computePlan(await this.#scanModels(builds));
+    const running = this.#plan as Plan;
+    const fit = fitPlan(running.instances, computed, this.#manifest.size);
+    if (!fit.fits) {
+      throw new RackError(
+        "RACK_SWAP_REJECTED",
+        `the plan changed: ${fit.differences.join("; ")}; restart the rack to apply it`,
+      );
+    }
+    if (fit.sameOrder || this.#planMode === true) return;
+    for (const instance of computed.instances) {
+      const slot = this.#slots.get(instance.name);
+      if (slot !== undefined) slot.u = instance.u;
+    }
+    this.#plan = computed;
+    if (this.#planMode === "update") {
+      await Bun.write(this.#planPath(), formatPlan(this.#manifest.name, computed));
+    }
+    this.#log("info", "the plan's order changed; instances moved to new slots", {
+      slots: computed.instances.map((instance) => `U${instance.u} ${instance.name}`),
+    });
+  }
+
   async #swap(name: string, source: string | URL | undefined): Promise<void> {
     this.#requireRunning();
+    if (source !== undefined) {
+      try {
+        this.#requireHandPlaced();
+      } catch (error) {
+        const from = this.#slots.get(name)?.installed?.firmware.hash ?? null;
+        throw this.#swapFailed(name, "swap", from, null, asRackError(error));
+      }
+    }
     const slot = this.#slots.get(name);
     if (slot === undefined || slot.removed) {
       throw new RackError("RACK_NO_ROUTE", `no device named ${name}`);
@@ -652,6 +1006,8 @@ class Rack implements InstanceHost {
         );
       }
       neo.wiring = this.#wire(slot.name, slot.u, fru, slot.wiring);
+      const shared = this.#ownershipProblem({ name: slot.name, fru, wiring: neo.wiring });
+      if (shared !== undefined) throw new RackError("RACK_SWAP_REJECTED", shared);
       this.#checkCompatibility(slot, fru);
       // A standby instance can call its needs from powerOn on; events reach it once installed.
       await this.#backplane.connect(neo);
@@ -739,6 +1095,17 @@ class Rack implements InstanceHost {
 
   async #plug(u: number, spec: SlotSpec): Promise<void> {
     this.#requireRunning();
+    try {
+      this.#requireHandPlaced();
+    } catch (error) {
+      throw this.#swapFailed(
+        String(spec?.name ?? spec?.source),
+        "plug",
+        null,
+        null,
+        asRackError(error),
+      );
+    }
     if (!isSlotSpec(spec)) {
       throw new RackError("RACK_MANIFEST", "plug() requires a spec created by slot()");
     }
@@ -764,6 +1131,8 @@ class Rack implements InstanceHost {
       }
       this.#checkLayout([...this.#layout(), { name: fru.name, u, height: fru.height }]);
       instance.wiring = this.#wire(fru.name, u, fru, new Map());
+      const shared = this.#ownershipProblem({ name: fru.name, fru, wiring: instance.wiring });
+      if (shared !== undefined) throw new RackError("RACK_SWAP_REJECTED", shared);
       await this.#backplane.connect(instance);
       await this.#powerOn(instance);
       this.#requireRunning();
@@ -784,6 +1153,12 @@ class Rack implements InstanceHost {
 
   async #unplug(name: string): Promise<void> {
     this.#requireRunning();
+    try {
+      this.#requireHandPlaced();
+    } catch (error) {
+      const from = this.#slots.get(name)?.installed?.firmware.hash ?? null;
+      throw this.#swapFailed(name, "unplug", from, null, asRackError(error));
+    }
     const slot = this.#slots.get(name);
     if (slot === undefined || slot.removed) {
       throw new RackError("RACK_NO_ROUTE", `no device named ${name}`);
@@ -980,6 +1355,7 @@ class Rack implements InstanceHost {
   #status(): SlotStatus[] {
     if (this.#phase === "stopped") return [];
     const now = Date.now();
+    const owners = this.#owners();
     return this.#ordered().map((slot) => {
       const status: SlotStatus = {
         name: slot.name,
@@ -992,6 +1368,8 @@ class Rack implements InstanceHost {
         inFlight: slot.installed?.serving ?? 0,
         crashes: slot.crashes.filter((time) => now - time < CRASH_WINDOW).length,
       };
+      const owner = owners.get(slot.name);
+      if (owner !== undefined) status.owner = owner;
       if (slot.error !== undefined) status.error = slot.error;
       return status;
     });
@@ -1070,6 +1448,94 @@ interface Booted {
   config: unknown;
   firmware: Firmware;
   instance: Instance;
+}
+
+/** A device to boot into a slot. */
+interface Entry {
+  u: number;
+  spec: SlotSpec;
+  /** Absolute path of the device file. */
+  source: string;
+}
+
+/** A model of a scanned rack: what it declares, its file, and its default configuration. */
+interface ModelSource {
+  type: PlanType;
+  source: string;
+  config: unknown;
+  /** A `slot()` spec named it, rather than a directory scan alone. */
+  explicit: boolean;
+}
+
+/** How a plan file compares with the plan the devices give now. */
+export type PlanFileState = "missing" | "fits" | "reordered" | "differs";
+
+/** What {@link planRack} reports. */
+export interface PlanReport {
+  /** The plan in the format of the plan file; for a rack placed by hand, its layout. */
+  text: string;
+  /** Models of a scanned rack that nothing uses. */
+  unused: string[];
+  /** For a scanned rack: its plan file, and how the file compares with the plan. */
+  file: { path: string; state: PlanFileState; differences: string[] } | undefined;
+}
+
+/**
+ * Works out a rack's plan without starting it: builds, boots, and wires every device as
+ * `start()` would, then terminates them. Used by `rack plan`.
+ *
+ * @param manifest A manifest created by `rack()`.
+ * @param options Start options; `plan` is ignored.
+ * @param write Write the plan file of a scanned rack.
+ * @returns The plan, and how an existing plan file compares with it.
+ * @throws RackError like `start()`.
+ * @decision .agents/decisions/261116_233919-automatic-assembly.md#commands-and-management
+ */
+export async function planRack(
+  manifest: RackManifest,
+  options: StartOptions = {},
+  write = false,
+): Promise<PlanReport> {
+  if (!isRackManifest(manifest)) {
+    throw new RackError("RACK_MANIFEST", "planRack() requires a manifest created by rack()");
+  }
+  return new Rack(manifest, { ...options, plan: false }).dryRun(write);
+}
+
+/** The wiring of a plan, as patches. */
+function patchesOf(plan: Plan): (readonly [string, string])[] {
+  return plan.instances.flatMap((instance) =>
+    Object.entries(instance.wiring).map(
+      ([need, wire]) => [`${instance.name}.${need}`, `${wire.provider}.${wire.port}`] as const,
+    ),
+  );
+}
+
+/**
+ * Lists the device files below a directory: `.ts`, `.tsx`, `.js`, and `.mjs` files at any depth,
+ * skipping `node_modules` and names that start with `_` or `.`.
+ *
+ * @decision .agents/decisions/261116_233919-automatic-assembly.md#scanned-manifests
+ */
+async function deviceFiles(dir: string): Promise<string[]> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    throw new RackError("RACK_MANIFEST", `cannot scan ${dir}: ${messageOf(error)}`);
+  }
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const files: string[] = [];
+  for (const entry of entries) {
+    const { name } = entry;
+    if (name === "node_modules" || name.startsWith("_") || name.startsWith(".")) continue;
+    const path = join(dir, name);
+    if (entry.isDirectory()) files.push(...(await deviceFiles(path)));
+    else if (entry.isFile() && /\.(ts|tsx|js|mjs)$/.test(name) && !name.endsWith(".d.ts")) {
+      files.push(path);
+    }
+  }
+  return files;
 }
 
 /**

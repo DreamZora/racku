@@ -72,6 +72,43 @@ describe("rack", () => {
   });
 });
 
+describe("scanned manifests", () => {
+  // @decision .agents/decisions/261116_233919-automatic-assembly.md#scanned-manifests
+  test("keeps devices, roots, use, and config, and has no slots or patches", () => {
+    const manifest = rack("app", {
+      devices: ["./devices", slot("./vendor/kv.ts", { name: "cache" })],
+      roots: ["web"],
+      use: { "kv/v1": "cache", "web.store": "cache" },
+      config: { web: { port: 1 } },
+    });
+    expect(manifest.slots).toEqual([]);
+    expect(manifest.patch).toEqual([]);
+    expect(manifest.scan?.roots).toEqual(["web"]);
+    expect(manifest.scan?.use).toEqual({ "kv/v1": "cache", "web.store": "cache" });
+  });
+
+  test.each([
+    ["slots and devices together", () => rack("r", { slots: {}, devices: ["./d"] } as never)],
+    ["a rack name that cannot name a plan file", () => rack("my rack", { devices: ["./d"] })],
+    ["no devices", () => rack("r", { devices: [] })],
+    [
+      "a device entry that is neither a path nor a slot()",
+      () => rack("r", { devices: [42 as never] }),
+    ],
+    ["a root that is not a model name", () => rack("r", { devices: ["./d"], roots: ["a.b"] })],
+    [
+      "a use key that is neither a connector id nor <model>.<need>",
+      () => rack("r", { devices: ["./d"], use: { kv: "x" } }),
+    ],
+    [
+      "a use value that is not a model name",
+      () => rack("r", { devices: ["./d"], use: { "kv/v1": "a b" } }),
+    ],
+  ])("rejects %s with RACK_MANIFEST", (_label, define) => {
+    expect(rejectionCode(define)).toBe("RACK_MANIFEST");
+  });
+});
+
 describe("parseAddress", () => {
   test("splits <device>.<port>", () => {
     expect(parseAddress("orders.http")).toEqual({ device: "orders", port: "http" });
