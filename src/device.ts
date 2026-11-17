@@ -8,6 +8,7 @@
  * @decision .agents/decisions/261112_043034-device-api.md#device-context
  * @decision .agents/decisions/261112_035943-hot-swap.md#lifecycle
  * @decision .agents/decisions/261115_222025-p0-api-details.md#device-hooks
+ * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
  */
 import {
   type Connector,
@@ -41,6 +42,13 @@ export interface CallOptions {
   timeout?: number;
   /** Aborting it fails the call at once with `RACK_CANCELLED` and cancels it at the provider. */
   signal?: AbortSignal;
+  /**
+   * Buffers to move to the provider instead of copying them. The call takes them: they are
+   * detached as soon as the call is made, whatever its outcome, and every view on them becomes
+   * empty. The call fails with `RACK_INVALID_INPUT`, detaching nothing, when an entry is not an
+   * attached `ArrayBuffer`, is a `SharedArrayBuffer`, or appears twice.
+   */
+  transfer?: readonly ArrayBuffer[];
 }
 
 /** The second argument of an RPC implementation. */
@@ -49,6 +57,15 @@ export interface CallContext {
   readonly signal: AbortSignal;
   /** The deadline of the call, a millisecond timestamp. */
   readonly deadline: number;
+  /**
+   * Moves these buffers to the caller with the result instead of copying them. They are
+   * detached once the result is sent, whether the call succeeded or failed; listing a buffer
+   * again has no further effect.
+   *
+   * @throws RackError `RACK_INVALID_OUTPUT` for an entry that is not an attached `ArrayBuffer`
+   *   or is a `SharedArrayBuffer`, and once the result has been sent.
+   */
+  transfer(...buffers: ArrayBuffer[]): void;
 }
 
 /** Client for a needed connector: one method per RPC member. */

@@ -34,6 +34,7 @@ import {
 import type { DeviceMetrics, RackMetrics } from "./metrics.ts";
 import { openHttpPanel, type Panel } from "./panel.ts";
 import type { DataFromWorker, Fru, LogNotice, Marker } from "./protocol.ts";
+import { detach, transferList } from "./transfer.ts";
 
 export type { SlotState } from "./backplane.ts";
 
@@ -215,7 +216,7 @@ class Rack implements InstanceHost {
       call: (address: string, method: string, input: unknown, options: CallOptions = {}) =>
         this.#phase === "running"
           ? this.#backplane.call(address, method, input, options, "rack")
-          : Promise.reject(new RackError("RACK_LINK_DOWN", "the rack is not running")),
+          : refuse(`${address}.${method}`, options),
       reload: () => this.#serialize(() => this.#reload()),
       swap: (name: string, source?: string | URL) =>
         this.#serialize(() => this.#swap(name, source)),
@@ -1069,6 +1070,22 @@ interface Booted {
   config: unknown;
   firmware: Firmware;
   instance: Instance;
+}
+
+/**
+ * Fails a call from outside the rack while the rack is not running. The call still takes the
+ * buffers it transfers, as every call does whatever its outcome.
+ *
+ * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
+ */
+function refuse(where: string, options: CallOptions): Promise<never> {
+  try {
+    const transfer = transferList(options.transfer, where);
+    if (transfer !== undefined) detach(transfer);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return Promise.reject(new RackError("RACK_LINK_DOWN", "the rack is not running"));
 }
 
 function newSlot({ u, config, firmware, instance }: Booted): Slot {

@@ -132,7 +132,7 @@ describe("http/v1", () => {
         params: {},
         body: new TextEncoder().encode("body"),
       },
-      { signal: new AbortController().signal, deadline: Date.now() + 1_000 },
+      { signal: new AbortController().signal, deadline: Date.now() + 1_000, transfer() {} },
     );
     expect(output.status).toBe(201);
     expect(new TextDecoder().decode(output.body as Uint8Array)).toBe("PUT /things body");
@@ -153,7 +153,7 @@ describe("http/v1", () => {
     );
     const pending = handler.handle(
       { method: "GET", url: "http://rack.local/", headers: [], params: {}, body: null },
-      { signal: controller.signal, deadline: Date.now() + 1_000 },
+      { signal: controller.signal, deadline: Date.now() + 1_000, transfer() {} },
     );
     controller.abort();
     const output = await pending;

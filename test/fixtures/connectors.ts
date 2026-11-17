@@ -126,3 +126,81 @@ export const Client = connector("test.client/v1", {
   /** Exits the device's Worker right after answering. */
   crash: rpc(v.undefined(), v.undefined()),
 });
+
+/** A provider of binary data, to observe what calls and events copy, move, or share. */
+export const Bytes = connector("test.bytes/v1", {
+  /** Reports the length and the sum of the bytes that arrived. */
+  inspect: rpc(
+    v.object({ bytes: v.instance(Uint8Array) }),
+    v.object({ length: v.number(), sum: v.number() }),
+  ),
+  /**
+   * Returns `size` bytes set to `fill`, moved with the result when `move` is set, and keeps them
+   * so `kept` can report on them. With `fail` set, it lists the bytes for transfer and then
+   * throws `BYTES_FAILED`.
+   */
+  make: rpc(
+    v.object({
+      size: v.number(),
+      fill: v.number(),
+      move: v.boolean(),
+      fail: v.optional(v.boolean()),
+    }),
+    v.instance(Uint8Array),
+  ),
+  /** How the provider now sees the bytes `make` returned last. */
+  kept: rpc(v.undefined(), v.object({ length: v.number(), detached: v.boolean() })),
+  /** Lists a shared buffer for transfer, which fails. */
+  badTransfer: rpc(v.undefined(), v.undefined()),
+  /** Waits `ms` milliseconds, then writes `value` into the first byte. */
+  write: rpc(
+    v.object({ bytes: v.instance(Uint8Array), value: v.number(), ms: v.number() }),
+    v.undefined(),
+  ),
+  /** Writes `value` into the first byte of a shared buffer. */
+  mark: rpc(v.object({ shared: v.instance(SharedArrayBuffer), value: v.number() }), v.undefined()),
+  /** Emits `shared` with a new shared buffer of 4 bytes, and keeps it so `peek` can read it. */
+  publish: rpc(v.undefined(), v.undefined()),
+  /** Returns a new shared buffer of 4 bytes, and keeps it so `peek` can read it. */
+  lend: rpc(v.undefined(), v.instance(SharedArrayBuffer)),
+  /** The first byte of the buffer `publish` emitted or `lend` returned last. */
+  peek: rpc(v.undefined(), v.number()),
+  shared: event(v.object({ shared: v.instance(SharedArrayBuffer) })),
+});
+
+/** Calls the bytes provider on demand and reports what each side saw. */
+export const BytesClient = connector("test.bytes-client/v1", {
+  /**
+   * Sends `size` bytes set to 1, moved when `move` is set. Reports what the provider received,
+   * and whether the caller's buffer was detached right after the call was made.
+   */
+  send: rpc(
+    v.object({ size: v.number(), move: v.boolean() }),
+    v.object({ length: v.number(), sum: v.number(), detachedAtOnce: v.boolean() }),
+  ),
+  /** Calls `make` and reports the length and the sum of the bytes that came back. */
+  fetch: rpc(
+    v.object({ size: v.number(), move: v.boolean() }),
+    v.object({ length: v.number(), sum: v.number() }),
+  ),
+  /**
+   * Makes a call that moves a buffer and fails: `cancelled` before it is sent, `timeout` while
+   * the provider works, `uncloneable` input, or an `invalid` transfer list. Reports the error
+   * code and whether the buffer was detached.
+   */
+  fail: rpc(
+    v.picklist(["cancelled", "timeout", "uncloneable", "invalid"]),
+    v.object({ code: v.string(), detached: v.boolean() }),
+  ),
+  /**
+   * Starts `n` calls `gapMs` apart that each move `size` bytes set to their index, without
+   * waiting for them. Reports whether every buffer was detached right after its call was made,
+   * and the sums the provider received, in call order.
+   */
+  sends: rpc(
+    v.object({ n: v.number(), gapMs: v.number(), size: v.number() }),
+    v.object({ detachedAtOnce: v.boolean(), sums: v.array(v.number()) }),
+  ),
+  /** Passes a shared buffer to `mark` and returns its first byte after the call. */
+  share: rpc(v.undefined(), v.number()),
+});

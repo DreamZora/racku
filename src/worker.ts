@@ -7,7 +7,8 @@
  * results, subscriptions, and events between devices travel on links that the backplane hands
  * over the control channel. The host validates RPC input and output for the ports the device
  * provides and the payloads it publishes, owns the timeouts of the calls the device makes, queues
- * calls and events while a slot is held, and counts calls and events.
+ * calls and events while a slot is held, moves the buffers that calls and results transfer, and
+ * counts calls and events.
  *
  * @decision .agents/decisions/261116_024226-backplane-links.md#links
  * @decision .agents/decisions/261116_024226-backplane-links.md#boot-and-fru
@@ -16,11 +17,13 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
  * @decision .agents/decisions/261116_024226-backplane-links.md#where-validation-happens
  * @decision .agents/decisions/261116_035534-call-metrics.md#counters
+ * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
  * @decision .agents/decisions/261112_043034-device-api.md#device-context
  */
 import { type ConnectorInfo, describeConnector, type EventSpec } from "./connector.ts";
 import {
   type ActivateScope,
+  type CallContext,
   type CallOptions,
   type DeviceContext,
   type DeviceDefinition,
@@ -61,9 +64,10 @@ import {
   type ToProvider,
 } from "./protocol.ts";
 import { validate } from "./schema.ts";
+import { detach, moveInto, transferList, untransferable } from "./transfer.ts";
 
 // Untyped on purpose: implementations come from device code and are checked at powerOn.
-type Impl = (input: unknown, call: { signal: AbortSignal; deadline: number }) => unknown;
+type Impl = (input: unknown, call: CallContext) => unknown;
 type EventHandler = (payload: unknown) => void | Promise<void>;
 type Outcome = { ok: true; value: unknown } | { ok: false; error: RackError };
 
@@ -84,6 +88,11 @@ interface Outgoing {
   readonly reject: (error: unknown) => void;
   /** The input until the call goes out on a link. */
   input: unknown;
+  /**
+   * The buffers the call took from the caller, or the ones it moved into its queued input. They
+   * leave with the input; any still attached when the call settles are detached.
+   */
+  transfer: ArrayBuffer[] | undefined;
   timer: ReturnType<typeof setTimeout> | undefined;
   cleanup: (() => void) | undefined;
   /** The link the call went out on, and its id there; unset while the call waits. */
@@ -442,7 +451,7 @@ function callOut(
 ): Promise<unknown> {
   const where = `${state.name}.${member}`;
   return new Promise((resolve, reject) => {
-    const { timeout, signal } = options;
+    const { timeout, signal, transfer } = options;
     const valid = timeout === undefined || (typeof timeout === "number" && timeout >= 0);
     const ms = valid && timeout !== undefined ? timeout : callTimeout;
     const call: Outgoing = {
@@ -454,6 +463,7 @@ function callOut(
       resolve,
       reject,
       input,
+      transfer: undefined,
       timer: undefined,
       cleanup: undefined,
       link: undefined,
@@ -463,6 +473,13 @@ function callOut(
     };
     stats.calls++;
     stats.pending++;
+    try {
+      // From here on the call owns the buffers, so they are gone whatever its outcome.
+      call.transfer = transferList(transfer, where);
+    } catch (error) {
+      settle(call, { ok: false, error: error as RackError });
+      return;
+    }
     if (!valid) {
       settle(call, failure("RACK_INVALID_INPUT", `${where}: timeout must be >= 0 ms`));
       return;
@@ -499,8 +516,10 @@ function enqueue(state: NeedState, call: Outgoing): void {
     return;
   }
   try {
-    // A call that goes out later still carries its input as it was when the device called.
-    call.input = structuredClone(call.input);
+    // A call that goes out later still carries its input as it was when the device called, and
+    // takes its buffers at once.
+    if (call.transfer === undefined) call.input = structuredClone(call.input);
+    else ({ value: call.input, buffers: call.transfer } = moveInto(call.input, call.transfer));
   } catch {
     // DataCloneError: the caller reports uncloneable input locally.
     settle(call, failure("RACK_INVALID_INPUT", `${where}: input cannot be cloned`));
@@ -519,14 +538,16 @@ function send(state: NeedState, call: Outgoing): void {
     return;
   }
   const id = link.nextId++;
+  const message = {
+    t: "call",
+    id,
+    member: call.member,
+    input: call.input,
+    deadline: call.deadline,
+  } satisfies ToProvider;
   try {
-    link.port.postMessage({
-      t: "call",
-      id,
-      member: call.member,
-      input: call.input,
-      deadline: call.deadline,
-    } satisfies ToProvider);
+    if (call.transfer === undefined) link.port.postMessage(message);
+    else link.port.postMessage(message, call.transfer);
   } catch {
     // DataCloneError: the caller reports uncloneable input locally.
     settle(call, failure("RACK_INVALID_INPUT", `${where}: input cannot be cloned`));
@@ -549,6 +570,7 @@ function settle(call: Outgoing, outcome: Outcome): void {
   call.settled = true;
   clearTimeout(call.timer);
   call.cleanup?.();
+  if (call.transfer !== undefined) detach(call.transfer);
   call.link?.pending.delete(call.id);
   const { stats } = call;
   if (call.queued) {
@@ -773,7 +795,10 @@ function onConsumerLink(link: ConsumerLink, message: ToProvider): void {
         message.input,
         message.deadline,
         link.serving,
-        (reply) => link.port.postMessage(reply),
+        (reply, transfer) =>
+          transfer === undefined
+            ? link.port.postMessage(reply)
+            : link.port.postMessage(reply, transfer),
       );
       return;
     case "cancel":
@@ -840,7 +865,8 @@ function onData(data: MessagePort, message: DataToWorker): void {
       message.input,
       message.deadline,
       external,
-      (reply) => data.postMessage(reply),
+      (reply, transfer) =>
+        transfer === undefined ? data.postMessage(reply) : data.postMessage(reply, transfer),
     );
   } else {
     external.get(message.id)?.abort(new RackError("RACK_CANCELLED", "call cancelled"));
@@ -854,7 +880,7 @@ async function serve(
   input: unknown,
   deadline: number,
   registry: Map<number, AbortController>,
-  reply: (result: CallResult) => void,
+  reply: (result: CallResult, transfer: ArrayBuffer[] | undefined) => void,
 ): Promise<void> {
   const state = booted;
   if (state === undefined) return;
@@ -873,6 +899,29 @@ async function serve(
     () => controller.abort(new RackError("RACK_TIMEOUT", `${address}: deadline passed`)),
     Math.max(0, deadline - Date.now()),
   );
+  /** Buffers the implementation moves with the result; created when it lists one. */
+  let moving: Set<ArrayBuffer> | undefined;
+  let sent = false;
+  const call: CallContext = {
+    signal: controller.signal,
+    deadline,
+    transfer(...buffers: ArrayBuffer[]) {
+      if (sent) {
+        throw new RackError("RACK_INVALID_OUTPUT", `${address}: the result was already sent`);
+      }
+      // Check every buffer first, so a list that throws records none of them.
+      for (const buffer of buffers) {
+        const reason = untransferable(buffer);
+        if (reason !== undefined) {
+          throw new RackError("RACK_INVALID_OUTPUT", `${address}: transfer: ${reason}`);
+        }
+      }
+      for (const buffer of buffers) {
+        moving ??= new Set();
+        moving.add(buffer);
+      }
+    },
+  };
   let result: CallResult;
   try {
     const spec = state.def.provides[port]?.members[member];
@@ -882,7 +931,7 @@ async function serve(
     }
     const parsed = await validate(spec.input, input);
     if (!parsed.ok) throw new RackError("RACK_INVALID_INPUT", `${address}: ${parsed.message}`);
-    const value = await impl(parsed.value, { signal: controller.signal, deadline });
+    const value = await impl(parsed.value, call);
     const output = await validate(spec.output, value);
     if (!output.ok) throw new RackError("RACK_INVALID_OUTPUT", `${address}: ${output.message}`);
     result = { t: "result", id, ok: true, value: output.value };
@@ -892,10 +941,14 @@ async function serve(
     clearTimeout(timer);
     registry.delete(id);
   }
+  sent = true;
+  // Only a result that succeeded carries the buffers, and sending it detaches them.
+  const transfer = result.ok && moving !== undefined ? [...moving] : undefined;
   try {
-    reply(result);
+    reply(result, transfer);
   } catch {
-    // DataCloneError: the provider reports uncloneable output.
+    // DataCloneError: the provider reports uncloneable output, or a listed buffer that got
+    // detached after it was listed.
     result = {
       t: "result",
       id,
@@ -903,11 +956,13 @@ async function serve(
       error: { code: "RACK_INVALID_OUTPUT", message: `${address}: output cannot be cloned` },
     };
     try {
-      reply(result);
+      reply(result, undefined);
     } catch {
       // The link is closed: its consumer is gone and nobody waits for the result.
     }
   }
+  // A failed call does not carry the buffers, yet they are gone all the same.
+  if (!result.ok && moving !== undefined) detach([...moving]);
   serving--;
   Atomics.sub(gauge, 0, 1);
   if (stats !== undefined) {

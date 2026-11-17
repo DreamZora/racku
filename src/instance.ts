@@ -226,10 +226,13 @@ export class Instance {
   /**
    * Posts a data-channel message to the Worker.
    *
-   * @throws DataCloneError when the message cannot be cloned.
+   * @param transfer Buffers to move with the message instead of copying them.
+   * @throws DataCloneError when the message cannot be cloned; no buffer is detached then.
    */
-  post(message: DataToWorker): void {
-    if (!this.dead) this.#data.postMessage(message);
+  post(message: DataToWorker, transfer?: ArrayBuffer[]): void {
+    if (this.dead) return;
+    if (transfer === undefined) this.#data.postMessage(message);
+    else this.#data.postMessage(message, transfer);
   }
 
   /**

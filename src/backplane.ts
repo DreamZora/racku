@@ -10,6 +10,7 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#rpc
  * @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
  * @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
+ * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
  */
 import type { CallOptions } from "./device.ts";
 import { fromWireError, RackError, type WireError } from "./errors.ts";
@@ -23,6 +24,7 @@ import {
   type Marker,
   QUEUE_LIMIT,
 } from "./protocol.ts";
+import { detach, moveInto, transferList } from "./transfer.ts";
 
 /** Lifecycle state of a slot as reported by `status()`. */
 export type SlotState = "online" | "swapping" | "degraded" | "resetting" | "faulted";
@@ -34,7 +36,12 @@ interface Call extends RoutedCall {
   readonly provider: string;
   readonly port: string;
   readonly member: string;
-  readonly input: unknown;
+  input: unknown;
+  /**
+   * The buffers the call took from the caller, or the ones it moved into its queued input. They
+   * leave with the input; any still attached when the call settles are detached.
+   */
+  transfer: ArrayBuffer[] | undefined;
   readonly deadline: number;
   readonly caller: string;
   readonly deliver: (outcome: Outcome) => void;
@@ -381,37 +388,56 @@ export class Backplane {
     caller: string,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
+      const { timeout, signal } = options;
+      let transfer: ArrayBuffer[] | undefined;
+      try {
+        transfer = transferList(options.transfer, `${address}.${method}`);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      // The call owns its buffers from here on, so a call that fails early still takes them.
+      const refuse = (error: RackError) => {
+        if (transfer !== undefined) detach(transfer);
+        reject(error);
+      };
       let device: string;
       let port: string;
       try {
         ({ device, port } = parseAddress(address));
       } catch {
-        reject(new RackError("RACK_NO_ROUTE", `"${address}" is not a <device>.<port> address`));
+        refuse(new RackError("RACK_NO_ROUTE", `"${address}" is not a <device>.<port> address`));
         return;
       }
       const slot = this.#slots.get(device);
       const info = slot?.removed ? undefined : slot?.fru.provides[port];
       if (info === undefined) {
-        reject(new RackError("RACK_NO_ROUTE", `${address} does not exist`));
+        refuse(new RackError("RACK_NO_ROUTE", `${address} does not exist`));
         return;
       }
       if (info.members[method] !== "rpc") {
-        reject(new RackError("RACK_NO_ROUTE", `${address} has no RPC member ${method}`));
+        refuse(new RackError("RACK_NO_ROUTE", `${address} has no RPC member ${method}`));
         return;
       }
-      const { timeout, signal } = options;
       if (timeout !== undefined && !(typeof timeout === "number" && timeout >= 0)) {
-        reject(
+        refuse(
           new RackError("RACK_INVALID_INPUT", `${address}.${method}: timeout must be >= 0 ms`),
         );
         return;
       }
       if (signal?.aborted) {
-        reject(new RackError("RACK_CANCELLED", `${address}.${method}: call cancelled`));
+        refuse(new RackError("RACK_CANCELLED", `${address}.${method}: call cancelled`));
         return;
       }
-      const call = this.#create(device, port, method, input, timeout, caller, (outcome) =>
-        outcome.ok ? resolve(outcome.value) : reject(fromWireError(outcome.error)),
+      const call = this.#create(
+        device,
+        port,
+        method,
+        input,
+        transfer,
+        timeout,
+        caller,
+        (outcome) => (outcome.ok ? resolve(outcome.value) : reject(fromWireError(outcome.error))),
       );
       if (signal !== undefined) {
         const onAbort = () =>
@@ -463,6 +489,7 @@ export class Backplane {
     port: string,
     member: string,
     input: unknown,
+    transfer: ArrayBuffer[] | undefined,
     timeout: number | undefined,
     caller: string,
     deliver: (outcome: Outcome) => void,
@@ -475,6 +502,7 @@ export class Backplane {
       port,
       member,
       input,
+      transfer,
       deadline: Date.now() + ms,
       caller,
       deliver,
@@ -506,6 +534,21 @@ export class Backplane {
         this.#finish(call, failure("RACK_LINK_DOWN", message), false);
         return;
       }
+      if (call.transfer !== undefined) {
+        try {
+          // The call takes its buffers at once, even though it goes out later.
+          ({ value: call.input, buffers: call.transfer } = moveInto(call.input, call.transfer));
+        } catch {
+          // DataCloneError: input from outside the rack has not crossed a thread yet.
+          const where = `${call.provider}.${call.port}.${call.member}`;
+          this.#finish(
+            call,
+            failure("RACK_INVALID_INPUT", `${where}: input cannot be cloned`),
+            false,
+          );
+          return;
+        }
+      }
       slot.queue.push(call);
       call.queuedIn = slot;
       return;
@@ -516,15 +559,18 @@ export class Backplane {
       return;
     }
     try {
-      target.post({
-        t: "call",
-        id: call.id,
-        port: call.port,
-        member: call.member,
-        input: call.input,
-        deadline: call.deadline,
-        caller: call.caller,
-      });
+      target.post(
+        {
+          t: "call",
+          id: call.id,
+          port: call.port,
+          member: call.member,
+          input: call.input,
+          deadline: call.deadline,
+          caller: call.caller,
+        },
+        call.transfer,
+      );
     } catch {
       // DataCloneError: input from outside the rack has not crossed a thread yet.
       const where = `${call.provider}.${call.port}.${call.member}`;
@@ -544,6 +590,7 @@ export class Backplane {
     call.settled = true;
     clearTimeout(call.timer);
     call.cleanup?.();
+    if (call.transfer !== undefined) detach(call.transfer);
     if (call.queuedIn !== undefined) {
       const queue = call.queuedIn.queue;
       const index = queue.indexOf(call);

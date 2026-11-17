@@ -130,7 +130,7 @@ The first argument of every hook, `ctx`, provides:
 
 | Member | Purpose |
 |---|---|
-| `ctx.ports.<need>.<method>(input, { timeout?, signal? })` | Call a needed connector. |
+| `ctx.ports.<need>.<method>(input, { timeout?, signal?, transfer? })` | Call a needed connector. |
 | `ctx.on.<need>.<event>(handler)` | Subscribe to an event; returns an unsubscribe function. |
 | `ctx.emit.<port>.<event>(payload)` | Publish an event on a provided port. |
 | `ctx.config` | The configuration, validated by the `config` schema. |
@@ -140,9 +140,50 @@ The first argument of every hook, `ctx`, provides:
 
 `activate` also receives `scope`. `scope.every(ms, task)` and `scope.after(ms, task)` schedule timers that stop on `deactivate`, and each returns a function that cancels its timer; `scope.signal` aborts on `deactivate`. Errors thrown by timer tasks and event handlers are logged; they do not crash the device.
 
-Data that crosses the backplane must survive `structuredClone`: no functions, no class instances. Throw `new RackError(code, message, data?)` to give callers a code they can branch on. Device codes must not start with `RACK_`, and any other exception reaches the caller as `RACK_DEVICE_FAULT`.
+Data that crosses the backplane must survive `structuredClone`: no functions, no class instances. It is copied, unless you move or share binary data as [Binary data](#binary-data) describes. Throw `new RackError(code, message, data?)` to give callers a code they can branch on. Device codes must not start with `RACK_`, and any other exception reaches the caller as `RACK_DEVICE_FAULT`.
 
 Each Worker receives a copy of `process.env` as it is when the Worker starts.
+
+## Binary data
+
+Calls and events copy their data from one Worker to the next. For large binary data, a device can move the data or share it instead.
+
+**Moving** an `ArrayBuffer` hands its memory to the other side without a copy, and the devices stay fully isolated: the sender's buffer is detached, and every view on it becomes empty. A caller lists the buffers to move in the `transfer` option of the call. A provider passes the buffers of its result to `call.transfer`:
+
+```ts
+// In connectors.ts: bytes can move in both directions.
+export const Gzip = connector("acme.gzip/v1", {
+  compress: rpc(v.object({ bytes: v.instance(Uint8Array) }), v.instance(Uint8Array)),
+});
+
+// In the provider's powerOn:
+return {
+  gzip: {
+    compress({ bytes }, call) {
+      const packed = Bun.gzipSync(bytes);
+      call.transfer(packed.buffer); // the result moves to the caller
+      return packed;
+    },
+  },
+};
+
+// In a device that needs Gzip. The call takes data.buffer, so data is empty afterward.
+const packed = await ctx.ports.gzip.compress({ bytes: data }, { transfer: [data.buffer] });
+```
+
+- **When buffers are taken:** a call takes the buffers in `transfer` as soon as it is made, whatever its outcome. This includes a call that waits while its provider is swapped. A caller therefore cannot retry with the same buffers.
+- **Calls from outside the rack:** `rack.call` takes the same option.
+- **Invalid lists:** the call fails with `RACK_INVALID_INPUT`, and nothing is detached, when an entry is not an attached `ArrayBuffer`, is a `SharedArrayBuffer`, or appears twice.
+- **Results:** the buffers passed to `call.transfer` are gone once the result is sent, even when the call fails. Passing a `SharedArrayBuffer` fails the call with `RACK_INVALID_OUTPUT`.
+- **Events:** an event is copied or shared, never moved, because it goes to every subscriber.
+
+**Sharing** a `SharedArrayBuffer` gives every receiver the same memory, so nothing is copied. This works in the input or the result of a call, in an event, and with `rack.call`, and a typed array on a `SharedArrayBuffer` is shared too. Declare such a field with `v.instance(SharedArrayBuffer)`. The rack cannot see or order access to shared memory, so these rules are up to the devices:
+
+- **A shared buffer belongs to the call that carries it.** The caller leaves it alone until the call succeeds. The provider neither keeps it nor uses it after returning.
+- **Drop the buffer after a failed call.** After a call fails, times out, or is cancelled, do not reuse the buffer: the provider may still be running and writing to it.
+- **Events are read-only.** A shared buffer in an event is read-only for the publisher and for every subscriber.
+- **Do not keep a shared buffer as a channel.** Do not exchange data with another device through a kept buffer outside calls and events, such as a ring buffer or `Atomics.wait` and `Atomics.notify`. The backplane cannot hold or switch that traffic during a swap, and the new instance never gets the buffer. `Atomics.wait` also blocks the device's whole Worker.
+- **Validate the bytes.** A schema checks that a buffer is there, not what it holds.
 
 ## The rack manifest
 
@@ -301,7 +342,7 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 | `RACK_CANCELLED` | The caller cancelled the call. |
 | `RACK_LINK_DOWN` | The provider is offline, resetting, faulted, or retired, or the rack is stopped. |
 | `RACK_NO_ROUTE` | No such device, port, or method. |
-| `RACK_INVALID_INPUT` / `RACK_INVALID_OUTPUT` | Input or output failed its schema or cannot be cloned. |
+| `RACK_INVALID_INPUT` / `RACK_INVALID_OUTPUT` | Input or output failed its schema, cannot be cloned, or lists a buffer that cannot be transferred. |
 | `RACK_INVALID_CONFIG` | A device's configuration failed its schema. |
 | `RACK_DEVICE_FAULT` | The device threw a non-`RackError` exception, or crashed. |
 | `RACK_MANIFEST` | The manifest or the assembly is invalid. |
