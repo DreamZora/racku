@@ -4,7 +4,7 @@ rack42u is a Bun framework for building an application out of hot-swappable **de
 
 The framework provides the rack runtime and a few standard devices. What you mount in the rack, and whether the result is an API server, a worker process, or something else, is up to you.
 
-> **Status: P1.** P1 adds scanned racks, cold swaps and restarts, update safety, and `rack ctl` to P0, the first usable version. See [Not supported yet](#not-supported-yet) for what is still missing.
+> **Status: P2.** P2 adds watchdogs for hung devices and bounds on every backlog between devices. P1 added scanned racks, cold swaps and restarts, update safety, and `rack ctl` to P0, the first usable version. See [Not supported yet](#not-supported-yet) for what is still missing.
 
 ## Requirements
 
