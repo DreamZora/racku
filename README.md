@@ -278,6 +278,7 @@ From the command line:
 rack start [manifest]   # default: rack.ts in the current directory
 rack dev [manifest]     # start, then reload devices whose files change
 rack plan [manifest]    # print the plan without starting; --write or --check the plan file
+rack ctl <operation>    # operate the rack running from this directory; see below
 ```
 
 On `SIGINT` or `SIGTERM` both commands shut down in order and exit with code 0; a second signal exits at once with code 1. They exit with code 1 when the rack fails to start.
@@ -305,6 +306,7 @@ await running.stop();
 | `drainTimeout` | 10 000 ms | How long a retiring instance may finish its calls. |
 | `probation` | 60 000 ms | How long a new instance may crash before it falls back to known-good firmware; 0 turns fallback off. |
 | `historyLimit` | 256 | Most update records `history()` keeps. |
+| `control` | off | Open the management endpoint: `true` for the platform's default, or `{ port, token? }` for loopback TCP. |
 | `plan` | `true` | How a scanned rack uses its plan file: `true` follows it, `"update"` rewrites it as `rack dev` does, and `false` neither reads nor writes it. |
 
 The handle returned by `start`:
@@ -437,6 +439,41 @@ An update can pass `selfTest` and still be defective. The rack guards against th
 - **Fields.** `cause` says what asked for the update: `reload`, `swap`, `restart`, `rollback`, `fallback`, `plug`, or `unplug`. Records of one group replacement share a `group`. The rollback records are the ones whose cause is `rollback` or `fallback`.
 - **Limit.** The history keeps at most `historyLimit` records, 256 by default, in memory, and a restart of the rack starts it empty.
 - **Firmware files.** The rack deletes the firmware bundles it built once nothing needs them: no instance, no known-good firmware, and no kept record. So `.rack/firmware/` stays bounded, and `rollback` reaches only the firmware the kept records name.
+
+## Managing a running rack
+
+`rack start` and `rack dev` open a management endpoint, and `rack ctl` operates the rack through it:
+
+```sh
+rack ctl status                          # each device's slot, state, and firmware
+rack ctl metrics
+rack ctl reload
+rack ctl swap <device> [source]
+rack ctl restart <device> [--no-cascade]
+rack ctl rollback <device> [--to <firmware>]
+rack ctl history [device]
+rack ctl stop                            # shut down in order, like Ctrl-C
+```
+
+`rack ctl` finds the rack whose base directory is the current directory, or `--dir <path>`. It prints the result as JSON and exits with 0, or prints the error and exits with 1.
+
+**Who can connect.** Nothing listens on the network.
+- On Linux and macOS, the endpoint is a Unix socket in a directory that only your user can enter: `$XDG_RUNTIME_DIR/rack42u/`, or `~/.local/state/rack42u/control/`. Only your user and root can connect.
+  - A socket left behind by a rack that crashed is replaced.
+  - While a rack answers on the socket, a second rack for the same directory refuses to start.
+- With `--control-port <port>`, and by default on Windows, the endpoint listens on loopback TCP, `127.0.0.1`.
+  - Every request needs the rack's token as `Authorization: Bearer <token>`. The token is random on each start, unless `RACK_CONTROL_TOKEN` sets it.
+  - The rack writes the address and the token to a control file in the same private directory. On Windows, that directory is `%LOCALAPPDATA%\rack42u\control\`.
+  - The endpoint refuses requests that carry an `Origin` header or a `Host` other than its own, so a web page cannot drive it.
+  - `rack ctl --url <url> --token <token>` reaches such a rack from anywhere on the machine.
+  - The Windows defaults are not tested yet: the project's tests run on Linux, and they cover the TCP endpoint through `--control-port`.
+
+**The protocol.** Each operation is `POST /v1/<operation>` with the body `{ "args": [...] }`, and runs the rack-handle method of the same name.
+- It answers `{ "ok": true, "value": ... }`, or `{ "ok": false, "error": { code, message } }`.
+- `plug` takes its slot spec as `{ source, name?, config? }`.
+- Operations from the endpoint and from code share one queue, so they run one at a time, in call order.
+
+From code, `start(manifest, { control: true })` opens the same endpoint.
 
 ## HTTP panel
 

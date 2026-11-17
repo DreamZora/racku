@@ -143,6 +143,24 @@ Measured on 2026-11-17 on Bun 1.4.4 and Linux, with probes outside the repositor
     - operations from the endpoint and from code queued in call order
   - A README section on `rack ctl`, and the new module in the `AGENTS.md` layout.
 
+## Implementation
+
+- **The endpoint:** `src/control.ts`.
+  - `openControl` serves both transports with one handler, `serve`.
+  - `controlPaths` and `controlTransport` choose the locations and the transport, and take the platform as a parameter so that tests cover the Windows choices.
+- **Who opens it.**
+  - `start()` opens the endpoint with the `control` option, once the rack runs, and closes it in `stop()`.
+  - `rack start` and `rack dev` open their own in `src/cli.ts`, whose `stop` runs the same shutdown as a signal, so the process exits after `rack ctl stop`.
+- **The command:** `rack ctl`, `--control-port`, and flags that take values are in `src/cli.ts`.
+- **Details that Bun shaped.**
+  - Bun creates a socket with the mode its umask allows, 775 in the probe. The private directory keeps others out until `chmod` narrows the socket to 600.
+  - Bun removes the socket file when the server stops.
+  - A live endpoint is told from a stale socket file by a request to it: a stale file answers nothing.
+- **Tests:**
+  - `test/control.test.ts` covers both transports. Spawned `rack` processes and in-process racks keep their sockets in a temporary runtime directory, `CONTROL_DIR` in `test/fixtures/app.ts`.
+  - Ten parts of the implementation were each taken out in turn, and each time at least one test failed.
+  - The Windows defaults are tested only as choices, through the platform parameter, not on Windows itself.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-17, after setting its transports in review: authenticated HTTP on loopback for Windows, and a Unix socket guarded by file permissions on Linux.

@@ -25,6 +25,7 @@ import { readdir, unlink } from "node:fs/promises";
 import { basename, join, resolve as resolvePath } from "node:path";
 import { Backplane, type Slot, type SlotState } from "./backplane.ts";
 import type { ConnectorInfo } from "./connector.ts";
+import { type Control, openControl } from "./control.ts";
 import type { CallOptions } from "./device.ts";
 import { RackError, toWireError, type WireError } from "./errors.ts";
 import { buildFirmware as buildBundle, type Firmware } from "./firmware.ts";
@@ -186,6 +187,13 @@ export interface StartOptions {
   probation?: number;
   /** Most update records the history keeps, a positive integer; default 256. */
   historyLimit?: number;
+  /**
+   * Opens the management endpoint that `rack ctl` uses, once the rack runs: `true` for the
+   * platform's default, a Unix socket on Linux and macOS and loopback TCP on Windows, or
+   * `{ port }` for loopback TCP with a bearer token, `token` or `RACK_CONTROL_TOKEN` or a random
+   * one. Its `stop` operation stops the rack. `rack start` and `rack dev` open one of their own.
+   */
+  control?: boolean | { port?: number; token?: string };
 }
 
 /** A running rack. */
@@ -347,6 +355,8 @@ class Rack implements InstanceHost {
   /** Every instance whose Worker has not exited. */
   readonly #instances = new Set<Instance>();
   #phase: Phase = "starting";
+  readonly #controlOption: StartOptions["control"];
+  #control: Control | undefined;
   #startFault: RackError | undefined;
   #panel: Panel | undefined;
   #operations: Promise<unknown> = Promise.resolve();
@@ -363,6 +373,7 @@ class Rack implements InstanceHost {
       throw new RackError("RACK_MANIFEST", 'start option plan must be true, false, or "update"');
     }
     this.#patch = manifest.patch;
+    this.#controlOption = options.control;
     this.#probationMs = options.probation ?? 60_000;
     if (!(Number.isFinite(this.#probationMs) && this.#probationMs >= 0)) {
       throw new RackError("RACK_MANIFEST", "start option probation must be a number >= 0");
@@ -490,6 +501,18 @@ class Rack implements InstanceHost {
       }
       for (const slot of this.#slots.values()) this.#knownGood.set(slot.name, slot.firmware);
       this.#phase = "running";
+      const control = this.#controlOption;
+      if (control !== undefined && control !== false) {
+        const handle = this.handle();
+        const { port, token } = control === true ? {} : control;
+        this.#control = await openControl(handle, {
+          baseDir: this.#baseDir,
+          ...(port === undefined ? {} : { port }),
+          ...(token === undefined ? {} : { token }),
+          stop: () => void handle.stop(),
+        });
+        this.#log("info", "control listening", { address: this.#control.address });
+      }
       this.#log("info", `rack ${this.#manifest.name} started`, { devices: this.#slots.size });
     } catch (error) {
       await this.#abortStart();
@@ -771,6 +794,8 @@ class Rack implements InstanceHost {
 
   async #abortStart(): Promise<void> {
     this.#phase = "stopping";
+    await this.#control?.close().catch(() => undefined);
+    this.#control = undefined;
     await this.#panel?.stop().catch(() => undefined);
     this.#panel = undefined;
     for (const slot of this.#ordered().reverse()) {
@@ -789,6 +814,8 @@ class Rack implements InstanceHost {
   async #stop(): Promise<void> {
     if (this.#phase !== "running") return;
     this.#phase = "stopping";
+    await this.#control?.close().catch(() => undefined);
+    this.#control = undefined;
     await this.#panel?.stop();
     this.#panel = undefined;
     // Top down: upper devices finish their work while the devices below still serve them.

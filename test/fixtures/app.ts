@@ -24,6 +24,12 @@ export const ROOT = join(import.meta.dir, "..", "..");
 /** This directory; use it as the base directory of racks that mount fixture devices. */
 export const FIXTURES = import.meta.dir;
 
+/**
+ * The runtime directory of the `rack` processes that tests start, so their management sockets
+ * and control files stay out of the user's own.
+ */
+export const CONTROL_DIR = join(tmpdir(), `rack42u-test-control-${process.pid}`);
+
 /** A temporary app directory whose `node_modules` links to this repository. */
 export interface TempApp {
   dir: string;
@@ -151,7 +157,7 @@ export class Cli {
   ) {
     this.process = Bun.spawn(command, {
       cwd,
-      env: { ...process.env, ...env },
+      env: { ...process.env, XDG_RUNTIME_DIR: CONTROL_DIR, ...env },
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
