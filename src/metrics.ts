@@ -59,6 +59,18 @@ export type PortMetrics = Record<string, ServedRpcMetrics | EmittedEventMetrics>
 /** Counters of a need, keyed by member name. */
 export type NeedMetrics = Record<string, CalledRpcMetrics | ReceivedEventMetrics>;
 
+/**
+ * The delay of a device's event loop: how late the timer of its event-loop watchdog ran.
+ *
+ * @decision .agents/decisions/261117_062959-watchdog.md#configuration-and-observation
+ */
+export interface LoopMetrics {
+  /** Delay of the timer's last tick, in ms. */
+  delayMs: number;
+  /** Largest delay since the instance booted, in ms. */
+  maxDelayMs: number;
+}
+
 /** Counters of one device's installed instance. */
 export interface DeviceMetrics {
   /** Device name. */
@@ -67,6 +79,8 @@ export interface DeviceMetrics {
   firmware: string;
   /** Millisecond timestamp of the instance's boot; counters start there. */
   since: number;
+  /** How late the device's event loop runs, as the timer of its event-loop watchdog measures. */
+  loop: LoopMetrics;
   /** Counters of each provided port, keyed by port name. */
   provides: Record<string, PortMetrics>;
   /** Counters of each need, keyed by need name. */

@@ -45,6 +45,7 @@ export {
   type PortImpl,
   type PortImpls,
   type Ports,
+  type Watchdog,
 } from "./device.ts";
 export {
   isRackError,
@@ -53,6 +54,7 @@ export {
   type WireError,
 } from "./errors.ts";
 export { type FetchHandler, Http, httpHandler } from "./http.ts";
+export type { WatchdogStatus } from "./instance.ts";
 export type { LogEntry, Logger } from "./log.ts";
 export {
   type HttpPanelSpec,
@@ -71,6 +73,7 @@ export type {
   CalledRpcMetrics,
   DeviceMetrics,
   EmittedEventMetrics,
+  LoopMetrics,
   NeedMetrics,
   PortMetrics,
   RackMetrics,

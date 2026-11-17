@@ -5,19 +5,25 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#channels
  * @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
  * @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
+ * @decision .agents/decisions/261117_062959-watchdog.md#feeding-and-checking
  */
 import type { HookName } from "./device.ts";
 import { fromWireError, RackError } from "./errors.ts";
 import type { Firmware } from "./firmware.ts";
 import type { InstanceMetrics } from "./metrics.ts";
-import type {
-  ControlNotice,
-  ControlPayload,
-  DataFromWorker,
-  DataToWorker,
-  Fru,
-  LogNotice,
-  Marker,
+import {
+  type ControlNotice,
+  type ControlPayload,
+  type DataFromWorker,
+  type DataToWorker,
+  type Fru,
+  type LogNotice,
+  type Marker,
+  SHARED_LENGTH,
+  SHARED_LOOP,
+  SHARED_SERVING,
+  SHARED_WATCHDOGS,
+  type WatchdogNotice,
 } from "./protocol.ts";
 
 const WORKER_URL = new URL("./worker.ts", import.meta.url).href;
@@ -28,6 +34,16 @@ export interface InstanceHost {
   onLog(instance: Instance, notice: LogNotice): void;
   /** The Worker exited; `deliberate` is `true` when the rack terminated it. */
   onExit(instance: Instance, deliberate: boolean, detail: string): void;
+  /** A watchdog of the active instance went `timeout` ms without a feed; it is no longer checked. */
+  onBite(instance: Instance, name: string, timeout: number): void;
+}
+
+/** A watchdog of an instance, as `status()` reports it. */
+export interface WatchdogStatus {
+  name: string;
+  timeout: number;
+  /** When the rack last saw a feed, or began to check, a millisecond timestamp. */
+  lastFed: number;
 }
 
 /** A wire from one need of an instance to a provider port. */
@@ -47,6 +63,24 @@ interface Request {
   reject(error: unknown): void;
   timer: ReturnType<typeof setTimeout>;
 }
+
+/** A watchdog the main thread checks: the event loop's, or one the device armed. */
+interface WatchdogState {
+  readonly name: string;
+  readonly timeout: number;
+  /** Index of its feed counter in the shared memory. */
+  readonly counter: number;
+  /** The counter at the last check. */
+  seen: number;
+  /** Checks in a row that found no feed. */
+  missed: number;
+  /** When a check last saw a feed, or when checks began, a millisecond timestamp. */
+  fedAt: number;
+  timer: ReturnType<typeof setInterval> | undefined;
+}
+
+/** The checks without a feed after which a watchdog bites; they run four times per timeout. */
+const CHECKS_PER_TIMEOUT = 4;
 
 /** One running instance of a device. */
 export class Instance {
@@ -70,8 +104,18 @@ export class Instance {
   readonly #data: MessagePort;
   /** The Worker's end of the data channel, transferred with the boot request. */
   readonly #bootPort: MessagePort;
-  /** Shared with the Worker, which counts the calls it serves there. */
-  readonly #gauge = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+  /** Shared with the Worker, which counts the calls it serves and the feeds of its watchdogs. */
+  readonly #gauge = new Int32Array(
+    new SharedArrayBuffer(SHARED_LENGTH * Int32Array.BYTES_PER_ELEMENT),
+  );
+  /** The timeout of the event-loop watchdog; 0 when watchdogs are off. */
+  #loopTimeout = 0;
+  /** Watchdogs by the index of their feed counter, in the order they were armed. */
+  readonly #watchdogs = new Map<number, WatchdogState>();
+  /** The watchdogs are checked: the instance is active. */
+  #watching = false;
+  /** Settles when the Worker's thread has stopped, which can come later than {@link dead}. */
+  readonly #closed = Promise.withResolvers<void>();
   readonly #host: InstanceHost;
   readonly #requests = new Map<number, Request>();
   readonly #drainWaiters = new Set<() => void>();
@@ -104,6 +148,7 @@ export class Instance {
     });
     this.#worker.addEventListener("close", (event: Event) => {
       const code = (event as CloseEvent).code;
+      this.#closed.resolve();
       this.#exit(`exited with code ${code}${this.#lastError ? `: ${this.#lastError}` : ""}`);
     });
     this.#data.addEventListener("message", (event) => {
@@ -114,7 +159,23 @@ export class Instance {
 
   /** Calls the instance is serving, from links and from outside the rack. */
   get serving(): number {
-    return Atomics.load(this.#gauge, 0);
+    return Atomics.load(this.#gauge, SHARED_SERVING);
+  }
+
+  /** The instance's watchdogs, the event loop's first; none when watchdogs are off. */
+  get watchdogs(): WatchdogStatus[] {
+    return [...this.#watchdogs.values()].map(({ name, timeout, fedAt }) => ({
+      name,
+      timeout,
+      lastFed: fedAt,
+    }));
+  }
+
+  /** The longest timeout among the instance's watchdogs, or 0 when it has none. */
+  get longestWatchdog(): number {
+    let longest = 0;
+    for (const { timeout } of this.#watchdogs.values()) longest = Math.max(longest, timeout);
+    return longest;
   }
 
   /**
@@ -128,8 +189,12 @@ export class Instance {
     config: unknown;
     baseDir: string;
     callTimeout: number;
+    /** Timeout of the event-loop watchdog, or 0 to check no watchdogs. */
+    watchdog: number;
     timeout: number;
   }): Promise<Fru> {
+    this.#loopTimeout = options.watchdog;
+    if (options.watchdog > 0) this.#addWatchdog(SHARED_LOOP, "event loop", options.watchdog);
     const fru = (await this.request(
       {
         op: "boot",
@@ -142,6 +207,7 @@ export class Instance {
         baseDir: options.baseDir,
         callTimeout: options.callTimeout,
         gauge: this.#gauge.buffer as SharedArrayBuffer,
+        watchdog: options.watchdog,
         port: this.#bootPort,
       },
       options.timeout,
@@ -170,7 +236,8 @@ export class Instance {
   }
 
   /**
-   * Runs a lifecycle hook in the Worker.
+   * Runs a lifecycle hook in the Worker. The watchdogs are checked from the end of `activate` to
+   * the start of `deactivate`.
    *
    * @returns The hook's result (the state, for `snapshot`).
    * @throws RackError `RACK_HOOK_FAILED` when the hook fails, times out, or the instance dies.
@@ -180,8 +247,12 @@ export class Instance {
     timeout: number,
     extra: { state?: unknown; from?: string } = {},
   ): Promise<unknown> {
+    // @decision .agents/decisions/261117_062959-watchdog.md#two-kinds-of-watchdog
+    if (hook === "deactivate") this.#unwatch();
     try {
-      return await this.request({ op: "hook", hook, ...extra }, timeout, hook);
+      const value = await this.request({ op: "hook", hook, ...extra }, timeout, hook);
+      if (hook === "activate") this.#watch();
+      return value;
     } catch (error) {
       const cause =
         error instanceof RackError ? error : new RackError("RACK_HOOK_FAILED", String(error));
@@ -295,6 +366,26 @@ export class Instance {
     this.#exit("terminated by the rack");
   }
 
+  /**
+   * Terminates the Worker of a hung instance, as {@link terminate} does: the instance is gone at
+   * once. A Worker that hangs in JavaScript stops within milliseconds, but one blocked in native
+   * code only when that call returns.
+   *
+   * @returns Whether the Worker's thread stopped within `timeout` ms.
+   */
+  async kill(timeout: number): Promise<boolean> {
+    this.terminate();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeout);
+    });
+    try {
+      return await Promise.race([this.#closed.promise.then(() => true), expired]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   #externalDrained(): Promise<void> {
     if (this.inFlight.size === 0) return Promise.resolve();
     return new Promise((resolve) => this.#drainWaiters.add(resolve));
@@ -302,7 +393,8 @@ export class Instance {
 
   #onControl(notice: ControlNotice): void {
     if ("op" in notice) {
-      this.#host.onLog(this, notice);
+      if (notice.op === "watchdog") this.#onWatchdog(notice);
+      else this.#host.onLog(this, notice);
       return;
     }
     const request = this.#requests.get(notice.id);
@@ -313,8 +405,78 @@ export class Instance {
     else request.reject(fromWireError(notice.error));
   }
 
+  // ---- Watchdogs ----
+
+  /** The device armed a watchdog, or cancelled one. */
+  #onWatchdog(notice: WatchdogNotice): void {
+    const counter = SHARED_WATCHDOGS + notice.index;
+    this.#stopChecking(this.#watchdogs.get(counter));
+    this.#watchdogs.delete(counter);
+    if (notice.armed === undefined || this.#loopTimeout === 0 || this.dead) return;
+    const watchdog = this.#addWatchdog(counter, notice.armed.name, notice.armed.timeout);
+    if (this.#watching) this.#startChecking(watchdog);
+  }
+
+  #addWatchdog(counter: number, name: string, timeout: number): WatchdogState {
+    const watchdog: WatchdogState = {
+      name,
+      timeout,
+      counter,
+      seen: 0,
+      missed: 0,
+      fedAt: Date.now(),
+      timer: undefined,
+    };
+    this.#watchdogs.set(counter, watchdog);
+    return watchdog;
+  }
+
+  #watch(): void {
+    if (this.#watching || this.#loopTimeout === 0 || this.dead) return;
+    this.#watching = true;
+    for (const watchdog of this.#watchdogs.values()) this.#startChecking(watchdog);
+  }
+
+  #unwatch(): void {
+    this.#watching = false;
+    for (const watchdog of this.#watchdogs.values()) this.#stopChecking(watchdog);
+  }
+
+  #startChecking(watchdog: WatchdogState): void {
+    this.#stopChecking(watchdog);
+    watchdog.seen = Atomics.load(this.#gauge, watchdog.counter);
+    watchdog.missed = 0;
+    watchdog.fedAt = Date.now();
+    // Counting checks instead of comparing clocks keeps a change of the system clock, or a busy
+    // main thread, from making a watchdog bite early.
+    const timer = setInterval(() => this.#check(watchdog), watchdog.timeout / CHECKS_PER_TIMEOUT);
+    timer.unref();
+    watchdog.timer = timer;
+  }
+
+  #stopChecking(watchdog: WatchdogState | undefined): void {
+    if (watchdog?.timer === undefined) return;
+    clearInterval(watchdog.timer);
+    watchdog.timer = undefined;
+  }
+
+  #check(watchdog: WatchdogState): void {
+    const count = Atomics.load(this.#gauge, watchdog.counter);
+    if (count !== watchdog.seen) {
+      watchdog.seen = count;
+      watchdog.missed = 0;
+      watchdog.fedAt = Date.now();
+      return;
+    }
+    watchdog.missed++;
+    if (watchdog.missed < CHECKS_PER_TIMEOUT) return;
+    this.#unwatch();
+    this.#host.onBite(this, watchdog.name, watchdog.timeout);
+  }
+
   #exit(detail: string): void {
     if (this.dead) return;
+    this.#unwatch();
     this.dead = true;
     for (const request of this.#requests.values()) {
       clearTimeout(request.timer);

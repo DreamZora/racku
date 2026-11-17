@@ -24,7 +24,8 @@ import { isRackManifest, type RackManifest } from "./manifest.ts";
 import { planRack, type RackHandle, start } from "./rack.ts";
 
 const USAGE = [
-  "usage: rack <start|dev> [manifest path, default rack.ts] [--no-plan] [--control-port <port>]",
+  "usage: rack <start|dev> [manifest path, default rack.ts] [--no-plan] [--no-watchdog]",
+  "         [--control-port <port>]",
   "       rack plan [manifest path, default rack.ts] [--write | --check]",
   "       rack ctl status | metrics | reload | stop",
   "       rack ctl swap <device> [source] | restart <device> [--no-cascade]",
@@ -33,8 +34,8 @@ const USAGE = [
 ].join("\n");
 
 const FLAGS: Record<string, readonly string[]> = {
-  start: ["--no-plan", "--control-port"],
-  dev: ["--no-plan", "--control-port"],
+  start: ["--no-plan", "--no-watchdog", "--control-port"],
+  dev: ["--no-plan", "--no-watchdog", "--control-port"],
   plan: ["--write", "--check"],
   ctl: ["--dir", "--url", "--token", "--no-cascade", "--to"],
 };
@@ -262,8 +263,15 @@ async function main(args: string[]): Promise<void> {
   // rack dev keeps the plan file in step with the devices; rack start follows it.
   // @decision .agents/decisions/261116_233919-automatic-assembly.md#plan-file
   const planMode = flags.has("--no-plan") ? false : command === "dev" ? "update" : true;
+  // @decision .agents/decisions/261117_062959-watchdog.md#configuration-and-observation
+  const watchdog = flags.has("--no-watchdog") ? { watchdog: 0 } : {};
   try {
-    running = await start(manifest, { baseDir, logger: consoleLogger, plan: planMode });
+    running = await start(manifest, {
+      baseDir,
+      logger: consoleLogger,
+      plan: planMode,
+      ...watchdog,
+    });
   } catch (error) {
     fail(describe(error));
   }

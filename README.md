@@ -138,7 +138,7 @@ The first argument of every hook, `ctx`, provides:
 | `ctx.signal` | Aborts after `powerOff`. |
 | `ctx.slot`, `ctx.firmware`, `ctx.baseDir` | `{ name, u }`, the firmware hash, and the rack base directory. |
 
-`activate` also receives `scope`. `scope.every(ms, task)` and `scope.after(ms, task)` schedule timers that stop on `deactivate`, and each returns a function that cancels its timer; `scope.signal` aborts on `deactivate`. Errors thrown by timer tasks and event handlers are logged; they do not crash the device.
+`activate` also receives `scope`. `scope.every(ms, task)` and `scope.after(ms, task)` schedule timers that stop on `deactivate`, and each returns a function that cancels its timer; `scope.signal` aborts on `deactivate`. Errors thrown by timer tasks and event handlers are logged; they do not crash the device. `scope.watchdog(ms, name?)` arms a watchdog for a work loop, as [Hangs and watchdogs](#hangs-and-watchdogs) describes.
 
 Data that crosses the backplane must survive `structuredClone`: no functions, no class instances. It is copied, unless you move or share binary data as [Binary data](#binary-data) describes. Throw `new RackError(code, message, data?)` to give callers a code they can branch on. Device codes must not start with `RACK_`, and any other exception reaches the caller as `RACK_DEVICE_FAULT`.
 
@@ -306,6 +306,7 @@ await running.stop();
 | `drainTimeout` | 10 000 ms | How long a retiring instance may finish its calls. |
 | `probation` | 60 000 ms | How long a new instance may crash before it falls back to known-good firmware; 0 turns fallback off. |
 | `historyLimit` | 256 | Most update records `history()` keeps. |
+| `watchdog` | 10 000 ms | Timeout of every device's event-loop watchdog, at least 1 000; 0 turns off every watchdog. See [Hangs and watchdogs](#hangs-and-watchdogs). |
 | `control` | off | Open the management endpoint: `true` for the platform's default, or `{ port, token? }` for loopback TCP. |
 | `plan` | `true` | How a scanned rack uses its plan file: `true` follows it, `"update"` rewrites it as `rack dev` does, and `false` neither reads nor writes it. |
 
@@ -313,7 +314,7 @@ The handle returned by `start`:
 
 | Method | Purpose |
 |---|---|
-| `status()` | Each device's slot, height, state, firmware and known-good hashes, probation, calls in flight, recent crashes, and, for a copy, its `owner`. |
+| `status()` | Each device's slot, height, state, firmware and known-good hashes, probation, calls in flight, recent crashes, watchdogs, and, for a copy, its `owner`. |
 | `call(address, method, input, options?)` | Call a port from outside the rack. |
 | `swap(name, source?)` | Replace a device now, optionally with another device file. |
 | `restart(name, { cascade? })` | Stop a device and start it again from scratch; its direct consumers then reload. |
@@ -327,13 +328,14 @@ The handle returned by `start`:
 
 Management operations run one at a time, in the order they were called. Firmware is written to `.rack/firmware/` under the base directory; keep `.rack/` out of version control.
 
-`metrics()` resolves with `{ devices }`, one entry per device whose installed instance answered, bottom slot first. Each entry has the device name, the `firmware` hash of the instance that counted, `since` (when that instance booted), and counters per member:
+`metrics()` resolves with `{ devices }`, one entry per device whose installed instance answered, bottom slot first. Each entry has the device name, the `firmware` hash of the instance that counted, `since` (when that instance booted), its event-loop delay `loop`, and counters per member:
 
 ```js
 {
   device: "orders",
   firmware: "7f3a9c…",
   since: 1763260000000,
+  loop: { delayMs: 0.4, maxDelayMs: 12.5 }, // see "Hangs and watchdogs"
   provides: { // per provided port and member
     http: { handle: { kind: "rpc", calls: 812, ok: 809, errors: { RACK_TIMEOUT: 3 }, active: 1, timeMs: 931.2 } },
   },
@@ -410,7 +412,36 @@ When a scanned rack's plan changes, or `rack dev` sees the manifest change, the 
 
 ### Crashes
 
-When a device crashes (an uncaught exception, an unhandled rejection, or `process.exit`), its calls in flight fail with `RACK_DEVICE_FAULT` and the rack resets it from the same firmware. Calls during the reset fail with `RACK_LINK_DOWN`. In-memory state does not survive a reset, so keep state that matters in a storage device. After more than 3 crashes within 60 seconds, the slot is marked `faulted` until a swap succeeds.
+When a device crashes (an uncaught exception, an unhandled rejection, or `process.exit`), its calls in flight fail with `RACK_DEVICE_FAULT` and the rack resets it from the same firmware. Calls during the reset fail with `RACK_LINK_DOWN`. In-memory state does not survive a reset, so keep state that matters in a storage device. After more than 3 crashes within 60 seconds, the slot is marked `faulted` until a swap succeeds. When a device's longest watchdog timeout is longer than 15 seconds, the window is four times that timeout instead, so a device that hangs after every reset reaches the limit too.
+
+### Hangs and watchdogs
+
+A device can hang without crashing: its event loop stays blocked, or one of its work loops stops making progress. Watchdogs catch both.
+
+- **The event-loop watchdog.** Every device has one, which its Worker host feeds from a timer. If the device's event loop stays blocked for `watchdog` milliseconds, 10 000 by default, the watchdog bites.
+- **Device watchdogs.** In `activate`, a device arms a watchdog for each work loop it wants watched, and feeds it from that loop:
+
+  ```ts
+  activate(ctx, scope) {
+    const dog = scope.watchdog(5_000, "poller");
+    void (async () => {
+      while (!scope.signal.aborted) {
+        await pollOnce(ctx);
+        dog.feed();
+      }
+    })();
+  },
+  ```
+
+  - `scope.watchdog(ms, name?)` bites when `feed()` isn't called for `ms` milliseconds, at least 1 000. `name` defaults to `watchdog 1`, `watchdog 2`, and so on.
+  - `cancel()` disarms the watchdog, and `deactivate` disarms them all. A device can have 16 armed at once.
+- **What a bite does.** A watchdog bites between 1 and 1.25 times its timeout after its last feed.
+  - The device's calls in flight fail with `RACK_DEVICE_FAULT`, and the rack resets the device as after a crash, or falls back to its known-good firmware during probation. Bites count toward the crash limit.
+  - The slot's error names the watchdog in its `data`: `{ watchdog: "poller", timeout: 5000 }`, or `{ watchdog: "event loop", timeout: 10000 }`.
+- **Hangs in native code.** A device blocked inside native code, such as a long SQLite query or a blocking file read, stops only when that call returns. If it hasn't stopped within `hookTimeout`, its slot is `faulted` until a swap or restart succeeds, so that two instances of the device never run at once. Only a restart of the rack reclaims a thread whose call never returns.
+- **When watchdogs watch.** From the end of `activate` to the start of `deactivate`; `hookTimeout` bounds the hooks instead.
+- **Turning them off.** `watchdog: 0`, or `--no-watchdog` for `rack start` and `rack dev`, turns off every watchdog, for example while a debugger holds devices at breakpoints. Raise `watchdog` instead for devices with long synchronous work, such as large SQLite queries.
+- **Observing them.** `status()` lists each device's `watchdogs`, the event loop's first, with their `name`, `timeout`, and `lastFed`. `metrics()` reports each device's event-loop delay as `loop: { delayMs, maxDelayMs }`, the delay of the last tick of the event-loop watchdog's timer and the largest since the instance booted.
 
 ## Update safety
 
@@ -419,7 +450,7 @@ An update can pass `selfTest` and still be defective. The rack guards against th
 **Passive fallback.**
 - **Known-good firmware.** Each device has one: the firmware it started with at cold start, or the last firmware that got through probation.
 - **Probation.** After an update, the new instance is on probation for `probation` milliseconds, 60 000 by default.
-- **Falling back.** If the instance crashes on probation, the rack does not reset it from the same firmware. It starts the known-good firmware instead, fresh, and the slot reports `degraded` with the crash as its error. A group replaced together for a contract change falls back together, so providers and consumers keep matching contracts.
+- **Falling back.** If the instance crashes on probation, or a watchdog bites, the rack does not reset it from the same firmware. It starts the known-good firmware instead, fresh, and the slot reports `degraded` with the crash as its error. A group replaced together for a contract change falls back together, so providers and consumers keep matching contracts.
 - **Limits.** A device falls back at most once per update. Setting `probation: 0` turns fallback off.
 - **Status.** `status()` shows each device's `knownGood` firmware hash, and `probationUntil` while it is on probation.
 
@@ -530,7 +561,7 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 ## Not supported yet
 
 - Devices run only as `sled` (one Worker each); the `inline` and `chassis` forms are planned.
-- A WebSocket panel, streaming HTTP bodies, circuit breakers, rate limiting, watchdogs for hung devices, and a management dashboard.
+- A WebSocket panel, streaming HTTP bodies, circuit breakers, rate limiting, and a management dashboard.
 - Connecting several racks, and packaging a rack with `bun build --compile`.
 
 ## Development

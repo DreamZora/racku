@@ -74,8 +74,13 @@ export interface Slot {
   held: boolean;
   /** Calls from outside the rack that wait while the slot is held. */
   queue: Call[];
-  /** Crash timestamps, pruned to the last 60 seconds when read. */
+  /** Crash timestamps, pruned to the window of the crash limit when read. */
   crashes: number[];
+  /**
+   * The longest watchdog timeout of the last instance that crashed or bit, which widens the
+   * window of the crash limit; 0 until then.
+   */
+  longestWatchdog: number;
   error: WireError | undefined;
   /** Unplugged or powered off by `stop()`; calls fail with `RACK_LINK_DOWN`. */
   removed: boolean;

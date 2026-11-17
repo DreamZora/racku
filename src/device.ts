@@ -184,6 +184,18 @@ export interface DeviceLog {
   error(message: string, data?: unknown): void;
 }
 
+/**
+ * A watchdog that a device feeds from one of its work loops; see {@link ActivateScope.watchdog}.
+ *
+ * @decision .agents/decisions/261117_062959-watchdog.md#two-kinds-of-watchdog
+ */
+export interface Watchdog {
+  /** Restarts the watchdog's timeout. Costs one atomic increment; call it as often as needed. */
+  feed(): void;
+  /** Disarms the watchdog, for example when its job is done; later feeds do nothing. */
+  cancel(): void;
+}
+
 /** Background-task helpers passed to `activate`; everything stops on `deactivate`. */
 export interface ActivateScope {
   /** Aborted on `deactivate`. */
@@ -203,6 +215,20 @@ export interface ActivateScope {
    * @throws RangeError when `ms` is not a non-negative finite number.
    */
   after(ms: number, task: () => void | Promise<void>): () => void;
+  /**
+   * Arms a watchdog for a work loop. Unless `feed()` is called at least every `ms` milliseconds
+   * while the instance is active, the rack resets the device, as it does after a crash: the
+   * calls in flight fail with `RACK_DEVICE_FAULT`, whose `data` names the watchdog. The watchdog
+   * disarms on `deactivate`, or with `cancel()`. Once the scope has stopped, it returns a
+   * watchdog that does nothing.
+   *
+   * @param ms Timeout in milliseconds, at least 1 000.
+   * @param name Name in status, errors, and logs; by default `watchdog <n>`, numbered in the
+   *   order the instance armed its watchdogs.
+   * @throws RangeError when `ms` is not a number of at least 1 000, or when 16 watchdogs are
+   *   armed already.
+   */
+  watchdog(ms: number, name?: string): Watchdog;
 }
 
 /** The first argument of every hook. */

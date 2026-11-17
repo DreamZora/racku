@@ -19,6 +19,8 @@
  * @decision .agents/decisions/261116_035534-call-metrics.md#counters
  * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
  * @decision .agents/decisions/261112_043034-device-api.md#device-context
+ * @decision .agents/decisions/261117_062959-watchdog.md#two-kinds-of-watchdog
+ * @decision .agents/decisions/261117_062959-watchdog.md#feeding-and-checking
  */
 import { type ConnectorInfo, describeConnector, type EventSpec } from "./connector.ts";
 import {
@@ -33,12 +35,14 @@ import {
   isOwn,
   type LogLevel,
   needConnector,
+  type Watchdog,
 } from "./device.ts";
 import { fromWireError, isCloneable, RackError, toWireError } from "./errors.ts";
 import type {
   CalledRpcMetrics,
   EmittedEventMetrics,
   InstanceMetrics,
+  LoopMetrics,
   NeedMetrics,
   PortMetrics,
   ReceivedEventMetrics,
@@ -64,8 +68,13 @@ import {
   type NeedInfo,
   type NeedLinkRequest,
   QUEUE_LIMIT,
+  SHARED_LOOP,
+  SHARED_SERVING,
+  SHARED_WATCHDOGS,
   type ToConsumer,
   type ToProvider,
+  WATCHDOG_LIMIT,
+  WATCHDOG_MIN,
 } from "./protocol.ts";
 import { validate } from "./schema.ts";
 import { detach, moveInto, transferList, untransferable } from "./transfer.ts";
@@ -159,8 +168,17 @@ let impls = new Map<string, Map<string, Impl>>();
 let scope: { controller: AbortController; cancels: Set<() => void> } | undefined;
 const powered = new AbortController();
 let callTimeout = 30_000;
-/** Shared with the main thread, which reads the number of calls being served from it. */
-let gauge: Int32Array<ArrayBufferLike> = new Int32Array(1);
+/**
+ * Shared with the main thread, which reads the number of calls being served and the feeds of
+ * the watchdogs from it.
+ */
+let gauge: Int32Array<ArrayBufferLike> = new Int32Array(SHARED_WATCHDOGS + WATCHDOG_LIMIT);
+/** How late the timer of the event-loop watchdog runs. */
+const loop: LoopMetrics = { delayMs: 0, maxDelayMs: 0 };
+/** Which device watchdog counters are in use. */
+const armed: boolean[] = new Array<boolean>(WATCHDOG_LIMIT).fill(false);
+/** Device watchdogs armed so far, for their default names. */
+let watchdogsArmed = 0;
 /** Whether this instance is the one installed in its slot; only then do its events go out. */
 let installed = false;
 let since = Date.now();
@@ -305,6 +323,7 @@ async function boot(request: BootRequest): Promise<Fru> {
   }
   callTimeout = request.callTimeout;
   gauge = new Int32Array(request.gauge);
+  feedLoop(request.watchdog);
   since = Date.now();
   prepare(def);
   const ctx = makeContext(def, { name, u: request.u, config, request });
@@ -927,7 +946,7 @@ async function serve(
   const controller = new AbortController();
   registry.set(id, controller);
   serving++;
-  Atomics.add(gauge, 0, 1);
+  Atomics.add(gauge, SHARED_SERVING, 1);
   if (stats !== undefined) {
     stats.calls++;
     stats.active++;
@@ -1001,7 +1020,7 @@ async function serve(
   // A failed call does not carry the buffers, yet they are gone all the same.
   if (!result.ok && moving !== undefined) detach([...moving]);
   serving--;
-  Atomics.sub(gauge, 0, 1);
+  Atomics.sub(gauge, SHARED_SERVING, 1);
   if (stats !== undefined) {
     stats.active--;
     stats.timeMs += performance.now() - started;
@@ -1059,7 +1078,57 @@ function snapshot(): InstanceMetrics {
     }
     needed[name] = members;
   }
-  return { since, provides, needs: needed };
+  return { since, loop: { ...loop }, provides, needs: needed };
+}
+
+// ---- Watchdogs ----
+
+/**
+ * Feeds the event-loop watchdog from a timer, which runs only while the event loop does, and
+ * measures how late each tick runs. Ticks come at least 8 times per timeout, between 100 ms and
+ * 1 s apart, so each of the main thread's checks, 4 per timeout, sees a feed. Without watchdogs
+ * the timer still measures the delay, once a second.
+ */
+function feedLoop(timeout: number): void {
+  const interval = timeout > 0 ? Math.min(1_000, Math.max(100, timeout / 8)) : 1_000;
+  let expected = performance.now() + interval;
+  const tick = () => {
+    const now = performance.now();
+    const delay = Math.round(Math.max(0, now - expected) * 10) / 10;
+    loop.delayMs = delay;
+    if (delay > loop.maxDelayMs) loop.maxDelayMs = delay;
+    Atomics.add(gauge, SHARED_LOOP, 1);
+    expected = now + interval;
+    setTimeout(tick, interval);
+  };
+  setTimeout(tick, interval);
+}
+
+/** Arms a device watchdog for `scope.watchdog()`; see {@link ActivateScope.watchdog}. */
+function armWatchdog(ms: number, name: string | undefined, cancels: Set<() => void>): Watchdog {
+  const index = armed.indexOf(false);
+  if (index === -1) {
+    throw new RangeError(`at most ${WATCHDOG_LIMIT} watchdogs can be armed at once`);
+  }
+  armed[index] = true;
+  watchdogsArmed++;
+  const label = name === undefined ? `watchdog ${watchdogsArmed}` : String(name);
+  let cancelled = false;
+  const cancel = () => {
+    if (cancelled) return;
+    cancelled = true;
+    armed[index] = false;
+    cancels.delete(cancel);
+    post({ op: "watchdog", index });
+  };
+  cancels.add(cancel);
+  post({ op: "watchdog", index, armed: { name: label, timeout: ms } });
+  return Object.freeze({
+    feed() {
+      if (!cancelled) Atomics.add(gauge, SHARED_WATCHDOGS + index, 1);
+    },
+    cancel,
+  });
 }
 
 // ---- Lifecycle hooks ----
@@ -1169,6 +1238,15 @@ function startScope(): ActivateScope {
       };
       cancels.add(cancel);
       return cancel;
+    },
+    watchdog(ms: number, name?: string): Watchdog {
+      if (!(typeof ms === "number" && Number.isFinite(ms) && ms >= WATCHDOG_MIN)) {
+        throw new RangeError(
+          `a watchdog timeout must be at least ${WATCHDOG_MIN} ms, got ${String(ms)}`,
+        );
+      }
+      if (controller.signal.aborted) return Object.freeze({ feed() {}, cancel() {} });
+      return armWatchdog(ms, name, cancels);
     },
   });
 }

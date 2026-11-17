@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { existsSync } from "node:fs";
 import { chmod, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { slot } from "rack42u";
+import { type SlotStatus, slot } from "rack42u";
 import { type ControlFile, controlPaths, controlTransport } from "../src/control.ts";
 import {
   Cli,
@@ -64,6 +64,18 @@ function run(args: string[], cwd: string, env: Record<string, string> = {}): Cli
   const cli = new Cli(args, cwd, env);
   processes.push(cli);
   return cli;
+}
+
+/**
+ * A rack's status as a pattern: the watchdogs' feed times move between two reads.
+ *
+ * @decision .agents/decisions/261117_062959-watchdog.md#configuration-and-observation
+ */
+function statusOf(running: { status(): SlotStatus[] }): unknown {
+  return running.status().map((device) => ({
+    ...device,
+    watchdogs: device.watchdogs.map((watchdog) => ({ ...watchdog, lastFed: expect.any(Number) })),
+  }));
 }
 
 async function mode(path: string): Promise<string> {
@@ -139,7 +151,7 @@ describe.skipIf(WINDOWS)("the Unix socket", () => {
       unix: paths.socket,
       body: JSON.stringify({ args: [] }),
     });
-    expect(await answer.json()).toEqual({ ok: true, value: running.status() });
+    expect(await answer.json()).toEqual({ ok: true, value: statusOf(running) });
     const second = await errorOf(startRack(spec, { baseDir: created.dir, control: true }));
     expect([second.code, second.message]).toEqual([
       "RACK_MANIFEST",
@@ -166,7 +178,7 @@ describe("the TCP endpoint", () => {
       });
     expect(await (await post("status", { args: [] })).json()).toEqual({
       ok: true,
-      value: running.status(),
+      value: statusOf(running),
     });
     expect((await fetch(`${url}/v1/status`, { method: "POST", body: "{}" })).status).toBe(401);
     expect((await post("status", {}, { authorization: "Bearer wrong" })).status).toBe(401);

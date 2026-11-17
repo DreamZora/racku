@@ -19,6 +19,23 @@ import type { WireError } from "./errors.ts";
 /** Most calls a held need queues, and most events a provider queues for a held consumer. */
 export const QUEUE_LIMIT = 10_000;
 
+/**
+ * The memory each instance shares with the main thread, as indexes of `Int32` elements: the
+ * calls the instance is serving, then the feeds of its event-loop watchdog, then one feed
+ * counter for each device watchdog.
+ *
+ * @decision .agents/decisions/261117_062959-watchdog.md#feeding-and-checking
+ */
+export const SHARED_SERVING = 0;
+export const SHARED_LOOP = 1;
+export const SHARED_WATCHDOGS = 2;
+/** Most device watchdogs an instance can have armed at once. */
+export const WATCHDOG_LIMIT = 16;
+/** Shortest timeout of a device watchdog, in ms; shorter ones would trip on garbage collection. */
+export const WATCHDOG_MIN = 1_000;
+/** Number of `Int32` elements in the shared memory of an instance. */
+export const SHARED_LENGTH = SHARED_WATCHDOGS + WATCHDOG_LIMIT;
+
 /** A need in FRU data: its connector, and whether it owns a copy of its provider. */
 export interface NeedInfo extends ConnectorInfo {
   own: boolean;
@@ -56,8 +73,13 @@ export interface BootRequest {
   baseDir: string;
   /** Timeout of the device's calls that set none, in ms. */
   callTimeout: number;
-  /** Shared storage of one `Int32`: the number of calls the instance is serving. */
+  /** Memory shared with the main thread, laid out as `SHARED_LENGTH` describes. */
   gauge: SharedArrayBuffer;
+  /**
+   * Timeout of the event-loop watchdog in ms, or 0 when watchdogs are off; the Worker host
+   * feeds it often enough for that timeout.
+   */
+  watchdog: number;
   port: MessagePort;
 }
 
@@ -232,8 +254,17 @@ export interface LogNotice {
   data?: unknown;
 }
 
+/** Worker to main thread: the device armed or cancelled one of its watchdogs. */
+export interface WatchdogNotice {
+  op: "watchdog";
+  /** Index of the watchdog's feed counter among the device watchdogs, below `WATCHDOG_LIMIT`. */
+  index: number;
+  /** Name and timeout of a watchdog that was armed; absent when it was cancelled. */
+  armed?: { name: string; timeout: number };
+}
+
 /** Anything a Worker posts on the control channel. */
-export type ControlNotice = ControlReply | LogNotice;
+export type ControlNotice = ControlReply | LogNotice | WatchdogNotice;
 
 /** Backplane to provider, on the data channel: a call from outside the rack. */
 export interface CallToProvider {

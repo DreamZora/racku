@@ -18,6 +18,7 @@
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#plan-file
  * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#three-ways-to-replace-an-instance
  * @decision .agents/decisions/261117_005743-fallback-rollback-and-history.md#update-history
+ * @decision .agents/decisions/261117_062959-watchdog.md#biting
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dirent } from "node:fs";
@@ -29,7 +30,7 @@ import { type Control, openControl } from "./control.ts";
 import type { CallOptions } from "./device.ts";
 import { RackError, toWireError, type WireError } from "./errors.ts";
 import { buildFirmware as buildBundle, type Firmware } from "./firmware.ts";
-import { Instance, type InstanceHost, type Wire } from "./instance.ts";
+import { Instance, type InstanceHost, type WatchdogStatus, type Wire } from "./instance.ts";
 import { consoleLogger, type LogEntry, type Logger } from "./log.ts";
 import {
   checkDeviceName,
@@ -52,7 +53,13 @@ import {
   type PlanType,
   parsePlan,
 } from "./plan.ts";
-import type { DataFromWorker, Fru, LogNotice, Marker } from "./protocol.ts";
+import {
+  type DataFromWorker,
+  type Fru,
+  type LogNotice,
+  type Marker,
+  WATCHDOG_MIN,
+} from "./protocol.ts";
 import { detach, transferList } from "./transfer.ts";
 
 export type { SlotState } from "./backplane.ts";
@@ -78,6 +85,11 @@ export interface SlotStatus {
   knownGood: string | null;
   /** While the installed instance is on probation: when probation ends, a millisecond timestamp. */
   probationUntil?: number;
+  /**
+   * The installed instance's watchdogs, the event loop's first; empty when watchdogs are off or
+   * no instance is installed.
+   */
+  watchdogs: WatchdogStatus[];
   /** The last failed swap or crash. */
   error?: WireError;
 }
@@ -188,6 +200,13 @@ export interface StartOptions {
   /** Most update records the history keeps, a positive integer; default 256. */
   historyLimit?: number;
   /**
+   * Timeout of every device's event-loop watchdog, in ms, at least 1 000; default 10 000. A
+   * device whose event loop stays blocked that long, or whose own watchdog goes unfed for its
+   * timeout, is reset as after a crash. 0 turns off every watchdog, for example while a debugger
+   * holds devices at breakpoints.
+   */
+  watchdog?: number;
+  /**
    * Opens the management endpoint that `rack ctl` uses, once the rack runs: `true` for the
    * platform's default, a Unix socket on Linux and macOS and loopback TCP on Windows, or
    * `{ port }` for loopback TCP with a bearer token, `token` or `RACK_CONTROL_TOKEN` or a random
@@ -290,6 +309,18 @@ const CRASH_WINDOW = 60_000;
 const CRASH_LIMIT = 3;
 
 /**
+ * The window of the crash limit: 60 s, or four times the longest watchdog timeout if that is
+ * longer, so that a device that hangs again after every reset still reaches the limit.
+ *
+ * @decision .agents/decisions/261117_062959-watchdog.md#biting
+ * @param longestWatchdog The longest watchdog timeout of the device, in ms; 0 for none.
+ * @returns The window in ms.
+ */
+export function crashWindow(longestWatchdog: number): number {
+  return Math.max(CRASH_WINDOW, 4 * longestWatchdog);
+}
+
+/**
  * Starts a rack: builds the firmware, boots and checks every device, powers them on from the
  * bottom up, and opens the panel.
  *
@@ -335,6 +366,8 @@ class Rack implements InstanceHost {
   readonly #described = new Map<string, Fru>();
   readonly #probationMs: number;
   readonly #historyLimit: number;
+  /** Timeout of the event-loop watchdogs, or 0 when watchdogs are off. */
+  readonly #watchdog: number;
   /** Update records, oldest first, at most `#historyLimit`. */
   readonly #history: UpdateRecord[] = [];
   #seq = 0;
@@ -381,6 +414,15 @@ class Rack implements InstanceHost {
     this.#historyLimit = options.historyLimit ?? 256;
     if (!(Number.isSafeInteger(this.#historyLimit) && this.#historyLimit >= 1)) {
       throw new RackError("RACK_MANIFEST", "start option historyLimit must be a positive integer");
+    }
+    this.#watchdog = options.watchdog ?? 10_000;
+    if (
+      !(this.#watchdog === 0 || (Number.isFinite(this.#watchdog) && this.#watchdog >= WATCHDOG_MIN))
+    ) {
+      throw new RackError(
+        "RACK_MANIFEST",
+        `start option watchdog must be 0 or at least ${WATCHDOG_MIN} ms`,
+      );
     }
     this.#backplane = new Backplane(
       this.#slots,
@@ -449,7 +491,76 @@ class Rack implements InstanceHost {
     if (this.#phase !== "running" || slot === undefined || slot.installed !== instance) return;
     slot.installed = null;
     instance.active = false;
-    const error: WireError = { code: "RACK_DEVICE_FAULT", message };
+    this.#crashed(slot, instance, { code: "RACK_DEVICE_FAULT", message });
+  }
+
+  /**
+   * A watchdog of an active instance bit. Its calls fail at once and the instance is gone, as
+   * after a crash, but the slot recovers only once the Worker's thread has stopped, so that two
+   * instances of the device never run at the same time. A thread blocked in native code that
+   * doesn't stop within `hookTimeout` leaves the slot faulted.
+   *
+   * @decision .agents/decisions/261117_062959-watchdog.md#biting
+   */
+  onBite(instance: Instance, name: string, timeout: number): void {
+    const message = `${instance.slot}: watchdog "${name}" was not fed for ${timeout} ms`;
+    const error: WireError = {
+      code: "RACK_DEVICE_FAULT",
+      message,
+      data: { watchdog: name, timeout },
+    };
+    this.#log("error", message, { firmware: instance.firmware.hash });
+    // Fail the calls in flight with the code of a crash before the exit reports the rest.
+    this.#backplane.disconnect(instance, "RACK_DEVICE_FAULT", message);
+    const stopped = instance.kill(this.#hookTimeout);
+    if (this.#phase === "starting") {
+      this.#startFault ??= new RackError("RACK_DEVICE_FAULT", message, error.data);
+      return;
+    }
+    const slot = this.#slots.get(instance.slot);
+    if (this.#phase !== "running" || slot === undefined || slot.installed !== instance) return;
+    slot.installed = null;
+    instance.active = false;
+    if (slot.busy) {
+      // A running swap installs its new instance, or resets the slot when it fails.
+      this.#crashed(slot, instance, error);
+      return;
+    }
+    slot.busy = true;
+    slot.state = "resetting";
+    slot.error = error;
+    // While the rack waits, probation must not run out and make the firmware known-good.
+    const group = this.#probation.get(slot.name)?.group ?? [];
+    for (const name of group) clearTimeout(this.#probation.get(name)?.timer);
+    void stopped.then((closed) => {
+      slot.busy = false;
+      if (this.#phase !== "running" || slot.removed || slot.installed !== null) return;
+      if (closed) {
+        this.#crashed(slot, instance, error);
+        return;
+      }
+      for (const name of group) this.#endProbation(name);
+      slot.state = "faulted";
+      this.#emit({
+        type: "fault",
+        device: slot.name,
+        firmware: instance.firmware.hash,
+        error,
+        reset: false,
+      });
+      this.#log(
+        "error",
+        `${slot.name} faulted: its Worker did not stop within ${this.#hookTimeout} ms of the watchdog, so its thread is stuck in native code. A swap or a restart brings the device back; only a restart of the rack reclaims the thread.`,
+      );
+    });
+  }
+
+  /**
+   * Recovers a slot whose instance crashed or bit: counts the crash, then falls back while on
+   * probation, or resets from the same firmware within the crash limit.
+   */
+  #crashed(slot: Slot, instance: Instance, error: WireError): void {
+    slot.longestWatchdog = instance.longestWatchdog;
     const reset = this.#countCrash(slot, instance.firmware.hash, error);
     const probation = this.#probation.get(slot.name);
     if (probation !== undefined) {
@@ -2395,6 +2506,7 @@ class Rack implements InstanceHost {
         config,
         baseDir: this.#baseDir,
         callTimeout: this.#callTimeout,
+        watchdog: this.#watchdog,
         timeout: this.#hookTimeout,
       });
       return instance;
@@ -2474,14 +2586,18 @@ class Rack implements InstanceHost {
   /** Records a crash; returns whether the slot may reset. */
   #countCrash(slot: Slot, firmware: string, error: WireError): boolean {
     const now = Date.now();
-    slot.crashes = slot.crashes.filter((time) => now - time < CRASH_WINDOW);
+    const window = crashWindow(slot.longestWatchdog);
+    slot.crashes = slot.crashes.filter((time) => now - time < window);
     slot.crashes.push(now);
     slot.error = error;
     const reset = slot.crashes.length <= CRASH_LIMIT;
     if (!reset) slot.state = "faulted";
     this.#emit({ type: "fault", device: slot.name, firmware, error, reset });
     if (!reset) {
-      this.#log("error", `${slot.name} faulted after ${slot.crashes.length} crashes within 60 s`);
+      this.#log(
+        "error",
+        `${slot.name} faulted after ${slot.crashes.length} crashes within ${window / 1000} s`,
+      );
     }
     return reset;
   }
@@ -2489,7 +2605,8 @@ class Rack implements InstanceHost {
   /** After a failed swap lost the old instance: reset, or stay faulted at the crash limit. */
   #recover(slot: Slot): void {
     const now = Date.now();
-    const recent = slot.crashes.filter((time) => now - time < CRASH_WINDOW).length;
+    const window = crashWindow(slot.longestWatchdog);
+    const recent = slot.crashes.filter((time) => now - time < window).length;
     if (recent > CRASH_LIMIT) slot.state = "faulted";
     else void this.#reset(slot);
   }
@@ -2561,8 +2678,10 @@ class Rack implements InstanceHost {
         firmware: slot.installed?.firmware.hash ?? null,
         source: slot.source,
         inFlight: slot.installed?.serving ?? 0,
-        crashes: slot.crashes.filter((time) => now - time < CRASH_WINDOW).length,
+        crashes: slot.crashes.filter((time) => now - time < crashWindow(slot.longestWatchdog))
+          .length,
         knownGood: this.#knownGood.get(slot.name)?.hash ?? null,
+        watchdogs: slot.installed?.watchdogs ?? [],
       };
       const owner = owners.get(slot.name);
       if (owner !== undefined) status.owner = owner;
@@ -2863,6 +2982,7 @@ function newSlot({ u, config, firmware, instance }: Booted): Slot {
     held: false,
     queue: [],
     crashes: [],
+    longestWatchdog: 0,
     error: undefined,
     removed: false,
   };
