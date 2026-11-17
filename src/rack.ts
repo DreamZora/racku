@@ -16,15 +16,18 @@
  * @decision .agents/decisions/261115_222025-p0-api-details.md#resets
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#scanned-manifests
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#plan-file
+ * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#three-ways-to-replace-an-instance
+ * @decision .agents/decisions/261117_005743-fallback-rollback-and-history.md#update-history
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, unlink } from "node:fs/promises";
 import { basename, join, resolve as resolvePath } from "node:path";
 import { Backplane, type Slot, type SlotState } from "./backplane.ts";
 import type { ConnectorInfo } from "./connector.ts";
 import type { CallOptions } from "./device.ts";
 import { RackError, toWireError, type WireError } from "./errors.ts";
-import { buildFirmware, type Firmware } from "./firmware.ts";
+import { buildFirmware as buildBundle, type Firmware } from "./firmware.ts";
 import { Instance, type InstanceHost, type Wire } from "./instance.ts";
 import { consoleLogger, type LogEntry, type Logger } from "./log.ts";
 import {
@@ -70,6 +73,10 @@ export interface SlotStatus {
   crashes: number;
   /** For a copy that serves an `own` need: the instance whose need it serves. */
   owner?: string;
+  /** Hash of the firmware the device falls back to when a new instance crashes on probation. */
+  knownGood: string | null;
+  /** While the installed instance is on probation: when probation ends, a millisecond timestamp. */
+  probationUntil?: number;
   /** The last failed swap or crash. */
   error?: WireError;
 }
@@ -107,6 +114,42 @@ export interface ReloadResult {
   error?: WireError;
 }
 
+/** What asked for an update. */
+export type UpdateCause =
+  | "reload"
+  | "swap"
+  | "restart"
+  | "rollback"
+  | "fallback"
+  | "plug"
+  | "unplug";
+
+/** One update of a device, as {@link RackHandle.history} reports it. */
+export interface UpdateRecord {
+  /** Increases by one per record within the rack process. */
+  seq: number;
+  /** When the operation that made the update started, a millisecond timestamp. */
+  time: number;
+  device: string;
+  mode: ReloadMode;
+  cause: UpdateCause;
+  /** Firmware hash before the update. */
+  from: string | null;
+  /** Firmware hash the update installed, or tried to install. */
+  to: string | null;
+  ok: boolean;
+  /** Why the update failed, or why the device fell back. */
+  error?: WireError;
+  /** `seq` of the first record of the same group replacement. */
+  group?: number;
+}
+
+/** Options of {@link RackHandle.rollback}. */
+export interface RollbackOptions {
+  /** Firmware hash to go back to; by default, the firmware before the current one. */
+  to?: string;
+}
+
 /** Options of {@link RackHandle.restart}. */
 export interface RestartOptions {
   /** Reload the device's direct consumers after it restarts; default `true`. */
@@ -136,6 +179,13 @@ export interface StartOptions {
    * A rack whose manifest places devices by hand has no plan file and ignores this option.
    */
   plan?: boolean | "update";
+  /**
+   * How long a new instance stays on probation after an update, in ms; default 60 000. A crash
+   * during probation falls back to the device's known-good firmware. 0 turns fallback off.
+   */
+  probation?: number;
+  /** Most update records the history keeps, a positive integer; default 256. */
+  historyLimit?: number;
 }
 
 /** A running rack. */
@@ -174,6 +224,25 @@ export interface RackHandle {
    *   device cannot be rebuilt, does not fit, or fails to start; its slot then resets.
    */
   restart(name: string, options?: RestartOptions): Promise<ReloadResult[]>;
+  /**
+   * Replaces a device's firmware with an earlier one that the history still keeps, choosing
+   * the kind of replacement as `reload()` does. Undoing a group replacement replaces the group.
+   *
+   * @param name The device.
+   * @param options `to` names the firmware hash; by default, the firmware before the current one.
+   * @returns One result per device replaced.
+   * @throws RackError `RACK_NO_ROUTE` for an unknown device, or `RACK_SWAP_REJECTED` when there
+   *   is no such firmware, it no longer fits the running plan, or the replacement fails.
+   */
+  rollback(name: string, options?: RollbackOptions): Promise<ReloadResult[]>;
+  /**
+   * Reads the update history, newest first: every swap, cold swap, restart, group replacement,
+   * plug, unplug, rollback, and fallback, whether it succeeded or failed. The rack keeps at most
+   * `historyLimit` records, in memory.
+   *
+   * @param name Only the records of this device.
+   */
+  history(name?: string): UpdateRecord[];
   /**
    * Replaces a device, optionally with another device file; rolls back on failure.
    *
@@ -256,6 +325,22 @@ class Rack implements InstanceHost {
   #plan: Plan | undefined;
   /** FRU data of firmware described for planning, by hash. */
   readonly #described = new Map<string, Fru>();
+  readonly #probationMs: number;
+  readonly #historyLimit: number;
+  /** Update records, oldest first, at most `#historyLimit`. */
+  readonly #history: UpdateRecord[] = [];
+  #seq = 0;
+  /** Each device's known-good firmware, by device name. */
+  readonly #knownGood = new Map<string, Firmware>();
+  /** Devices on probation, by name, with the devices that fall back together with them. */
+  readonly #probation = new Map<
+    string,
+    { until: number; timer: ReturnType<typeof setTimeout>; group: readonly string[] }
+  >();
+  /** Bundles this rack built, by path; only these are ever deleted. */
+  readonly #built = new Map<string, Firmware>();
+  /** Every firmware this rack knows of, by hash, for rollbacks. */
+  readonly #firmwares = new Map<string, Firmware>();
   readonly #slots = new Map<string, Slot>();
   readonly #backplane: Backplane;
   readonly #listeners = new Set<(event: RackEvent) => void>();
@@ -278,6 +363,14 @@ class Rack implements InstanceHost {
       throw new RackError("RACK_MANIFEST", 'start option plan must be true, false, or "update"');
     }
     this.#patch = manifest.patch;
+    this.#probationMs = options.probation ?? 60_000;
+    if (!(Number.isFinite(this.#probationMs) && this.#probationMs >= 0)) {
+      throw new RackError("RACK_MANIFEST", "start option probation must be a number >= 0");
+    }
+    this.#historyLimit = options.historyLimit ?? 256;
+    if (!(Number.isSafeInteger(this.#historyLimit) && this.#historyLimit >= 1)) {
+      throw new RackError("RACK_MANIFEST", "start option historyLimit must be a positive integer");
+    }
     this.#backplane = new Backplane(
       this.#slots,
       this.#instances,
@@ -293,13 +386,17 @@ class Rack implements InstanceHost {
         this.#phase === "running"
           ? this.#backplane.call(address, method, input, options, "rack")
           : refuse(`${address}.${method}`, options),
-      reload: (manifest?: RackManifest) => this.#serialize(() => this.#reload(manifest)),
+      reload: (manifest?: RackManifest) => this.#operate("reload", () => this.#reload(manifest)),
       swap: (name: string, source?: string | URL) =>
-        this.#serialize(() => this.#swap(name, source)),
+        this.#operate("swap", () => this.#swap(name, source)),
       restart: (name: string, options: RestartOptions = {}) =>
-        this.#serialize(() => this.#restart(name, options.cascade ?? true)),
-      plug: (u: number, spec: SlotSpec) => this.#serialize(() => this.#plug(u, spec)),
-      unplug: (name: string) => this.#serialize(() => this.#unplug(name)),
+        this.#operate("restart", () => this.#restart(name, options.cascade ?? true)),
+      rollback: (name: string, options: RollbackOptions = {}) =>
+        this.#operate("rollback", () => this.#rollback(name, options.to)),
+      history: (name?: string) =>
+        this.#history.filter((record) => name === undefined || record.device === name).reverse(),
+      plug: (u: number, spec: SlotSpec) => this.#operate("plug", () => this.#plug(u, spec)),
+      unplug: (name: string) => this.#operate("unplug", () => this.#unplug(name)),
       subscribe: (listener: (event: RackEvent) => void) => {
         this.#listeners.add(listener);
         return () => {
@@ -343,6 +440,23 @@ class Rack implements InstanceHost {
     instance.active = false;
     const error: WireError = { code: "RACK_DEVICE_FAULT", message };
     const reset = this.#countCrash(slot, instance.firmware.hash, error);
+    const probation = this.#probation.get(slot.name);
+    if (probation !== undefined) {
+      // A crash on probation falls back to the known-good firmware instead of resetting.
+      // @decision .agents/decisions/261117_005743-fallback-rollback-and-history.md#passive-fallback
+      for (const name of probation.group) this.#endProbation(name);
+      if (!reset || slot.busy) return;
+      if (probation.group.length > 1) {
+        slot.state = "resetting";
+        void this.#operate("fallback", () =>
+          this.#fallBackGroup(probation.group, slot.name, error),
+        );
+      } else {
+        const context = { cause: "fallback" as const, started: Date.now(), crash: error };
+        void updates.run(context, () => this.#fallBack(slot, error));
+      }
+      return;
+    }
     // A running swap installs its new instance, or resets the slot when it fails.
     // @decision .agents/decisions/261115_222025-p0-api-details.md#resets
     if (reset && !slot.busy) void this.#reset(slot);
@@ -374,6 +488,7 @@ class Rack implements InstanceHost {
         );
         this.#log("info", "panel http listening", { url: this.#panel.url.href });
       }
+      for (const slot of this.#slots.values()) this.#knownGood.set(slot.name, slot.firmware);
       this.#phase = "running";
       this.#log("info", `rack ${this.#manifest.name} started`, { devices: this.#slots.size });
     } catch (error) {
@@ -449,7 +564,7 @@ class Rack implements InstanceHost {
       ({ entries, planText } = await this.#planScanned(builds));
     }
     for (const { source } of entries) {
-      if (!builds.has(source)) builds.set(source, buildFirmware(source, this.#baseDir));
+      if (!builds.has(source)) builds.set(source, this.#build(source));
     }
     await Promise.allSettled(builds.values());
     const booted = await Promise.allSettled(
@@ -524,7 +639,7 @@ class Rack implements InstanceHost {
       }
     }
     for (const { source } of found) {
-      if (!builds.has(source)) builds.set(source, buildFirmware(source, this.#baseDir));
+      if (!builds.has(source)) builds.set(source, this.#build(source));
     }
     const described = await Promise.all(
       found.map(async (item) => {
@@ -568,6 +683,14 @@ class Rack implements InstanceHost {
       });
     }
     return models;
+  }
+
+  /** Builds a device file, remembering the bundle so that it can be deleted once unused. */
+  async #build(source: string): Promise<Firmware> {
+    const firmware = await buildBundle(source, this.#baseDir);
+    this.#built.set(firmware.path, firmware);
+    this.#firmwares.set(firmware.hash, firmware);
+    return firmware;
   }
 
   /** Reads what a firmware declares, booting it once in a Worker that is terminated after. */
@@ -916,6 +1039,20 @@ class Rack implements InstanceHost {
 
   // ---- Management operations ----
 
+  /**
+   * Runs a management operation in the queue, as an update with a cause for the history, and
+   * deletes the bundles that nothing uses any more once it ends.
+   */
+  #operate<T>(cause: UpdateCause, operation: () => Promise<T>): Promise<T> {
+    return this.#serialize(async () => {
+      try {
+        return await updates.run({ cause, started: Date.now() }, operation);
+      } finally {
+        await this.#collectGarbage();
+      }
+    });
+  }
+
   /** Runs management operations one at a time, in call order. */
   #serialize<T>(operation: () => Promise<T>): Promise<T> {
     const run = this.#operations.then(operation);
@@ -941,8 +1078,7 @@ class Rack implements InstanceHost {
     }
     const slots = this.#ordered();
     for (const slot of slots) {
-      if (!builds.has(slot.source))
-        builds.set(slot.source, buildFirmware(slot.source, this.#baseDir));
+      if (!builds.has(slot.source)) builds.set(slot.source, this.#build(slot.source));
     }
     await Promise.allSettled(builds.values());
     const results: ReloadResult[] = [...(change?.results ?? [])];
@@ -1029,7 +1165,7 @@ class Rack implements InstanceHost {
       const source = resolveSource(spec.source, this.#baseDir);
       let build = builds.get(source);
       if (build === undefined) {
-        build = buildFirmware(source, this.#baseDir);
+        build = this.#build(source);
         builds.set(source, build);
       }
       const firmware = await build.catch((error: unknown) => {
@@ -1093,7 +1229,7 @@ class Rack implements InstanceHost {
       try {
         let build = builds.get(next.source);
         if (build === undefined) {
-          build = buildFirmware(next.source, this.#baseDir);
+          build = this.#build(next.source);
           builds.set(next.source, build);
         }
         firmware = await build;
@@ -1250,7 +1386,7 @@ class Rack implements InstanceHost {
     const path = source === undefined ? slot.source : resolveSource(source, this.#baseDir);
     let firmware: Firmware;
     try {
-      firmware = await buildFirmware(path, this.#baseDir);
+      firmware = await this.#build(path);
     } catch (error) {
       const from = slot.installed?.firmware.hash ?? null;
       if (slot.installed !== null && !slot.busy) slot.state = "degraded";
@@ -1399,7 +1535,7 @@ class Rack implements InstanceHost {
         );
         let build = builds.get(consumer.source);
         if (build === undefined) {
-          build = buildFirmware(consumer.source, this.#baseDir);
+          build = this.#build(consumer.source);
           builds.set(consumer.source, build);
         }
         let next: Firmware;
@@ -1444,10 +1580,22 @@ class Rack implements InstanceHost {
     const modeOf = (member: Member): ReloadMode =>
       fresh.has(member.slot.name) ? "restart" : "cold";
     const fromOf = new Map(ordered.map((m) => [m.slot, m.slot.installed?.firmware.hash ?? null]));
+    // The records of a group replacement share a group, and its devices share their probation.
+    const group: GroupKey | undefined =
+      ordered.length > 1 ? { devices: ordered.map((m) => m.slot.name) } : undefined;
     const report = (failure: RackError): RackError => {
       for (const m of ordered) {
         const from = fromOf.get(m.slot) ?? null;
-        this.#swapFailed(m.slot.name, "swap", from, m.firmware.hash, failure, m.slot, modeOf(m));
+        this.#swapFailed(
+          m.slot.name,
+          "swap",
+          from,
+          m.firmware.hash,
+          failure,
+          m.slot,
+          modeOf(m),
+          group,
+        );
       }
       return failure;
     };
@@ -1530,14 +1678,10 @@ class Rack implements InstanceHost {
       m.slot.busy = false;
       const from = fromOf.get(m.slot) ?? null;
       const mode = modeOf(m);
-      this.#emit({
-        type: "swap",
-        device: m.slot.name,
-        action: "swap",
-        mode,
-        from,
-        to: m.firmware.hash,
-      });
+      this.#emit(
+        { type: "swap", device: m.slot.name, action: "swap", mode, from, to: m.firmware.hash },
+        group,
+      );
       this.#log("info", `${m.slot.name} ${mode === "restart" ? "restarted" : "swapped cold"}`, {
         from,
         to: m.firmware.hash,
@@ -1702,7 +1846,7 @@ class Rack implements InstanceHost {
     const builds = new Map<string, Promise<Firmware>>();
     let members: Member[];
     try {
-      const build = buildFirmware(slot.source, this.#baseDir);
+      const build = this.#build(slot.source);
       builds.set(slot.source, build);
       const firmware = await build.catch((error: unknown) => {
         throw new RackError("RACK_SWAP_REJECTED", messageOf(error));
@@ -1890,7 +2034,7 @@ class Rack implements InstanceHost {
     const label = spec.name ?? source;
     let firmware: Firmware;
     try {
-      firmware = await buildFirmware(source, this.#baseDir);
+      firmware = await this.#build(source);
     } catch (error) {
       const failure = new RackError("RACK_SWAP_REJECTED", messageOf(error));
       throw this.#swapFailed(label, "plug", null, null, failure);
@@ -1976,6 +2120,234 @@ class Rack implements InstanceHost {
     this.#slots.delete(name);
     this.#emit({ type: "swap", device: name, action: "unplug", mode: "unplug", from, to: null });
     this.#log("info", `${name} unplugged`);
+  }
+
+  // ---- Update safety ----
+
+  /**
+   * Replaces a device's firmware with an earlier one: by default the firmware before the
+   * current one, undoing the update that installed it, together with its group.
+   *
+   * @decision .agents/decisions/261117_005743-fallback-rollback-and-history.md#active-rollback
+   */
+  async #rollback(name: string, to: string | undefined): Promise<ReloadResult[]> {
+    this.#requireRunning();
+    const slot = this.#slots.get(name);
+    if (slot === undefined || slot.removed) {
+      throw new RackError("RACK_NO_ROUTE", `no device named ${name}`);
+    }
+    const current = slot.firmware.hash;
+    const reject = (message: string) =>
+      this.#swapFailed(
+        name,
+        "swap",
+        current,
+        to ?? null,
+        new RackError("RACK_SWAP_REJECTED", message),
+        slot,
+      );
+    const last = this.#history.findLast(
+      (record) =>
+        record.device === name && record.ok && record.to === current && record.from !== null,
+    );
+    const target = to ?? last?.from ?? undefined;
+    if (target === undefined || target === null)
+      throw reject(`${name} has no earlier firmware to roll back to`);
+    if (target === current) throw reject(`${name} already runs firmware ${target}`);
+    // Undoing a group replacement takes the whole group back.
+    const records =
+      to === undefined && last?.group !== undefined
+        ? this.#history.filter((record) => record.group === last.group && record.ok)
+        : [{ device: name, from: target }];
+    const members: Member[] = [];
+    for (const record of records) {
+      const member = this.#slots.get(record.device);
+      const firmware = record.from === null ? undefined : this.#firmwares.get(record.from);
+      if (member === undefined || member.removed) continue;
+      if (firmware === undefined || !(await Bun.file(firmware.path).exists())) {
+        throw reject(`firmware ${record.from} of ${record.device} is no longer kept`);
+      }
+      const fru = await this.#describeForSwap(firmware);
+      // A rollback restores code only: the plan, with every need and its wire, stays as it runs.
+      // Connectors may differ, as when a group undoes a contract change; the replacement checks them.
+      const needs = (info: Fru) => Object.keys(info.needs).sort().join(",");
+      if (needs(fru) !== needs(member.fru)) {
+        throw reject(
+          `firmware ${firmware.hash} of ${record.device} has other needs than the running plan`,
+        );
+      }
+      members.push({ slot: member, firmware, source: firmware.source });
+    }
+    const only = members[0] as Member;
+    if (members.length === 1 && only.slot.fru.swap !== "cold") {
+      const fru = await this.#describeForSwap(only.firmware);
+      if (fru.swap !== "cold") {
+        const from = only.slot.installed?.firmware.hash ?? null;
+        await this.#swapSlot(only.slot, only.firmware, only.source);
+        return [{ device: name, from, to: only.firmware.hash, mode: "hot" }];
+      }
+    }
+    const { results, error } = await this.#replaceAll(members, new Set());
+    if (error !== undefined) throw error;
+    return results;
+  }
+
+  /**
+   * Starts a device again from its known-good firmware, fresh, after its new instance crashed on
+   * probation; the slot reports `degraded`, with the crash as its error.
+   *
+   * @decision .agents/decisions/261117_005743-fallback-rollback-and-history.md#passive-fallback
+   */
+  async #fallBack(slot: Slot, crash: WireError): Promise<void> {
+    const good = this.#knownGood.get(slot.name);
+    const from = slot.firmware.hash;
+    if (good === undefined || good.hash === from) {
+      await this.#reset(slot);
+      return;
+    }
+    this.#log(
+      "warn",
+      `${slot.name} crashed on probation; falling back to its known-good firmware`,
+      {
+        from,
+        to: good.hash,
+      },
+    );
+    slot.firmware = good;
+    slot.source = good.source;
+    await this.#reset(slot);
+    if (slot.installed !== null) {
+      slot.state = "degraded";
+      slot.error = crash;
+      this.#emit({
+        type: "swap",
+        device: slot.name,
+        action: "swap",
+        mode: "restart",
+        from,
+        to: good.hash,
+      });
+    }
+  }
+
+  /**
+   * Takes a group replaced together back to its known-good firmware after one of its devices
+   * crashed on probation, so the providers and consumers keep matching contracts.
+   */
+  async #fallBackGroup(names: readonly string[], crashed: string, crash: WireError): Promise<void> {
+    const members: Member[] = [];
+    for (const name of names) {
+      const slot = this.#slots.get(name);
+      const good = this.#knownGood.get(name);
+      if (slot === undefined || slot.removed || good === undefined) continue;
+      members.push({ slot, firmware: good, source: good.source });
+    }
+    try {
+      const context = { cause: "fallback" as const, started: Date.now(), crash };
+      await updates.run(context, () => this.#replaceCold(members, new Set([crashed])));
+      const slot = this.#slots.get(crashed);
+      if (slot?.installed != null) {
+        slot.state = "degraded";
+        slot.error = crash;
+      }
+    } catch (error) {
+      this.#log("error", "the group did not fall back to its known-good firmware", {
+        error: toWireError(error),
+      });
+      const slot = this.#slots.get(crashed);
+      if (slot !== undefined && slot.installed === null && !slot.busy) this.#recover(slot);
+    }
+  }
+
+  /**
+   * Puts the devices of a successful update on probation. A device whose firmware is its
+   * known-good one needs none; with probation off, the new firmware is known-good at once.
+   */
+  #startProbation(names: readonly string[]): void {
+    for (const name of names) {
+      const slot = this.#slots.get(name);
+      if (slot === undefined || slot.removed) continue;
+      this.#endProbation(name);
+      if (this.#probationMs === 0) {
+        this.#knownGood.set(name, slot.firmware);
+        continue;
+      }
+      if (this.#knownGood.get(name)?.hash === slot.firmware.hash) continue;
+      const firmware = slot.firmware;
+      const timer = setTimeout(() => {
+        this.#probation.delete(name);
+        if (this.#slots.get(name)?.firmware === firmware) this.#knownGood.set(name, firmware);
+      }, this.#probationMs);
+      timer.unref?.();
+      this.#probation.set(name, { until: Date.now() + this.#probationMs, timer, group: names });
+    }
+  }
+
+  #endProbation(name: string): void {
+    const probation = this.#probation.get(name);
+    if (probation === undefined) return;
+    clearTimeout(probation.timer);
+    this.#probation.delete(name);
+  }
+
+  /**
+   * Deletes the bundles this rack built that nothing needs: no instance, no slot, no known-good
+   * firmware, and no kept record. Bundles that other racks built are never touched.
+   *
+   * @decision .agents/decisions/261117_005743-fallback-rollback-and-history.md#update-history
+   */
+  async #collectGarbage(): Promise<void> {
+    const keep = new Set<string>();
+    for (const instance of this.#instances) keep.add(instance.firmware.hash);
+    for (const slot of this.#slots.values()) keep.add(slot.firmware.hash);
+    for (const firmware of this.#knownGood.values()) keep.add(firmware.hash);
+    for (const record of this.#history) {
+      if (record.from !== null) keep.add(record.from);
+      if (record.to !== null) keep.add(record.to);
+    }
+    for (const [path, firmware] of this.#built) {
+      if (keep.has(firmware.hash)) continue;
+      this.#built.delete(path);
+      if (this.#firmwares.get(firmware.hash) === firmware) this.#firmwares.delete(firmware.hash);
+      await unlink(path).catch(() => {
+        // Already gone, for example removed with .rack/; there is nothing left to delete.
+      });
+    }
+  }
+
+  /** Records a swap event in the history, and puts a successful update on probation. */
+  #record(event: Extract<RackEvent, { type: "swap" }>, group?: GroupKey): void {
+    const context = updates.getStore();
+    const record: UpdateRecord = {
+      seq: ++this.#seq,
+      time: context?.started ?? Date.now(),
+      device: event.device,
+      mode: event.mode,
+      cause:
+        context?.cause ??
+        (event.mode === "plug" || event.mode === "unplug" ? event.mode : "reload"),
+      from: event.from,
+      to: event.to,
+      ok: event.error === undefined,
+    };
+    // A fallback succeeds, and its record keeps the crash that caused it.
+    const error = event.error ?? (context?.cause === "fallback" ? context.crash : undefined);
+    if (error !== undefined) record.error = error;
+    if (group !== undefined) {
+      group.seq ??= record.seq;
+      record.group = group.seq;
+    }
+    this.#history.push(record);
+    if (this.#history.length > this.#historyLimit) this.#history.shift();
+    if (event.mode === "unplug") {
+      this.#endProbation(event.device);
+      if (record.ok) this.#knownGood.delete(event.device);
+    } else if (event.mode === "plug" && record.ok) {
+      const slot = this.#slots.get(event.device);
+      if (slot !== undefined) this.#knownGood.set(event.device, slot.firmware);
+    } else if (record.ok && record.cause !== "fallback") {
+      this.#startProbation(group?.devices ?? [event.device]);
+    }
   }
 
   // ---- Instances ----
@@ -2163,9 +2535,12 @@ class Rack implements InstanceHost {
         source: slot.source,
         inFlight: slot.installed?.serving ?? 0,
         crashes: slot.crashes.filter((time) => now - time < CRASH_WINDOW).length,
+        knownGood: this.#knownGood.get(slot.name)?.hash ?? null,
       };
       const owner = owners.get(slot.name);
       if (owner !== undefined) status.owner = owner;
+      const probation = this.#probation.get(slot.name);
+      if (probation !== undefined) status.probationUntil = probation.until;
       if (slot.error !== undefined) status.error = slot.error;
       return status;
     });
@@ -2199,15 +2574,17 @@ class Rack implements InstanceHost {
     error: RackError,
     slot?: Slot,
     mode: ReloadMode = action === "swap" ? "hot" : action,
+    group?: GroupKey,
   ): RackError {
     const wire = toWireError(error);
     if (slot !== undefined) slot.error = wire;
-    this.#emit({ type: "swap", device, action, mode, from, to, error: wire });
+    this.#emit({ type: "swap", device, action, mode, from, to, error: wire }, group);
     this.#log("error", `${action} of ${device} failed: ${wire.message}`, { code: wire.code });
     return error;
   }
 
-  #emit(event: RackEvent): void {
+  #emit(event: RackEvent, group?: GroupKey): void {
+    if (event.type === "swap") this.#record(event, group);
     for (const listener of [...this.#listeners]) {
       try {
         listener(event);
@@ -2245,6 +2622,26 @@ interface Booted {
   config: unknown;
   firmware: Firmware;
   instance: Instance;
+}
+
+/** What an update runs for: its cause and start time, and for a fallback, the crash. */
+interface UpdateContext {
+  cause: UpdateCause;
+  started: number;
+  crash?: WireError;
+}
+
+/**
+ * The cause of the update in progress. It travels with the operation through every await, so
+ * a fallback that a crash starts in the middle of a reload keeps its own cause.
+ */
+const updates = new AsyncLocalStorage<UpdateContext>();
+
+/** Shared by the records of one group replacement. */
+interface GroupKey {
+  /** `seq` of the group's first record, once it has one. */
+  seq?: number;
+  devices: readonly string[];
 }
 
 /** One device of a replacement, with the firmware it gets. */

@@ -99,6 +99,26 @@ Status: accepted
     - firmware deletion and retention
   - A README section on update safety.
 
+## Implementation
+
+- **API.** `rollback`, `history`, `UpdateRecord`, `UpdateCause`, and `RollbackOptions`, `knownGood` and `probationUntil` in `SlotStatus`, and the start options `probation` and `historyLimit` are all in `src/rack.ts`.
+- **Records.** Every update emits one `swap` event per device, whether it succeeded or failed, so `#record` turns those events into history records.
+  - The cause travels in an `AsyncLocalStorage` context that `#operate` sets for each management operation. A fallback that a crash starts in the middle of a reload therefore keeps its own cause.
+  - `time` is when the operation that made the record started.
+  - A fallback's own event is a success. Its record keeps the crash as `error`, with `ok: true`.
+- **Probation.** `#startProbation` runs after each successful update, unless the cause is a fallback.
+  - A device whose new firmware is its known-good firmware gets no probation. That covers a rollback to known-good firmware, and a restart's consumers, which reload from the firmware they run.
+  - Plugging a device makes its firmware known-good at once, as a cold start does, since there is nothing to fall back to.
+- **Fallback.** `onExit` checks for probation before resetting.
+  - `#fallBack` resets a single device from its known-good firmware.
+  - `#fallBackGroup` runs in the management queue and takes the group back through the cold engine of [Hot swaps, cold swaps, and restarts](261116_233956-cold-swaps-and-restarts.md#cold-swaps).
+- **Rollback.** `#rollback` finds the update that installed the current firmware, and its group, in the history.
+  - The earlier firmware must have the same need names as the running plan. Their connectors may differ, as when a group undoes a contract change; the replacement checks them.
+- **Firmware files.**
+  - Every build goes through `#build`, which records the bundles this rack built.
+  - `#collectGarbage` runs at the end of each management operation, in the queue, so it never deletes a bundle that an operation has built and not yet booted.
+- **Tests:** `test/safety.test.ts`. Ten parts of the implementation were each taken out in turn, and each time at least one test failed.
+
 ## Confirmation
 
 - The user asked for a passive fallback or an active rollback against device defects, and for bounded rollback records, and accepted this decision on 2026-11-17.

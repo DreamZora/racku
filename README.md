@@ -303,17 +303,21 @@ await running.stop();
 | `callTimeout` | 30 000 ms | Timeout of calls that set none. |
 | `hookTimeout` | 30 000 ms | Timeout of boot, each lifecycle hook, and each `metrics()` request. |
 | `drainTimeout` | 10 000 ms | How long a retiring instance may finish its calls. |
+| `probation` | 60 000 ms | How long a new instance may crash before it falls back to known-good firmware; 0 turns fallback off. |
+| `historyLimit` | 256 | Most update records `history()` keeps. |
 | `plan` | `true` | How a scanned rack uses its plan file: `true` follows it, `"update"` rewrites it as `rack dev` does, and `false` neither reads nor writes it. |
 
 The handle returned by `start`:
 
 | Method | Purpose |
 |---|---|
-| `status()` | Each device's slot, height, state, firmware hash, calls in flight, recent crashes, and, for a copy, its `owner`. |
+| `status()` | Each device's slot, height, state, firmware and known-good hashes, probation, calls in flight, recent crashes, and, for a copy, its `owner`. |
 | `call(address, method, input, options?)` | Call a port from outside the rack. |
 | `swap(name, source?)` | Replace a device now, optionally with another device file. |
 | `restart(name, { cascade? })` | Stop a device and start it again from scratch; its direct consumers then reload. |
 | `reload(manifest?)` | Rebuild all firmware and replace the devices whose hash changed; with a manifest, also move to its layout. |
+| `rollback(name, { to? })` | Go back to earlier firmware that the history keeps. |
+| `history(name?)` | List the updates, newest first. |
 | `plug(u, slot(...))` / `unplug(name)` | Add a device to a free slot, or remove one that nothing uses. |
 | `subscribe(listener)` | Receive power, swap, fault, and log events. |
 | `metrics()` | Read each device's call and event counters. |
@@ -405,6 +409,34 @@ When a scanned rack's plan changes, or `rack dev` sees the manifest change, the 
 ### Crashes
 
 When a device crashes (an uncaught exception, an unhandled rejection, or `process.exit`), its calls in flight fail with `RACK_DEVICE_FAULT` and the rack resets it from the same firmware. Calls during the reset fail with `RACK_LINK_DOWN`. In-memory state does not survive a reset, so keep state that matters in a storage device. After more than 3 crashes within 60 seconds, the slot is marked `faulted` until a swap succeeds.
+
+## Update safety
+
+An update can pass `selfTest` and still be defective. The rack guards against that in two ways.
+
+**Passive fallback.**
+- **Known-good firmware.** Each device has one: the firmware it started with at cold start, or the last firmware that got through probation.
+- **Probation.** After an update, the new instance is on probation for `probation` milliseconds, 60 000 by default.
+- **Falling back.** If the instance crashes on probation, the rack does not reset it from the same firmware. It starts the known-good firmware instead, fresh, and the slot reports `degraded` with the crash as its error. A group replaced together for a contract change falls back together, so providers and consumers keep matching contracts.
+- **Limits.** A device falls back at most once per update. Setting `probation: 0` turns fallback off.
+- **Status.** `status()` shows each device's `knownGood` firmware hash, and `probationUntil` while it is on probation.
+
+**Active rollback.**
+- `rack.rollback(name)` goes back to the firmware before the current one, as a hot or cold swap, keeping the state. Undoing a group replacement takes the whole group back.
+- `rack.rollback(name, { to: hash })` goes back to any firmware the history still keeps.
+- A rollback restores code only. When the earlier firmware has other needs than the running plan, the rollback fails with `RACK_SWAP_REJECTED`, and nothing changes.
+
+**History.**
+- `rack.history(name?)` lists the updates newest first, for the whole rack or for one device. That covers every swap, cold swap, restart, plug, unplug, rollback, and fallback, whether it succeeded or failed.
+
+  ```js
+  { seq: 12, time: 1763300000000, device: "orders", mode: "restart", cause: "fallback",
+    from: "9c1e…", to: "7f3a…", ok: true, error: { code: "RACK_DEVICE_FAULT", message: "…" } }
+  ```
+
+- **Fields.** `cause` says what asked for the update: `reload`, `swap`, `restart`, `rollback`, `fallback`, `plug`, or `unplug`. Records of one group replacement share a `group`. The rollback records are the ones whose cause is `rollback` or `fallback`.
+- **Limit.** The history keeps at most `historyLimit` records, 256 by default, in memory, and a restart of the rack starts it empty.
+- **Firmware files.** The rack deletes the firmware bundles it built once nothing needs them: no instance, no known-good firmware, and no kept record. So `.rack/firmware/` stays bounded, and `rollback` reaches only the firmware the kept records name.
 
 ## HTTP panel
 
