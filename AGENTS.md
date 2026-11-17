@@ -209,6 +209,7 @@ test/                bun:test tests, named *.test.ts
   fixtures/          test devices, connectors, and helpers; no tests
 examples/shop-api/   the example app
 scripts/             project scripts; check-decisions.ts is the decision gate
+.github/workflows/   check.yml, the CI jobs on Linux, macOS, and Windows
 .agents/decisions/   decision records, stored flat as <YYMMDD>_<hhmmss>-<topic>.md
 ```
 

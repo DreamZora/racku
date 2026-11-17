@@ -12,7 +12,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { posix, win32 } from "node:path";
 import { RackError, toWireError } from "./errors.ts";
 import { slot } from "./manifest.ts";
 import type { RackHandle } from "./rack.ts";
@@ -69,6 +69,8 @@ export function controlPaths(
   platform: NodeJS.Platform = process.platform,
 ): { dir: string; socket: string; file: string } {
   const key = new Bun.CryptoHasher("sha256").update(baseDir).digest("hex").slice(0, 16);
+  // The paths follow the platform asked for, not the one this runs on.
+  const { join } = platform === "win32" ? win32 : posix;
   let dir: string;
   if (platform === "win32") {
     dir = join(

@@ -49,6 +49,16 @@ Status: accepted
   - A test of the Windows defaults that runs only on Windows: `rack start` listens on loopback TCP, writes its control file under `%LOCALAPPDATA%`, and `rack ctl` reaches it.
   - AGENTS.md's repository structure, and the README's "Development" section.
 
+## Implementation
+
+- `.github/workflows/check.yml` holds the three jobs.
+  - It pins `actions/checkout` v7.0.1 and `oven-sh/setup-bun` v2.2.0 by commit hash.
+  - Each job ends after 15 minutes, so a hung run can't spend the default six hours.
+- `test/control.test.ts` skips the Unix socket tests and the file-mode check on Windows. Its test of the Windows defaults runs only on Windows.
+- Two fixes for other systems, found by reading the code before the first runs:
+  - `CONTROL_DIR` in `test/fixtures/app.ts` sits in `/tmp` outside Windows. The temporary directory of macOS is about 49 characters long, which makes the test sockets about 105 characters, past the 103 that macOS allows. Bun 1.4.4 on Linux accepted socket paths of 120 characters, so the limit doesn't show on Linux.
+  - `controlPaths()` in `src/control.ts` joins paths by the rules of the platform it is asked about, so its tests give the same answers on every system.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-17, as part of the P2 plan, together with implementing it first so that the rest of P2 also runs on macOS.

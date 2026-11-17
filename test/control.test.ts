@@ -7,10 +7,12 @@
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-tcp-endpoint
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-protocol
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-command
+ * @decision .agents/decisions/261117_063301-continuous-integration.md#decision
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { slot } from "rack42u";
 import { type ControlFile, controlPaths, controlTransport } from "../src/control.ts";
 import {
@@ -24,6 +26,9 @@ import {
 } from "./fixtures/app.ts";
 
 const startRack = useRacks();
+
+/** Windows has no Unix sockets and no file modes; tests that need them skip it. */
+const WINDOWS = process.platform === "win32";
 
 // In-process racks use the same runtime directory as the rack processes the tests start.
 let savedRuntime: string | undefined;
@@ -88,7 +93,7 @@ async function raw(url: string, request: string): Promise<number> {
   return Number(/^HTTP\/1\.1 (\d+)/.exec(response)?.[1]);
 }
 
-describe("the Unix socket", () => {
+describe.skipIf(WINDOWS)("the Unix socket", () => {
   // README.md, "Managing a running rack".
   test("README.md: rack start opens a socket only its user can use, and rack ctl operates the rack through it", async () => {
     const created = await app();
@@ -151,7 +156,7 @@ describe("the TCP endpoint", () => {
       { baseDir: created.dir, control: { port: 0 } },
     );
     const paths = controlPaths(created.dir);
-    expect(await mode(paths.file)).toBe("600");
+    if (!WINDOWS) expect(await mode(paths.file)).toBe("600");
     const { url, token } = (await Bun.file(paths.file).json()) as ControlFile;
     const post = (op: string, body: unknown, headers: Record<string, string> = {}) =>
       fetch(`${url}/v1/${op}`, {
@@ -230,46 +235,83 @@ describe("transports by platform", () => {
 });
 
 describe("the protocol", () => {
-  test("README.md: operations from the endpoint and from code run one at a time, in call order", async () => {
-    const created = await app();
-    const { running } = await startRack(
-      {
-        slots: {
-          1: slot("./devices/busy.ts", { config: { activateDelayMs: 150 } }),
+  test.skipIf(WINDOWS)(
+    "README.md: operations from the endpoint and from code run one at a time, in call order",
+    async () => {
+      const created = await app();
+      const { running } = await startRack(
+        {
+          slots: {
+            1: slot("./devices/busy.ts", { config: { activateDelayMs: 150 } }),
+          },
         },
-      },
-      { baseDir: created.dir, control: true },
-    );
-    const fromCode = running.swap("busy");
-    const fromEndpoint = fetch("http://localhost/v1/restart", {
-      method: "POST",
-      unix: controlPaths(created.dir).socket,
-      body: JSON.stringify({ args: ["busy"] }),
-    });
-    await fromCode;
-    expect(((await (await fromEndpoint).json()) as { ok: boolean }).ok).toBe(true);
-    expect(running.history().map((record) => record.cause)).toEqual(["restart", "swap"]);
-  });
+        { baseDir: created.dir, control: true },
+      );
+      const fromCode = running.swap("busy");
+      const fromEndpoint = fetch("http://localhost/v1/restart", {
+        method: "POST",
+        unix: controlPaths(created.dir).socket,
+        body: JSON.stringify({ args: ["busy"] }),
+      });
+      await fromCode;
+      expect(((await (await fromEndpoint).json()) as { ok: boolean }).ok).toBe(true);
+      expect(running.history().map((record) => record.cause)).toEqual(["restart", "swap"]);
+    },
+  );
 
-  test("README.md: plug takes its slot spec as { source, name, config }", async () => {
-    const created = await app();
-    const { running } = await startRack(
-      { slots: { 1: slot("./devices/counter.ts") } },
-      { baseDir: created.dir, control: true },
-    );
-    const answer = await fetch("http://localhost/v1/plug", {
-      method: "POST",
-      unix: controlPaths(created.dir).socket,
-      body: JSON.stringify({ args: [3, { source: "./devices/counter.ts", name: "second" }] }),
-    });
-    expect(await answer.json()).toEqual({ ok: true, value: null });
-    expect(running.status().map((s) => s.name)).toEqual(["counter", "second"]);
-  });
+  test.skipIf(WINDOWS)(
+    "README.md: plug takes its slot spec as { source, name, config }",
+    async () => {
+      const created = await app();
+      const { running } = await startRack(
+        { slots: { 1: slot("./devices/counter.ts") } },
+        { baseDir: created.dir, control: true },
+      );
+      const answer = await fetch("http://localhost/v1/plug", {
+        method: "POST",
+        unix: controlPaths(created.dir).socket,
+        body: JSON.stringify({ args: [3, { source: "./devices/counter.ts", name: "second" }] }),
+      });
+      expect(await answer.json()).toEqual({ ok: true, value: null });
+      expect(running.status().map((s) => s.name)).toEqual(["counter", "second"]);
+    },
+  );
 
   test("rack ctl reports when no rack runs for the directory", async () => {
     const created = await app();
     const ctl = run(["ctl", "status"], created.dir);
     expect(await ctl.exited()).toBe(1);
     expect(ctl.output).toContain("no running rack has the base directory");
+  });
+});
+
+describe.skipIf(!WINDOWS)("Windows defaults", () => {
+  // README.md, "Managing a running rack". Runs only in CI's Windows job.
+  test("README.md: on Windows, rack start listens on loopback TCP, writes its control file under %LOCALAPPDATA%, and rack ctl reaches it", async () => {
+    const saved = process.env.LOCALAPPDATA;
+    const local = join(CONTROL_DIR, "LocalAppData");
+    process.env.LOCALAPPDATA = local;
+    try {
+      const created = await app();
+      const rack = run(["start"], created.dir, { LOCALAPPDATA: local });
+      await rack.waitFor(/control listening/);
+      expect(rack.output).toMatch(/control listening .*http:\/\/127\.0\.0\.1:\d+/);
+      const paths = controlPaths(created.dir);
+      expect(paths.file.startsWith(join(local, "rack42u", "control"))).toBe(true);
+      const { url } = (await Bun.file(paths.file).json()) as ControlFile;
+      expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      const status = run(["ctl", "status"], created.dir, { LOCALAPPDATA: local });
+      expect(await status.exited()).toBe(0);
+      expect(JSON.parse(status.output)).toEqual([
+        expect.objectContaining({ name: "counter", state: "online" }),
+      ]);
+      const stop = run(["ctl", "stop"], created.dir, { LOCALAPPDATA: local });
+      expect(await stop.exited()).toBe(0);
+      expect(await rack.exited()).toBe(0);
+      expect(existsSync(paths.file)).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = saved;
+    }
   });
 });

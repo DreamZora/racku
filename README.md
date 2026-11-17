@@ -466,7 +466,7 @@ rack ctl stop                            # shut down in order, like Ctrl-C
   - The rack writes the address and the token to a control file in the same private directory. On Windows, that directory is `%LOCALAPPDATA%\rack42u\control\`.
   - The endpoint refuses requests that carry an `Origin` header or a `Host` other than its own, so a web page cannot drive it.
   - `rack ctl --url <url> --token <token>` reaches such a rack from anywhere on the machine.
-  - The Windows defaults are not tested yet: the project's tests run on Linux, and they cover the TCP endpoint through `--control-port`.
+  - The Windows defaults are not tested yet. The tests cover the TCP endpoint through `--control-port` on Linux and macOS; CI also runs them on Windows, but only to report, since Windows isn't a supported platform yet.
 
 **The protocol.** Each operation is `POST /v1/<operation>` with the body `{ "args": [...] }`, and runs the rack-handle method of the same name.
 - It answers `{ "ok": true, "value": ... }`, or `{ "ok": false, "error": { code, message } }`.
@@ -542,6 +542,8 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 | Lint and format check | `bun run lint` |
 | Check decision records | `bun run check:decisions` |
 | All of the above | `bun run check` |
+
+CI runs `bun run check` on Linux for every push and pull request, and `bun test` on macOS and Windows for changes to `main`; the Windows job only reports.
 
 Design decisions live in [`.agents/decisions/`](.agents/decisions); [`AGENTS.md`](AGENTS.md) explains how the project is run.
 

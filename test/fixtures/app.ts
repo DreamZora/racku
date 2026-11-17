@@ -26,9 +26,14 @@ export const FIXTURES = import.meta.dir;
 
 /**
  * The runtime directory of the `rack` processes that tests start, so their management sockets
- * and control files stay out of the user's own.
+ * and control files stay out of the user's own. Outside Windows it sits in `/tmp`: the
+ * temporary directory of macOS is long enough to push a socket path past the 104-byte limit of
+ * its Unix sockets.
  */
-export const CONTROL_DIR = join(tmpdir(), `rack42u-test-control-${process.pid}`);
+export const CONTROL_DIR = join(
+  process.platform === "win32" ? tmpdir() : "/tmp",
+  `rack42u-test-control-${process.pid}`,
+);
 
 /** A temporary app directory whose `node_modules` links to this repository. */
 export interface TempApp {
