@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { type RackHandle, slot } from "rack42u";
+import { type RackHandle, slot, type UpdateCause, type UpdateRecord } from "rack42u";
 import { errorOf, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -290,7 +290,10 @@ describe("update history", () => {
       await running.reload();
     }
     await running.swap("base");
-    const all = running.history();
+    // The record types are part of the package's API.
+    const all: UpdateRecord[] = running.history();
+    const causes: UpdateCause[] = all.map((record) => record.cause);
+    expect(causes).toEqual(["swap", "reload", "reload"]);
     expect(all.map((record) => [record.device, record.cause, record.mode])).toEqual([
       ["base", "swap", "hot"],
       ["counter", "reload", "hot"],

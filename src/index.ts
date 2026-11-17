@@ -83,11 +83,16 @@ export type {
 export {
   type RackEvent,
   type RackHandle,
+  type ReloadMode,
   type ReloadResult,
+  type RestartOptions,
+  type RollbackOptions,
   type SlotState,
   type SlotStatus,
   type StartOptions,
   type SwapAction,
   start,
+  type UpdateCause,
+  type UpdateRecord,
 } from "./rack.ts";
 export type { StandardSchemaV1 } from "./schema.ts";
