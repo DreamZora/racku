@@ -4,7 +4,7 @@ rack42u is a Bun framework for building an application out of hot-swappable **de
 
 The framework provides the rack runtime and a few standard devices. What you mount in the rack, and whether the result is an API server, a worker process, or something else, is up to you.
 
-> **Status: P0.** This is the first usable version. See [Not in P0](#not-in-p0) for what is still missing.
+> **Status: P1.** P1 adds scanned racks, cold swaps and restarts, update safety, and `rack ctl` to P0, the first usable version. See [Not supported yet](#not-supported-yet) for what is still missing.
 
 ## Requirements
 
@@ -54,7 +54,7 @@ The sections below build a second small app, file by file. The test suite extrac
 | Backplane | The only channel between devices. Devices never import each other. |
 | Link | A direct channel the backplane sets up from one device's need to another device's port. Calls and events between devices travel on links, Worker to Worker, without passing through the rack's main thread. |
 | Patch | An explicit connection, needed when several devices provide the same connector. |
-| Panel | An external port owned by the rack. P0 has an HTTP panel. |
+| Panel | An external port owned by the rack, such as the HTTP panel. |
 | Firmware | The hashed bundle a device file is built into; the hash is its version. |
 | Swap | The one process behind replace, hot reload, plug, and unplug. |
 
@@ -527,7 +527,7 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 | `RACK_SWAP_REJECTED` | A swap, plug, unplug, or reload was refused. |
 | `RACK_HOOK_FAILED` | A lifecycle hook failed or timed out. |
 
-## Not in P0
+## Not supported yet
 
 - Devices run only as `sled` (one Worker each); the `inline` and `chassis` forms are planned.
 - A WebSocket panel, streaming HTTP bodies, circuit breakers, rate limiting, watchdogs for hung devices, and a management dashboard.
