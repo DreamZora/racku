@@ -33,7 +33,12 @@ interface HttpOutput {
   body: Uint8Array | null;
 }
 
-const STATUS_BY_CODE: Record<string, number> = { RACK_LINK_DOWN: 503, RACK_TIMEOUT: 504 };
+// @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
+const STATUS_BY_CODE: Record<string, number> = {
+  RACK_LINK_DOWN: 503,
+  RACK_OVERLOADED: 503,
+  RACK_TIMEOUT: 504,
+};
 
 /**
  * Opens the HTTP panel.

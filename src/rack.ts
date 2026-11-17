@@ -19,6 +19,7 @@
  * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#three-ways-to-replace-an-instance
  * @decision .agents/decisions/261117_005743-fallback-rollback-and-history.md#update-history
  * @decision .agents/decisions/261117_062959-watchdog.md#biting
+ * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dirent } from "node:fs";
@@ -58,6 +59,7 @@ import {
   type Fru,
   type LogNotice,
   type Marker,
+  QUEUE_LIMIT,
   WATCHDOG_MIN,
 } from "./protocol.ts";
 import { detach, transferList } from "./transfer.ts";
@@ -199,6 +201,13 @@ export interface StartOptions {
   probation?: number;
   /** Most update records the history keeps, a positive integer; default 256. */
   historyLimit?: number;
+  /**
+   * The most calls a need of a device has unfinished, sent or held, and the most events that wait
+   * for one subscriber, a positive integer; default 10 000. Calls from outside the rack are
+   * counted per device. A call beyond the limit fails at once with `RACK_OVERLOADED`; an event
+   * beyond it is dropped for that subscriber and counted in `dropped`.
+   */
+  queueLimit?: number;
   /**
    * Timeout of every device's event-loop watchdog, in ms, at least 1 000; default 10 000. A
    * device whose event loop stays blocked that long, or whose own watchdog goes unfed for its
@@ -368,6 +377,8 @@ class Rack implements InstanceHost {
   readonly #historyLimit: number;
   /** Timeout of the event-loop watchdogs, or 0 when watchdogs are off. */
   readonly #watchdog: number;
+  /** The most unfinished calls of a need, or from outside the rack to a device. */
+  readonly #queueLimit: number;
   /** Update records, oldest first, at most `#historyLimit`. */
   readonly #history: UpdateRecord[] = [];
   #seq = 0;
@@ -424,11 +435,16 @@ class Rack implements InstanceHost {
         `start option watchdog must be 0 or at least ${WATCHDOG_MIN} ms`,
       );
     }
+    this.#queueLimit = options.queueLimit ?? QUEUE_LIMIT;
+    if (!(Number.isSafeInteger(this.#queueLimit) && this.#queueLimit >= 1)) {
+      throw new RackError("RACK_MANIFEST", "start option queueLimit must be a positive integer");
+    }
     this.#backplane = new Backplane(
       this.#slots,
       this.#instances,
       this.#callTimeout,
       this.#hookTimeout,
+      this.#queueLimit,
     );
   }
 
@@ -2507,6 +2523,7 @@ class Rack implements InstanceHost {
         baseDir: this.#baseDir,
         callTimeout: this.#callTimeout,
         watchdog: this.#watchdog,
+        queueLimit: this.#queueLimit,
         timeout: this.#hookTimeout,
       });
       return instance;
@@ -2981,6 +2998,7 @@ function newSlot({ u, config, firmware, instance }: Booted): Slot {
     busy: false,
     held: false,
     queue: [],
+    unfinished: 0,
     crashes: [],
     longestWatchdog: 0,
     error: undefined,

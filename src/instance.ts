@@ -191,6 +191,8 @@ export class Instance {
     callTimeout: number;
     /** Timeout of the event-loop watchdog, or 0 to check no watchdogs. */
     watchdog: number;
+    /** The most unfinished calls of each need, and the most events waiting on each link. */
+    queueLimit: number;
     timeout: number;
   }): Promise<Fru> {
     this.#loopTimeout = options.watchdog;
@@ -208,6 +210,7 @@ export class Instance {
         callTimeout: options.callTimeout,
         gauge: this.#gauge.buffer as SharedArrayBuffer,
         watchdog: options.watchdog,
+        queueLimit: options.queueLimit,
         port: this.#bootPort,
       },
       options.timeout,

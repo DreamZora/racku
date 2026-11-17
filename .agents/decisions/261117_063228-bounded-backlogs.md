@@ -81,6 +81,18 @@ Status: accepted
     - a slow subscriber misses events beyond the limit, counted as dropped, while a fast one gets every event
   - README: the option, the code, and what overload looks like.
 
+## Implementation
+
+- `queueLimit` is a start option in `src/rack.ts`. The rack passes it to each Worker in the boot request, and to the backplane.
+- `src/worker.ts`:
+  - Each need counts its unfinished calls. `callOut()` refuses a call beyond the limit with `RACK_OVERLOADED` after the call has taken its buffers, as other early failures do, so held calls need no bound of their own.
+  - Each subscriber link counts the events its provider sent. The subscriber's host reports the events it took in `taken` messages, once per quarter of `queueLimit` events and at least once per 256, so a subscriber that keeps up never looks full. A provider drops an event for a link whose backlog has reached the limit, and events for a held subscriber use the same limit.
+  - `serve()` answers a call whose deadline has passed with `RACK_TIMEOUT` before it validates or runs anything.
+- `src/backplane.ts` counts the unfinished calls from outside the rack on each slot, in `Slot.unfinished`. Each call remembers the slot that counted it, so an unplug and a new plug under the same name can't upset the count.
+- `src/protocol.ts` carries `queueLimit` in the boot request and the `taken` message. `src/errors.ts` adds `RACK_OVERLOADED`, and `src/panel.ts` answers it with 503.
+- A refused call from outside the rack reaches only its caller: no device saw it, so `metrics()` doesn't count it. Counting it on the main thread would need a decision of its own.
+- `test/backlogs.test.ts` tests the decision. Twelve deliberate breaks, such as no limit, counts that never drop, subscribers that never report, or providers that run expired calls, each made one of its tests fail.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-17, after asking that the breaker and thermal be judged against the project's goals instead of copied from physical racks.

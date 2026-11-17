@@ -7,7 +7,12 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#error-model
  */
 
-/** Framework error codes. Device-defined codes must not start with `RACK_`. */
+/**
+ * Framework error codes. Device-defined codes must not start with `RACK_`, except
+ * `RACK_OVERLOADED`, which a device may throw for a limit of its own.
+ *
+ * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
+ */
 export type RackErrorCode =
   | "RACK_TIMEOUT"
   | "RACK_CANCELLED"
@@ -17,6 +22,7 @@ export type RackErrorCode =
   | "RACK_INVALID_OUTPUT"
   | "RACK_INVALID_CONFIG"
   | "RACK_DEVICE_FAULT"
+  | "RACK_OVERLOADED"
   | "RACK_MANIFEST"
   | "RACK_SWAP_REJECTED"
   | "RACK_HOOK_FAILED";
@@ -41,7 +47,7 @@ export class RackError extends Error {
   readonly data: unknown;
 
   /**
-   * @param code Error code; device codes must not start with `RACK_`.
+   * @param code Error code; device codes must not start with `RACK_`, except `RACK_OVERLOADED`.
    * @param message Human-readable message.
    * @param data Optional structured-cloneable details; dropped at the backplane if not cloneable.
    */

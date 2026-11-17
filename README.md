@@ -140,7 +140,7 @@ The first argument of every hook, `ctx`, provides:
 
 `activate` also receives `scope`. `scope.every(ms, task)` and `scope.after(ms, task)` schedule timers that stop on `deactivate`, and each returns a function that cancels its timer; `scope.signal` aborts on `deactivate`. Errors thrown by timer tasks and event handlers are logged; they do not crash the device. `scope.watchdog(ms, name?)` arms a watchdog for a work loop, as [Hangs and watchdogs](#hangs-and-watchdogs) describes.
 
-Data that crosses the backplane must survive `structuredClone`: no functions, no class instances. It is copied, unless you move or share binary data as [Binary data](#binary-data) describes. Throw `new RackError(code, message, data?)` to give callers a code they can branch on. Device codes must not start with `RACK_`, and any other exception reaches the caller as `RACK_DEVICE_FAULT`.
+Data that crosses the backplane must survive `structuredClone`: no functions, no class instances. It is copied, unless you move or share binary data as [Binary data](#binary-data) describes. Throw `new RackError(code, message, data?)` to give callers a code they can branch on. Device codes must not start with `RACK_`, except `RACK_OVERLOADED` for a limit of the device's own, as [Overload](#overload) describes. Any other exception reaches the caller as `RACK_DEVICE_FAULT`.
 
 Each Worker receives a copy of `process.env` as it is when the Worker starts.
 
@@ -307,6 +307,7 @@ await running.stop();
 | `probation` | 60 000 ms | How long a new instance may crash before it falls back to known-good firmware; 0 turns fallback off. |
 | `historyLimit` | 256 | Most update records `history()` keeps. |
 | `watchdog` | 10 000 ms | Timeout of every device's event-loop watchdog, at least 1 000; 0 turns off every watchdog. See [Hangs and watchdogs](#hangs-and-watchdogs). |
+| `queueLimit` | 10 000 | Most calls a need has unfinished, and most events that wait for one subscriber. See [Overload](#overload). |
 | `control` | off | Open the management endpoint: `true` for the platform's default, or `{ port, token? }` for loopback TCP. |
 | `plan` | `true` | How a scanned rack uses its plan file: `true` follows it, `"update"` rewrites it as `rack dev` does, and `false` neither reads nor writes it. |
 
@@ -389,7 +390,7 @@ A hot swap hands over everything the rack holds. In-memory state crosses only th
 | New calls | Held, then sent to the new instance in order |
 | Links to and from other devices | Switched to the new instance in one step |
 | Event subscriptions | Made again by the new instance, usually in `powerOn` |
-| Events sent to it during the hold | Queued, then delivered |
+| Events sent to it during the hold | Queued, then delivered, up to `queueLimit` |
 | HTTP connections | Stay with the panel |
 | Timers and background tasks | Stopped by `deactivate`, started again by `activate` |
 | In-memory state | `snapshot` on the old instance, `restore` on the new one |
@@ -471,6 +472,21 @@ An update can pass `selfTest` and still be defective. The rack guards against th
 - **Limit.** The history keeps at most `historyLimit` records, 256 by default, in memory, and a restart of the rack starts it empty.
 - **Firmware files.** The rack deletes the firmware bundles it built once nothing needs them: no instance, no known-good firmware, and no kept record. So `.rack/firmware/` stays bounded, and `rollback` reaches only the firmware the kept records name.
 
+## Overload
+
+A device that falls behind can't take the rack down with it: every backlog between devices has a limit, and what goes beyond the limit fails at once.
+
+- **Calls.** A need has at most `queueLimit` calls unfinished, 10 000 by default: calls on their way, being served, and held while the provider swaps.
+  - Calls from outside the rack, through `call()` and the panel, are counted per device the same way.
+  - A call beyond the limit fails at once with `RACK_OVERLOADED`, without reaching the provider. The panel answers it with 503.
+- **Events.** A subscriber that falls `queueLimit` events behind misses the next ones. The provider counts them in `dropped`, and `emit` doesn't fail. Subscribers that keep up get every event.
+- **Expired calls.** A provider doesn't start a call whose deadline passed while the call waited. It answers `RACK_TIMEOUT` at once, so a provider that falls behind spends its time on calls that someone still waits for.
+- **Observing it.**
+  - A refused call counts under `RACK_OVERLOADED` among the errors of its need in `metrics()`, and an expired call under `RACK_TIMEOUT` among the errors of the provider's member.
+  - A refused call from outside the rack reaches only its caller: no device counts it.
+  - `pending`, `active`, and the event-loop delay `loop` show load building up.
+- **Policy stays in devices.** The rack doesn't retry, open circuit breakers, or limit rates on its own, since whether to retry, wait, or degrade depends on the device. A device can refuse work for a limit of its own, such as a pool of connections, by throwing `RACK_OVERLOADED`; callers and the panel treat it the same way.
+
 ## Managing a running rack
 
 `rack start` and `rack dev` open a management endpoint, and `rack ctl` operates the rack through it:
@@ -530,7 +546,7 @@ export default device({
 });
 ```
 
-An `http/v1` call carries the method, URL, headers, route parameters, and body of the request; `httpHandler` hands your function a standard `Request` with the same method, URL, headers, and body. Duplicate response headers, such as several `Set-Cookie` headers, are kept. Bodies are copied in full. When the call fails, the panel answers with a JSON body `{ code, message }` and status 503 for `RACK_LINK_DOWN`, 504 for `RACK_TIMEOUT`, and 502 for anything else. Unmatched paths get 404.
+An `http/v1` call carries the method, URL, headers, route parameters, and body of the request; `httpHandler` hands your function a standard `Request` with the same method, URL, headers, and body. Duplicate response headers, such as several `Set-Cookie` headers, are kept. Bodies are copied in full. When the call fails, the panel answers with a JSON body `{ code, message }` and status 503 for `RACK_LINK_DOWN` and `RACK_OVERLOADED`, 504 for `RACK_TIMEOUT`, and 502 for anything else. Unmatched paths get 404.
 
 ## Standard devices
 
@@ -553,7 +569,8 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 | `RACK_NO_ROUTE` | No such device, port, or method. |
 | `RACK_INVALID_INPUT` / `RACK_INVALID_OUTPUT` | Input or output failed its schema, cannot be cloned, or lists a buffer that cannot be transferred. |
 | `RACK_INVALID_CONFIG` | A device's configuration failed its schema. |
-| `RACK_DEVICE_FAULT` | The device threw a non-`RackError` exception, or crashed. |
+| `RACK_DEVICE_FAULT` | The device threw a non-`RackError` exception, crashed, or hung until a watchdog bit. |
+| `RACK_OVERLOADED` | The call would exceed `queueLimit`, or the device refused it for a limit of its own. |
 | `RACK_MANIFEST` | The manifest or the assembly is invalid. |
 | `RACK_SWAP_REJECTED` | A swap, plug, unplug, or reload was refused. |
 | `RACK_HOOK_FAILED` | A lifecycle hook failed or timed out. |
@@ -561,7 +578,7 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 ## Not supported yet
 
 - Devices run only as `sled` (one Worker each); the `inline` and `chassis` forms are planned.
-- A WebSocket panel, streaming HTTP bodies, circuit breakers, rate limiting, and a management dashboard.
+- A WebSocket panel, streaming HTTP bodies, and a management dashboard.
 - Connecting several racks, and packaging a rack with `bun build --compile`.
 
 ## Development

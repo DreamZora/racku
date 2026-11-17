@@ -21,6 +21,9 @@
  * @decision .agents/decisions/261112_043034-device-api.md#device-context
  * @decision .agents/decisions/261117_062959-watchdog.md#two-kinds-of-watchdog
  * @decision .agents/decisions/261117_062959-watchdog.md#feeding-and-checking
+ * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
+ * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-events
+ * @decision .agents/decisions/261117_063228-bounded-backlogs.md#stale-calls
  */
 import { type ConnectorInfo, describeConnector, type EventSpec } from "./connector.ts";
 import {
@@ -124,6 +127,8 @@ interface NeedLink {
   /** Calls that went out on the link and have no result yet, by their id on the link. */
   readonly pending: Map<number, Outgoing>;
   nextId: number;
+  /** Events taken off the link; the provider learns the count in batches. */
+  taken: number;
 }
 
 /** The calls, links, and subscriptions of one need. */
@@ -136,6 +141,8 @@ interface NeedState {
   /** New calls wait in `queue` instead of going out. */
   held: boolean;
   queue: Outgoing[];
+  /** Calls of the need that haven't settled, sent or queued; at most `queueLimit`. */
+  unfinished: number;
   /** Event handlers by event name; a name is present while it has handlers. */
   readonly handlers: Map<string, Set<{ handler: EventHandler }>>;
   readonly calls: Map<string, CalledRpcMetrics>;
@@ -155,6 +162,9 @@ interface ConsumerLink {
   live: boolean;
   /** Calls from the link being served, by their id on the link. */
   readonly serving: Map<number, AbortController>;
+  /** Events sent on the link, and how many of them the consumer reported taken. */
+  sent: number;
+  taken: number;
 }
 
 interface QueuedEvent {
@@ -168,6 +178,13 @@ let impls = new Map<string, Map<string, Impl>>();
 let scope: { controller: AbortController; cancels: Set<() => void> } | undefined;
 const powered = new AbortController();
 let callTimeout = 30_000;
+/** The most unfinished calls of each need, and the most events waiting on each link. */
+let queueLimit = QUEUE_LIMIT;
+/**
+ * How many events a consumer takes before it tells the provider: often enough that a consumer
+ * that keeps up never reaches `queueLimit`, and at most once per 256 events.
+ */
+let takenBatch = 256;
 /**
  * Shared with the main thread, which reads the number of calls being served and the feeds of
  * the watchdogs from it.
@@ -322,6 +339,8 @@ async function boot(request: BootRequest): Promise<Fru> {
     config = result.value;
   }
   callTimeout = request.callTimeout;
+  queueLimit = request.queueLimit;
+  takenBatch = Math.max(1, Math.min(256, Math.floor(queueLimit / 4)));
   gauge = new Int32Array(request.gauge);
   feedLoop(request.watchdog);
   since = Date.now();
@@ -409,6 +428,7 @@ function prepare(def: DeviceDefinition): void {
       links: new Map(),
       held: false,
       queue: [],
+      unfinished: 0,
       handlers: new Map(),
       calls: new Map(),
       events: new Map(),
@@ -529,6 +549,7 @@ function callOut(
     };
     stats.calls++;
     stats.pending++;
+    state.unfinished++;
     try {
       // From here on the call owns the buffers, so they are gone whatever its outcome.
       call.transfer = transferList(transfer, where);
@@ -542,6 +563,11 @@ function callOut(
     }
     if (signal?.aborted) {
       settle(call, failure("RACK_CANCELLED", `${where}: call cancelled`));
+      return;
+    }
+    if (state.unfinished > queueLimit) {
+      const message = `${where}: ${state.name} has ${queueLimit} unfinished calls already`;
+      settle(call, failure("RACK_OVERLOADED", message));
       return;
     }
     // The caller's host owns the timeout of a call on a link.
@@ -564,13 +590,9 @@ function callOut(
   });
 }
 
-/** Keeps a call until its need is released. */
+/** Keeps a call until its need is released; `queueLimit` bounds the queue with the rest. */
 function enqueue(state: NeedState, call: Outgoing): void {
   const where = `${state.name}.${call.member}`;
-  if (state.queue.length >= QUEUE_LIMIT) {
-    settle(call, failure("RACK_LINK_DOWN", `${where}: the provider is held and the queue is full`));
-    return;
-  }
   try {
     // A call that goes out later still carries its input as it was when the device called, and
     // takes its buffers at once.
@@ -637,6 +659,7 @@ function settle(call: Outgoing, outcome: Outcome): void {
     if (index >= 0) queue.splice(index, 1);
   }
   stats.pending--;
+  call.need.unfinished--;
   stats.timeMs += performance.now() - call.started;
   if (outcome.ok) {
     stats.ok++;
@@ -663,7 +686,7 @@ function setHeld(state: NeedState, held: boolean): void {
 
 function linkNeed({ need: name, link: id, end, provider, hold }: NeedLinkRequest): void {
   const state = need(name);
-  const link: NeedLink = { id, port: end, provider, pending: new Map(), nextId: 1 };
+  const link: NeedLink = { id, port: end, provider, pending: new Map(), nextId: 1, taken: 0 };
   state.links.set(id, link);
   state.current = link;
   end.addEventListener("message", (event) =>
@@ -717,6 +740,10 @@ function onNeedLink(state: NeedState, link: NeedLink, message: ToConsumer): void
       return;
     }
     case "event":
+      link.taken++;
+      if (link.taken % takenBatch === 0) {
+        link.port.postMessage({ t: "taken", count: link.taken } satisfies ToProvider);
+      }
       // A replaced link carries the events of an instance that is no longer installed.
       if (state.current === link) deliver(state, message.event, message.payload);
       return;
@@ -793,7 +820,7 @@ async function emitOut(
       // A held consumer gets each event once, whichever of its instances ends up installed.
       if (queuedFor.has(link.consumer)) continue;
       queuedFor.add(link.consumer);
-      if (queue.length >= QUEUE_LIMIT) {
+      if (queue.length >= queueLimit) {
         stats.dropped++;
         continue;
       }
@@ -808,12 +835,18 @@ async function emitOut(
       continue;
     }
     if (!link.live || !link.subscriptions.has(event)) continue;
+    // A subscriber that falls `queueLimit` events behind misses the next ones.
+    if (link.sent - link.taken >= queueLimit) {
+      stats.dropped++;
+      continue;
+    }
     try {
       link.port.postMessage({ t: "event", event, payload: value } satisfies ToConsumer);
     } catch {
       // DataCloneError: the payload passed validation but cannot cross threads.
       throw uncloneable();
     }
+    link.sent++;
     cloned = true;
   }
   // Nothing cloned the payload yet; an uncloneable one still fails the emit.
@@ -832,6 +865,8 @@ function attach({ link: id, end, port, consumer, live, held }: AttachRequest): v
     subscriptions: new Set(),
     live,
     serving: new Map(),
+    sent: 0,
+    taken: 0,
   };
   consumers.set(id, link);
   if (held && !heldEvents.has(consumer)) heldEvents.set(consumer, []);
@@ -870,6 +905,9 @@ function onConsumerLink(link: ConsumerLink, message: ToProvider): void {
       markers.set(link.id, message.token);
       checkDrains();
       return;
+    case "taken":
+      link.taken = Math.max(link.taken, message.count);
+      return;
   }
 }
 
@@ -893,6 +931,7 @@ function live({ consumer, links }: LiveRequest): void {
       if (!link.live || link.consumer !== consumer || link.portName !== port) continue;
       if (link.subscriptions.has(event)) {
         link.port.postMessage({ t: "event", event, payload } satisfies ToConsumer);
+        link.sent++;
       }
     }
   }
@@ -980,6 +1019,13 @@ async function serve(
   };
   let result: CallResult;
   try {
+    // Its caller has given up already: the call waited past its deadline.
+    if (Date.now() >= deadline) {
+      throw new RackError(
+        "RACK_TIMEOUT",
+        `${address}: the deadline passed before the call started`,
+      );
+    }
     const spec = state.def.provides[port]?.members[member];
     const impl = impls.get(port)?.get(member);
     if (spec?.kind !== "rpc" || impl === undefined) {

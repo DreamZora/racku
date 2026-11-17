@@ -67,7 +67,7 @@ Because devices hold only addresses, a reset or swap of a lower device does not 
 
 - Standard Schema validation of connector schemas: `validate`, `formatIssues`, and `isStandardSchema` in `src/schema.ts`, tested in `test/schema.test.ts`.
 - Rack runtime: assembly, the gravity rule, and power sequencing in `src/rack.ts`; the backplane in `src/backplane.ts`; tested in `test/rack.test.ts`.
-- The power-on self-test is the `selfTest` hook. The watchdog is implemented as [Watchdog](261117_062959-watchdog.md) decides. The circuit breaker, thermal, indicator LED, management controller, and top-of-rack switch are not implemented yet.
+- The power-on self-test is the `selfTest` hook. The watchdog is implemented as [Watchdog](261117_062959-watchdog.md) decides, and [Bounded backlogs instead of a breaker and thermal](261117_063228-bounded-backlogs.md) takes the place of the circuit breaker and thermal. The indicator LED, management controller, and top-of-rack switch are not implemented yet.
 
 ## Confirmation
 

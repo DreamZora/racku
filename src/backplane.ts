@@ -11,19 +11,14 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
  * @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
  * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
+ * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
  */
 import type { CallOptions } from "./device.ts";
 import { fromWireError, RackError, type WireError } from "./errors.ts";
 import type { Firmware } from "./firmware.ts";
 import type { Instance, RoutedCall, Wire } from "./instance.ts";
 import { parseAddress } from "./manifest.ts";
-import {
-  type CallResult,
-  type DataFromWorker,
-  type Fru,
-  type Marker,
-  QUEUE_LIMIT,
-} from "./protocol.ts";
+import type { CallResult, DataFromWorker, Fru, Marker } from "./protocol.ts";
 import { detach, moveInto, transferList } from "./transfer.ts";
 
 /** Lifecycle state of a slot as reported by `status()`. */
@@ -48,6 +43,8 @@ interface Call extends RoutedCall {
   timer: ReturnType<typeof setTimeout> | undefined;
   target: Instance | undefined;
   queuedIn: Slot | undefined;
+  /** The slot whose count of unfinished calls includes this call, until it finishes. */
+  counted: Slot | undefined;
   cleanup: (() => void) | undefined;
 }
 
@@ -74,6 +71,8 @@ export interface Slot {
   held: boolean;
   /** Calls from outside the rack that wait while the slot is held. */
   queue: Call[];
+  /** Calls from outside the rack to the device that haven't finished, sent or held. */
+  unfinished: number;
   /** Crash timestamps, pruned to the window of the crash limit when read. */
   crashes: number[];
   /**
@@ -106,6 +105,7 @@ export class Backplane {
   readonly #instances: ReadonlySet<Instance>;
   readonly #callTimeout: number;
   readonly #requestTimeout: number;
+  readonly #queueLimit: number;
   readonly #links = new Map<number, Link>();
   /** The token of the running hold of each held slot, by slot name. */
   readonly #holds = new Map<string, number>();
@@ -120,17 +120,20 @@ export class Backplane {
    * @param instances Every instance whose Worker has not exited, installed or not.
    * @param callTimeout Timeout for calls that set none.
    * @param requestTimeout Timeout of each link-management request to an instance.
+   * @param queueLimit The most unfinished calls from outside the rack to each device.
    */
   constructor(
     slots: ReadonlyMap<string, Slot>,
     instances: ReadonlySet<Instance>,
     callTimeout: number,
     requestTimeout: number,
+    queueLimit: number,
   ) {
     this.#slots = slots;
     this.#instances = instances;
     this.#callTimeout = callTimeout;
     this.#requestTimeout = requestTimeout;
+    this.#queueLimit = queueLimit;
   }
 
   // ---- Links ----
@@ -448,6 +451,12 @@ export class Backplane {
         refuse(new RackError("RACK_CANCELLED", `${address}.${method}: call cancelled`));
         return;
       }
+      // Calls from outside the rack are bounded per device, like the calls of a need.
+      if (slot !== undefined && slot.unfinished >= this.#queueLimit) {
+        const message = `${address}.${method}: ${device} has ${this.#queueLimit} unfinished calls from outside the rack already`;
+        refuse(new RackError("RACK_OVERLOADED", message));
+        return;
+      }
       const call = this.#create(
         device,
         port,
@@ -458,6 +467,10 @@ export class Backplane {
         caller,
         (outcome) => (outcome.ok ? resolve(outcome.value) : reject(fromWireError(outcome.error))),
       );
+      if (slot !== undefined) {
+        slot.unfinished++;
+        call.counted = slot;
+      }
       if (signal !== undefined) {
         const onAbort = () =>
           this.#finish(
@@ -528,6 +541,7 @@ export class Backplane {
       timer: undefined,
       target: undefined,
       queuedIn: undefined,
+      counted: undefined,
       cleanup: undefined,
     };
     // The backplane owns the timeout of a call from outside the rack: it fails the call and
@@ -548,11 +562,7 @@ export class Backplane {
       return;
     }
     if (slot.held) {
-      if (slot.queue.length >= QUEUE_LIMIT) {
-        const message = `${slot.name} is held and its queue is full`;
-        this.#finish(call, failure("RACK_LINK_DOWN", message), false);
-        return;
-      }
+      // The count of unfinished calls bounds the queue.
       if (call.transfer !== undefined) {
         try {
           // The call takes its buffers at once, even though it goes out later.
@@ -607,6 +617,10 @@ export class Backplane {
   #finish(call: Call, outcome: Outcome | undefined, cancelProvider: boolean): void {
     if (call.settled) return;
     call.settled = true;
+    if (call.counted !== undefined) {
+      call.counted.unfinished--;
+      call.counted = undefined;
+    }
     clearTimeout(call.timer);
     call.cleanup?.();
     if (call.transfer !== undefined) detach(call.transfer);

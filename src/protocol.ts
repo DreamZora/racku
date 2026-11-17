@@ -16,7 +16,12 @@ import type { ConnectorInfo } from "./connector.ts";
 import type { HookName, LogLevel } from "./device.ts";
 import type { WireError } from "./errors.ts";
 
-/** Most calls a held need queues, and most events a provider queues for a held consumer. */
+/**
+ * The default of the start option `queueLimit`: the most calls a need has unfinished, sent or
+ * held, and the most events that wait for one subscriber.
+ *
+ * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
+ */
 export const QUEUE_LIMIT = 10_000;
 
 /**
@@ -80,6 +85,8 @@ export interface BootRequest {
    * feeds it often enough for that timeout.
    */
   watchdog: number;
+  /** The most unfinished calls of each need, and the most events waiting on each link. */
+  queueLimit: number;
   port: MessagePort;
 }
 
@@ -325,7 +332,18 @@ export interface LinkEvent {
 }
 
 /** What a consumer sends on a link. */
-export type ToProvider = LinkCall | Cancel | Subscription | HoldMarker;
+/**
+ * Consumer to provider on a link: how many events the consumer's host has taken off the link,
+ * so that the provider can bound the events still waiting there.
+ *
+ * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-events
+ */
+export interface Taken {
+  t: "taken";
+  count: number;
+}
+
+export type ToProvider = LinkCall | Cancel | Subscription | HoldMarker | Taken;
 
 /** What a provider sends on a link. */
 export type ToConsumer = CallResult | LinkEvent | HoldMarker;
