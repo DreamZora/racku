@@ -9,7 +9,7 @@
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-protocol
  */
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdir, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { posix, win32 } from "node:path";
@@ -63,12 +63,15 @@ const OPERATIONS: Record<string, readonly [min: number, max: number]> = {
  * - Windows: the control file under `%LOCALAPPDATA%\\rack42u\\control\\`.
  * - Elsewhere: `$XDG_RUNTIME_DIR/rack42u/`, or `~/.local/state/rack42u/control/`, for both the
  *   socket and the control file. These paths stay short, under the socket path limits.
+ *
+ * Their names come from a hash of the directory's real path, so every path that leads to the
+ * directory, such as one through a symlink, finds the same endpoint.
  */
 export function controlPaths(
   baseDir: string,
   platform: NodeJS.Platform = process.platform,
 ): { dir: string; socket: string; file: string } {
-  const key = new Bun.CryptoHasher("sha256").update(baseDir).digest("hex").slice(0, 16);
+  const key = new Bun.CryptoHasher("sha256").update(realPath(baseDir)).digest("hex").slice(0, 16);
   // The paths follow the platform asked for, not the one this runs on.
   const { join } = platform === "win32" ? win32 : posix;
   let dir: string;
@@ -88,6 +91,17 @@ export function controlPaths(
     );
   }
   return { dir, socket: join(dir, `${key}.sock`), file: join(dir, `${key}.json`) };
+}
+
+/** A directory's path with its symlinks resolved, or as given when it doesn't resolve. */
+function realPath(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch {
+    // A path that doesn't resolve, such as a directory that doesn't exist, has no rack to find,
+    // so its spelling serves as the key.
+    return dir;
+  }
 }
 
 /**

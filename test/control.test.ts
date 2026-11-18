@@ -11,7 +11,7 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, stat } from "node:fs/promises";
+import { chmod, mkdir, stat, symlink, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { type SlotStatus, slot } from "rack42u";
 import { type ControlFile, controlPaths, controlTransport } from "../src/control.ts";
@@ -157,6 +157,27 @@ describe.skipIf(WINDOWS)("the Unix socket", () => {
       "RACK_MANIFEST",
       expect.stringContaining("another rack already answers"),
     ]);
+  });
+
+  // README.md, "Managing a running rack". macOS's temporary directories are such paths: /var is a
+  // symlink to /private/var.
+  test("README.md: rack ctl finds the rack when the two reach its base directory by different paths, such as a symlink", async () => {
+    const created = await app();
+    const link = `${created.dir}-link`;
+    await symlink(created.dir, link);
+    try {
+      // The rack gets its base directory through the link; rack ctl run inside it, the real path.
+      const rack = run(["start", join(link, "rack.ts")], FIXTURES);
+      await rack.waitFor(/control listening/);
+      const inside = run(["ctl", "status"], created.dir);
+      expect(await inside.exited()).toBe(0);
+      expect(JSON.parse(inside.output)).toEqual([expect.objectContaining({ name: "counter" })]);
+      const stop = run(["ctl", "stop", "--dir", link], FIXTURES);
+      expect(await stop.exited()).toBe(0);
+      expect(await rack.exited()).toBe(0);
+    } finally {
+      await unlink(link);
+    }
   });
 });
 

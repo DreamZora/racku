@@ -148,6 +148,7 @@ Measured on 2026-11-17 on Bun 1.4.4 and Linux, with probes outside the repositor
 - **The endpoint:** `src/control.ts`.
   - `openControl` serves both transports with one handler, `serve`.
   - `controlPaths` and `controlTransport` choose the locations and the transport, and take the platform as a parameter so that tests cover the Windows choices.
+  - `controlPaths` hashes the base directory's real path. A rack and `rack ctl` can reach the directory by different paths, as on macOS, where `/var` is a symlink to `/private/var` and a process sees its working directory by the real path.
 - **Who opens it.**
   - `start()` opens the endpoint with the `control` option, once the rack runs, and closes it in `stop()`.
   - `rack start` and `rack dev` open their own in `src/cli.ts`, whose `stop` runs the same shutdown as a signal, so the process exits after `rack ctl stop`.

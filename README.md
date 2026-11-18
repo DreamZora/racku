@@ -533,7 +533,7 @@ rack ctl history [device]
 rack ctl stop                            # shut down in order, like Ctrl-C
 ```
 
-`rack ctl` finds the rack whose base directory is the current directory, or `--dir <path>`. It prints the result as JSON and exits with 0, or prints the error and exits with 1.
+`rack ctl` finds the rack whose base directory is the current directory, or `--dir <path>`, even when the rack and `rack ctl` reach that directory by different paths, such as through a symlink. It prints the result as JSON and exits with 0, or prints the error and exits with 1.
 
 **Who can connect.** Nothing listens on the network.
 - On Linux and macOS, the endpoint is a Unix socket in a directory that only your user can enter: `$XDG_RUNTIME_DIR/rack42u/`, or `~/.local/state/rack42u/control/`. Only your user and root can connect.
