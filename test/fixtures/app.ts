@@ -24,6 +24,16 @@ export const ROOT = join(import.meta.dir, "..", "..");
 /** This directory; use it as the base directory of racks that mount fixture devices. */
 export const FIXTURES = import.meta.dir;
 
+/** Whether the tests run on Windows, which lacks POSIX signals, FIFOs, and Unix sockets. */
+export const WINDOWS = process.platform === "win32";
+
+/**
+ * Runs `rack` processes on Windows, where a test can stop one in order only through a console.
+ *
+ * @decision .agents/decisions/261118_015204-windows.md#changes-to-the-repository-and-the-tests
+ */
+const CONSOLE_HOST = join(import.meta.dir, "console-host.ts");
+
 /**
  * The runtime directory of the `rack` processes that tests start, so their management sockets
  * and control files stay out of the user's own. Outside Windows it sits in `/tmp`: the
@@ -141,10 +151,15 @@ export function useRacks(): (spec: RackSpec, options?: StartOptions) => Promise<
   };
 }
 
-/** A `rack` command-line process with its combined output. */
+/**
+ * A `rack` command-line process with its combined output. On Windows, `rack start` and `rack dev`
+ * run through `console-host.ts`, which turns {@link Cli.kill} into Ctrl+C or Ctrl+Break. Other
+ * commands end by themselves, and run directly, which spares a process.
+ */
 export class Cli {
-  readonly process: Bun.Subprocess<"ignore", "pipe", "pipe">;
+  readonly process: Bun.Subprocess<"ignore" | "pipe", "pipe", "pipe">;
   output = "";
+  readonly #hosted: boolean;
 
   /**
    * Runs `bun src/cli.ts <args>` with the Bun that runs the tests.
@@ -160,13 +175,17 @@ export class Cli {
     env: Record<string, string> = {},
     command = [process.execPath, join(ROOT, "src", "cli.ts"), ...args],
   ) {
-    this.process = Bun.spawn(command, {
-      cwd,
-      env: { ...process.env, XDG_RUNTIME_DIR: CONTROL_DIR, ...env },
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    this.#hosted = WINDOWS && (command.includes("start") || command.includes("dev"));
+    this.process = Bun.spawn(
+      this.#hosted ? [process.execPath, CONSOLE_HOST, ...command] : command,
+      {
+        cwd,
+        env: { ...process.env, XDG_RUNTIME_DIR: CONTROL_DIR, ...env },
+        stdin: this.#hosted ? "pipe" : "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
     void this.#pump(this.process.stdout);
     void this.#pump(this.process.stderr);
   }
@@ -196,8 +215,29 @@ export class Cli {
     return code;
   }
 
+  /**
+   * Sends `signal`. On Windows, `SIGINT` arrives as Ctrl+C and `SIGBREAK` as Ctrl+Break, and any
+   * other signal ends the process at once, since Windows has no others.
+   */
   kill(signal: NodeJS.Signals = "SIGINT"): void {
-    this.process.kill(signal);
+    if (!this.#hosted) {
+      this.process.kill(signal);
+      return;
+    }
+    const stdin = this.process.stdin;
+    if (typeof stdin !== "object" || stdin === null) return;
+    try {
+      stdin.write(`${signal}\n`);
+      stdin.flush();
+    } catch {
+      // The console host has exited, and with it the command: there is nothing left to signal.
+    }
+  }
+
+  /** Ends the process at once and waits until it has exited, so that its directory can go. */
+  async stop(): Promise<void> {
+    this.kill("SIGKILL");
+    await this.process.exited;
   }
 }
 

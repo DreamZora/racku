@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, symlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { Cli, FIXTURES, ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
+import { Cli, FIXTURES, ROOT, type TempApp, tempApp, WINDOWS } from "./fixtures/app.ts";
 
 const MANIFEST = `import { rack, slot } from "rack42u";
 
@@ -23,7 +23,7 @@ export default rack("cli", {
 const apps: TempApp[] = [];
 const processes: Cli[] = [];
 afterEach(async () => {
-  for (const cli of processes.splice(0)) cli.kill("SIGKILL");
+  await Promise.all(processes.splice(0).map((cli) => cli.stop()));
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
@@ -59,7 +59,9 @@ describe("rack start", () => {
     expect(cli.output).toContain("[rack] info rack cli stopped");
   });
 
-  test("shuts down on SIGTERM too", async () => {
+  // Windows has no SIGTERM.
+  // @decision .agents/decisions/261118_015204-windows.md#differences-the-readme-states
+  test.skipIf(WINDOWS)("shuts down on SIGTERM too", async () => {
     const { dir } = await app();
     const cli = run(["start", "rack.ts"], dir);
     await cli.panelUrl();

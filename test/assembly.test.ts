@@ -388,8 +388,8 @@ describe("the plan file", () => {
 
 describe("the rack command with scanned racks", () => {
   const running: Cli[] = [];
-  afterEach(() => {
-    for (const cli of running.splice(0)) cli.kill("SIGKILL");
+  afterEach(async () => {
+    await Promise.all(running.splice(0).map((cli) => cli.stop()));
   });
 
   test("README.md: rack dev rewrites a plan file that no longer fits, and --no-plan ignores it", async () => {

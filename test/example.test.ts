@@ -11,7 +11,7 @@ import { Cli, ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
 const apps: TempApp[] = [];
 const processes: Cli[] = [];
 afterEach(async () => {
-  for (const cli of processes.splice(0)) cli.kill("SIGKILL");
+  await Promise.all(processes.splice(0).map((cli) => cli.stop()));
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
