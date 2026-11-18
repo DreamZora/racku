@@ -6,6 +6,7 @@
  * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
  * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-events
  * @decision .agents/decisions/261117_063228-bounded-backlogs.md#stale-calls
+ * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { type RackHandle, slot } from "rack42u";
@@ -192,9 +193,14 @@ describe("bounded calls", () => {
     );
     expect(await Promise.all(calls)).toEqual(["ok", "ok", "RACK_OVERLOADED"]);
     expect(await running.call("slow.slow", "wait", 1)).toBe(1);
-    // The refused call reached only its caller: no device counted it.
-    const [provider] = (await running.metrics()).devices;
-    expect(provider?.provides.slow?.wait).toMatchObject({ calls: 3, ok: 3, errors: {} });
+    // The refused call never reached a device, so no device counted it; the rack did.
+    const { devices, outside } = await running.metrics();
+    expect(devices[0]?.provides.slow?.wait).toMatchObject({ calls: 3, ok: 3, errors: {} });
+    expect(outside.ports["slow.slow"]?.wait).toMatchObject({
+      calls: 4,
+      ok: 3,
+      errors: { RACK_OVERLOADED: 1 },
+    });
     const url = rec.panelUrl();
     const answers = await Promise.all(
       [1, 2, 3].map(async () => {
@@ -210,6 +216,12 @@ describe("bounded calls", () => {
     const busy = await fetch(new URL("/busy", url));
     const { code } = (await busy.json()) as { code: string };
     expect([busy.status, code]).toEqual([503, "RACK_OVERLOADED"]);
+    // Both refusals count among the panel's calls.
+    expect((await running.metrics()).outside.ports["web.http"]?.handle).toMatchObject({
+      calls: 4,
+      ok: 2,
+      errors: { RACK_OVERLOADED: 2 },
+    });
   });
 
   test("README.md: calls held while their provider swaps count toward the limit, and the ones beyond it fail with RACK_OVERLOADED", async () => {

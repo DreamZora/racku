@@ -4,10 +4,11 @@
  *
  * @decision .agents/decisions/261116_035534-call-metrics.md#counters
  * @decision .agents/decisions/261116_035534-call-metrics.md#reading
+ * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { type DeviceMetrics, type RackHandle, slot } from "rack42u";
-import { FIXTURES, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
+import { errorOf, FIXTURES, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();
 
@@ -164,6 +165,11 @@ describe("rack.metrics()", () => {
       calls: 1,
       ok: 1,
     });
+    // The rack counts them as calls from outside the rack too, under the port the route names.
+    expect((await running.metrics()).outside.ports["web.http"]?.handle).toMatchObject({
+      calls: 1,
+      ok: 1,
+    });
   });
 
   test("README.md: counters restart when a device swaps or resets", async () => {
@@ -206,9 +212,203 @@ describe("rack.metrics()", () => {
     ]);
   });
 
-  test("README.md: resolves with no devices after stop()", async () => {
+  test("README.md: resolves with no devices and no counters of calls from outside the rack after stop()", async () => {
     const { running } = await pair();
+    await running.call("probe.probe", "echo", 1);
     await running.stop();
-    expect(await running.metrics()).toEqual({ devices: [] });
+    expect(await running.metrics()).toEqual({ devices: [], outside: { ports: {}, unrouted: 0 } });
+  });
+});
+
+/** A cold device whose new instance takes `ms` milliseconds in selfTest. */
+function cold(ms: number): string {
+  return `import { connector, device, rpc } from "rack42u";
+import * as v from "valibot";
+
+const Cold = connector("demo.cold/v1", { echo: rpc(v.number(), v.number()) });
+
+export default device({
+  model: "cold",
+  swap: "cold",
+  provides: { cold: Cold },
+  powerOn: () => ({ cold: { echo: (n) => n } }),
+  async selfTest() {
+    await Bun.sleep(${ms});
+  },
+});
+`;
+}
+
+describe("calls from outside the rack", () => {
+  // README.md, "Running a rack".
+  test("README.md: metrics().outside counts the calls from outside the rack by port and member", async () => {
+    const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
+    await running.call("probe.probe", "echo", 1);
+    const failure = { code: "ORDER_NOT_FOUND", message: "no order 7" };
+    await running.call("probe.probe", "fail", failure).catch(() => undefined);
+    const waiting = running.call("probe.probe", "wait", { ms: 300 });
+    await Bun.sleep(50);
+    expect((await running.metrics()).outside.ports["probe.probe"]?.wait).toEqual({
+      kind: "rpc",
+      calls: 1,
+      ok: 0,
+      errors: {},
+      pending: 1,
+      queued: 0,
+      timeMs: 0,
+    });
+    await waiting;
+    const { outside } = await running.metrics();
+    const finished = (ok: number, errors: Record<string, number>) => ({
+      kind: "rpc" as const,
+      calls: 1,
+      ok,
+      errors,
+      pending: 0,
+      queued: 0,
+      timeMs: expect.any(Number),
+    });
+    expect(outside).toEqual({
+      ports: {
+        "probe.probe": {
+          echo: finished(1, {}),
+          fail: finished(0, { ORDER_NOT_FOUND: 1 }),
+          wait: finished(1, {}),
+        },
+      },
+      unrouted: 0,
+    });
+    expect(outside.ports["probe.probe"]?.wait?.timeMs).toBeGreaterThanOrEqual(290);
+  });
+
+  test("README.md: a call from outside the rack refused at queueLimit counts under RACK_OVERLOADED", async () => {
+    const { running } = await startRack(
+      { slots: { 1: slot("./devices/probe.ts") } },
+      { queueLimit: 1 },
+    );
+    const waiting = running.call("probe.probe", "wait", { ms: 200 });
+    expect((await errorOf(running.call("probe.probe", "echo", 1))).code).toBe("RACK_OVERLOADED");
+    await waiting;
+    expect((await running.metrics()).outside.ports["probe.probe"]?.echo).toMatchObject({
+      calls: 1,
+      ok: 0,
+      errors: { RACK_OVERLOADED: 1 },
+      pending: 0,
+    });
+  });
+
+  test("README.md: calls held while their device swaps count in queued, and under RACK_TIMEOUT once their deadline passes", async () => {
+    const app = await tempApp();
+    apps.push(app);
+    await app.write("devices/cold.ts", cold(800));
+    const { running, rec } = await startRack(
+      { slots: { 1: slot("./devices/cold.ts") } },
+      { baseDir: app.dir },
+    );
+    const swap = running.swap("cold");
+    // The old instance is off, and the new one is in selfTest: calls to the device are held.
+    await waitFor(
+      () => rec.events.some((event) => event.type === "power" && event.state === "off"),
+      5_000,
+    );
+    const held = errorOf(running.call("cold.cold", "echo", 1, { timeout: 300 }));
+    const resumed = running.call("cold.cold", "echo", 2);
+    await Bun.sleep(100);
+    const echo = async () => (await running.metrics()).outside.ports["cold.cold"]?.echo;
+    expect(await echo()).toMatchObject({ calls: 2, pending: 2, queued: 2 });
+    expect((await held).code).toBe("RACK_TIMEOUT");
+    expect(await echo()).toMatchObject({
+      calls: 2,
+      ok: 0,
+      errors: { RACK_TIMEOUT: 1 },
+      pending: 1,
+      queued: 1,
+    });
+    // The other one goes to the new instance once it is installed.
+    await swap;
+    expect(await resumed).toBe(2);
+    expect(await echo()).toMatchObject({
+      calls: 2,
+      ok: 1,
+      errors: { RACK_TIMEOUT: 1 },
+      pending: 0,
+      queued: 0,
+    });
+  });
+
+  test("README.md: a swap that removes a member drops the member's counters", async () => {
+    const app = await tempApp();
+    apps.push(app);
+    const two = (members: string[]) => `import { connector, device, rpc } from "rack42u";
+import * as v from "valibot";
+
+const Two = connector("demo.two/v1", {
+${members.map((member) => `  ${member}: rpc(v.number(), v.number()),`).join("\n")}
+});
+
+export default device({
+  model: "two",
+  provides: { two: Two },
+  powerOn: () => ({ two: { ${members.map((member) => `${member}: (n: number) => n`).join(", ")} } }),
+});
+`;
+    await app.write("devices/two.ts", two(["a", "b"]));
+    const { running } = await startRack(
+      { slots: { 1: slot("./devices/two.ts") } },
+      { baseDir: app.dir },
+    );
+    await running.call("two.two", "a", 1);
+    await running.call("two.two", "b", 1);
+    expect(Object.keys((await running.metrics()).outside.ports["two.two"] ?? {})).toEqual([
+      "a",
+      "b",
+    ]);
+    await app.write("devices/two.ts", two(["a"]));
+    await running.swap("two");
+    expect((await running.metrics()).outside.ports["two.two"]).toEqual({
+      a: expect.objectContaining({ calls: 1, ok: 1 }),
+    });
+  });
+
+  test("README.md: a call to a faulted device counts under RACK_LINK_DOWN, and calls to no address or member count in unrouted", async () => {
+    const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
+    // A fourth crash within the window leaves the device faulted.
+    for (let crash = 0; crash < 4; crash++) {
+      await running.call("probe.probe", "crash", "exit").catch(() => undefined);
+      await waitFor(() => ["online", "faulted"].includes(running.status()[0]?.state ?? ""));
+    }
+    expect(running.status()[0]?.state).toBe("faulted");
+    expect((await errorOf(running.call("probe.probe", "echo", 1))).code).toBe("RACK_LINK_DOWN");
+    for (const [address, member] of [
+      ["nowhere.port", "echo"],
+      ["probe.probe", "nothing"],
+      ["not an address", "echo"],
+    ] as const) {
+      expect((await errorOf(running.call(address, member, 1))).code).toBe("RACK_NO_ROUTE");
+    }
+    const { outside } = await running.metrics();
+    expect(outside.ports["probe.probe"]?.echo).toMatchObject({
+      calls: 1,
+      ok: 0,
+      errors: { RACK_LINK_DOWN: 1 },
+    });
+    expect(outside.ports["probe.probe"]?.crash).toMatchObject({
+      calls: 4,
+      errors: { RACK_DEVICE_FAULT: 4 },
+    });
+    expect(Object.keys(outside.ports)).toEqual(["probe.probe"]);
+    expect(outside.unrouted).toBe(3);
+  });
+
+  test("README.md: the counters of calls from outside the rack last across swaps, and go away when the device is unplugged", async () => {
+    const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
+    await running.call("probe.probe", "echo", 1);
+    await running.swap("probe");
+    const swapped = await running.metrics();
+    expect(swapped.outside.ports["probe.probe"]?.echo).toMatchObject({ calls: 1, ok: 1 });
+    // The device's own counters restarted with its new instance.
+    expect(swapped.devices[0]?.provides.probe?.echo).toMatchObject({ calls: 0 });
+    await running.unplug("probe");
+    expect((await running.metrics()).outside).toEqual({ ports: {}, unrouted: 0 });
   });
 });

@@ -324,12 +324,12 @@ The handle returned by `start`:
 | `history(name?)` | List the updates, newest first. |
 | `plug(u, slot(...))` / `unplug(name)` | Add a device to a free slot, or remove one that nothing uses. |
 | `subscribe(listener)` | Receive power, swap, fault, and log events. |
-| `metrics()` | Read each device's call and event counters. |
+| `metrics()` | Read each device's call and event counters, and the rack's counters of calls from outside the rack. |
 | `stop()` | Shut down from the top down. |
 
 Management operations run one at a time, in the order they were called. Firmware is written to `.rack/firmware/` under the base directory; keep `.rack/` out of version control.
 
-`metrics()` resolves with `{ devices }`, one entry per device whose installed instance answered, bottom slot first. Each entry has the device name, the `firmware` hash of the instance that counted, `since` (when that instance booted), its event-loop delay `loop`, and counters per member:
+`metrics()` resolves with `{ devices, outside }`. `devices` has one entry per device whose installed instance answered, bottom slot first. Each entry has the device name, the `firmware` hash of the instance that counted, `since` (when that instance booted), its event-loop delay `loop`, and counters per member:
 
 ```js
 {
@@ -352,7 +352,22 @@ Management operations run one at a time, in the order they were called. Firmware
 - For the RPC members a device provides, `calls` counts the calls it served, including calls from `rack.call` and the HTTP panel; `active` counts the ones it is still serving. For the RPC members of its needs, `calls` counts the calls it made; `pending` counts the unfinished ones, and `queued` the ones waiting while the provider is swapped.
 - `ok` counts successes and `errors` counts failures by error code, `RACK_TIMEOUT` and `RACK_CANCELLED` included. `timeMs` is the total duration of the finished calls, so `timeMs / (ok + errors)` is the mean.
 - An event member a device provides counts `emitted` events and `dropped` deliveries; one it needs counts `received` events.
-- Counters live in each device's Worker, which keeps them from the moment its instance boots, so they restart when a device swaps or resets. A device that does not answer within `hookTimeout` is left out.
+- A device's counters live in its Worker, which keeps them from the moment its instance boots, so they restart when a device swaps or resets. A device that does not answer within `hookTimeout` is left out.
+- `outside` counts the calls from outside the rack, through `call()` and the panel, the way a need counts its calls, by address and member:
+
+  ```js
+  {
+    ports: { // per <device>.<port> and member
+      "web.http": { handle: { kind: "rpc", calls: 812, ok: 805, errors: { RACK_OVERLOADED: 7 }, pending: 0, queued: 0, timeMs: 1250.7 } },
+    },
+    unrouted: 0, // calls to an address or member that doesn't exist
+  }
+  ```
+
+  - It includes the calls that the rack answered itself without reaching a device: refused at `queueLimit`, held past their deadline while the device swapped or reset, or sent to a device that was `faulted` or `resetting`.
+  - The panel's calls count under the member `handle` of the port its route names.
+  - The main thread keeps these counters, so they last across swaps and resets. A port's counters start at its first call, and go away when its device is unplugged; a member's go away when a swap removes the member.
+- After `stop()`, `metrics()` resolves with no devices and empty `outside` counters.
 
 ## Hot swap and hot reload
 
@@ -499,7 +514,7 @@ A device that falls behind can't take the rack down with it: every backlog betwe
 - **Expired calls.** A provider doesn't start a call whose deadline passed while the call waited. It answers `RACK_TIMEOUT` at once, so a provider that falls behind spends its time on calls that someone still waits for.
 - **Observing it.**
   - A refused call counts under `RACK_OVERLOADED` among the errors of its need in `metrics()`, and an expired call under `RACK_TIMEOUT` among the errors of the provider's member.
-  - A refused call from outside the rack reaches only its caller: no device counts it.
+  - A refused call from outside the rack counts in the `outside` counters of `metrics()`, under its port and member.
   - `pending`, `active`, and the event-loop delay `loop` show load building up.
 - **Policy stays in devices.** The rack doesn't retry, open circuit breakers, or limit rates on its own, since whether to retry, wait, or degrade depends on the device. A device can refuse work for a limit of its own, such as a pool of connections, by throwing `RACK_OVERLOADED`; callers and the panel treat it the same way.
 

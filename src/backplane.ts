@@ -12,12 +12,14 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
  * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
  * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
+ * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision
  */
 import type { CallOptions } from "./device.ts";
 import { fromWireError, RackError, type WireError } from "./errors.ts";
 import type { Firmware } from "./firmware.ts";
 import type { Instance, RoutedCall, Wire } from "./instance.ts";
 import { parseAddress } from "./manifest.ts";
+import type { CalledRpcMetrics, OutsideMetrics } from "./metrics.ts";
 import type { CallResult, DataFromWorker, Fru, Marker } from "./protocol.ts";
 import { detach, moveInto, transferList } from "./transfer.ts";
 
@@ -45,6 +47,10 @@ interface Call extends RoutedCall {
   queuedIn: Slot | undefined;
   /** The slot whose count of unfinished calls includes this call, until it finishes. */
   counted: Slot | undefined;
+  /** The counters of the call's port and member; see `Backplane.outside`. */
+  counter: CalledRpcMetrics | undefined;
+  /** When the call was made, by `performance.now()`. */
+  started: number;
   cleanup: (() => void) | undefined;
 }
 
@@ -111,6 +117,10 @@ export class Backplane {
   readonly #holds = new Map<string, number>();
   /** The providers queueing events for each held slot, by slot name. */
   readonly #eventHolds = new Map<string, Set<Instance>>();
+  /** Counters of the calls from outside the rack, by address and then by member. */
+  readonly #outside = new Map<string, Map<string, CalledRpcMetrics>>();
+  /** Calls from outside the rack to an address or member that didn't exist. */
+  #unrouted = 0;
   #nextId = 1;
   #nextLink = 1;
   #nextToken = 1;
@@ -163,6 +173,7 @@ export class Backplane {
    * @param previous The instance the slot had before, told that it is no longer installed.
    */
   async install(slot: Slot, instance: Instance, previous: Instance | null): Promise<void> {
+    this.#prune(slot);
     // The hold ends first, so the new links go out released.
     this.#holds.delete(slot.name);
     slot.held = false;
@@ -410,18 +421,30 @@ export class Backplane {
     caller: string,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
+      const started = performance.now();
+      const counter = this.#counterOf(address, method);
+      if (counter === undefined) this.#unrouted++;
+      else {
+        counter.calls++;
+        counter.pending++;
+      }
+      // A call that ends before it is routed counts here; a routed one counts as it settles.
+      const end = (error: unknown) => {
+        if (counter !== undefined) count(counter, started, failure(codeOf(error), ""));
+        reject(error);
+      };
       const { timeout, signal } = options;
       let transfer: ArrayBuffer[] | undefined;
       try {
         transfer = transferList(options.transfer, `${address}.${method}`);
       } catch (error) {
-        reject(error);
+        end(error);
         return;
       }
       // The call owns its buffers from here on, so a call that fails early still takes them.
       const refuse = (error: RackError) => {
         if (transfer !== undefined) detach(transfer);
-        reject(error);
+        end(error);
       };
       let device: string;
       let port: string;
@@ -471,6 +494,8 @@ export class Backplane {
         slot.unfinished++;
         call.counted = slot;
       }
+      call.counter = counter;
+      call.started = started;
       if (signal !== undefined) {
         const onAbort = () =>
           this.#finish(
@@ -500,6 +525,7 @@ export class Backplane {
     slot.queue = [];
     for (const call of queue) {
       call.queuedIn = undefined;
+      if (call.counter !== undefined) call.counter.queued--;
       this.#dispatch(call);
     }
   }
@@ -542,6 +568,8 @@ export class Backplane {
       target: undefined,
       queuedIn: undefined,
       counted: undefined,
+      counter: undefined,
+      started: performance.now(),
       cleanup: undefined,
     };
     // The backplane owns the timeout of a call from outside the rack: it fails the call and
@@ -580,6 +608,7 @@ export class Backplane {
       }
       slot.queue.push(call);
       call.queuedIn = slot;
+      if (call.counter !== undefined) call.counter.queued++;
       return;
     }
     const target = slot.installed;
@@ -629,14 +658,95 @@ export class Backplane {
       const index = queue.indexOf(call);
       if (index >= 0) queue.splice(index, 1);
       call.queuedIn = undefined;
+      if (call.counter !== undefined) call.counter.queued--;
     }
     if (cancelProvider && call.target?.inFlight.has(call.id)) {
       call.target.post({ t: "cancel", id: call.id });
     }
-    if (outcome !== undefined) call.deliver(outcome);
+    if (outcome !== undefined) {
+      if (call.counter !== undefined) count(call.counter, call.started, outcome);
+      call.deliver(outcome);
+    }
+  }
+
+  // ---- Counters of calls from outside the rack ----
+
+  /**
+   * The counters of the calls from outside the rack to `address` and `member`, made when first
+   * needed; `undefined` when the address or the member doesn't exist, so the counters stay
+   * bounded by the ports in the rack.
+   */
+  #counterOf(address: string, member: string): CalledRpcMetrics | undefined {
+    let port: string;
+    let device: string;
+    try {
+      ({ device, port } = parseAddress(address));
+    } catch {
+      // Not a <device>.<port> address: the call counts as unrouted.
+      return undefined;
+    }
+    const slot = this.#slots.get(device);
+    if (slot === undefined || slot.removed) return undefined;
+    if (slot.fru.provides[port]?.members[member] !== "rpc") return undefined;
+    let members = this.#outside.get(address);
+    if (members === undefined) {
+      members = new Map();
+      this.#outside.set(address, members);
+    }
+    let counter = members.get(member);
+    if (counter === undefined) {
+      counter = { kind: "rpc", calls: 0, ok: 0, errors: {}, pending: 0, queued: 0, timeMs: 0 };
+      members.set(member, counter);
+    }
+    return counter;
+  }
+
+  /** Drops the counters of the members that the slot's device no longer provides. */
+  #prune(slot: Slot): void {
+    for (const [address, members] of this.#outside) {
+      const { device, port } = parseAddress(address);
+      if (device !== slot.name) continue;
+      for (const member of members.keys()) {
+        if (slot.fru.provides[port]?.members[member] !== "rpc") members.delete(member);
+      }
+      if (members.size === 0) this.#outside.delete(address);
+    }
+  }
+
+  /** Drops the counters of the calls to a device that left the rack. */
+  forget(device: string): void {
+    for (const address of [...this.#outside.keys()]) {
+      if (parseAddress(address).device === device) this.#outside.delete(address);
+    }
+  }
+
+  /** A copy of the counters of the calls from outside the rack. */
+  outside(): OutsideMetrics {
+    const ports: OutsideMetrics["ports"] = {};
+    for (const [address, members] of this.#outside) {
+      const copy: Record<string, CalledRpcMetrics> = {};
+      for (const [member, counter] of members) {
+        copy[member] = { ...counter, errors: { ...counter.errors } };
+      }
+      ports[address] = copy;
+    }
+    return { ports, unrouted: this.#unrouted };
   }
 }
 
 function failure(code: string, message: string): Outcome {
   return { ok: false, error: { code, message } };
+}
+
+/** Counts a finished call from outside the rack. */
+function count(counter: CalledRpcMetrics, started: number, outcome: Outcome): void {
+  counter.pending--;
+  counter.timeMs += performance.now() - started;
+  if (outcome.ok) counter.ok++;
+  else counter.errors[outcome.error.code] = (counter.errors[outcome.error.code] ?? 0) + 1;
+}
+
+/** The code of an error that ends a call, as its caller receives it. */
+function codeOf(error: unknown): string {
+  return error instanceof RackError ? error.code : "RACK_INVALID_INPUT";
 }

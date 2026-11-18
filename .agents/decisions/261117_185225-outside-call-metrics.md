@@ -67,6 +67,16 @@ Status: accepted
   - The tests above, in `test/metrics.test.ts`.
   - The README's metrics section and its "Overload" section, which says that no device counts refused calls from outside the rack.
 
+## Implementation
+
+- `OutsideMetrics` in `src/metrics.ts` is the shape, and `RackMetrics.outside` holds it.
+- `Backplane` in `src/backplane.ts` keeps the counters, by address and then member, and `#unrouted`:
+  - `call()` finds the counter before any check, and counts a call that ends before it is routed at once.
+  - `#finish()` counts every routed call as it settles, and `#dispatch()` and `#resume()` count the calls held while their device swaps or resets.
+  - `install()` drops the counters of members that the installed device no longer provides, and `forget()` those of a device that `unplug()` removed.
+- `metrics()` in `src/rack.ts` adds a copy of the counters.
+- `test/metrics.test.ts` holds the tests above, and `test/backlogs.test.ts` checks the counters of the panel and of `call()` at `queueLimit`.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-17, together with [Ending instances and stuck threads](261117_185131-ending-instances.md), after asking for both limits that P2 left documented to be decided together.

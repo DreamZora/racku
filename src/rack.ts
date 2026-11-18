@@ -23,6 +23,7 @@
  * @decision .agents/decisions/261117_185131-ending-instances.md#ending-an-instance
  * @decision .agents/decisions/261117_185131-ending-instances.md#stuck-threads
  * @decision .agents/decisions/261117_185131-ending-instances.md#failed-hot-swaps
+ * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dirent } from "node:fs";
@@ -2373,6 +2374,7 @@ class Rack implements InstanceHost {
     const stuck = this.#stuckDevice(name);
     if (stuck !== undefined) throw jammed(stuck);
     this.#slots.delete(name);
+    this.#backplane.forget(name);
     this.#emit({ type: "swap", device: name, action: "unplug", mode: "unplug", from, to: null });
     this.#log("info", `${name} unplugged`);
   }
@@ -2982,7 +2984,7 @@ class Rack implements InstanceHost {
   }
 
   async #metrics(): Promise<RackMetrics> {
-    if (this.#phase !== "running") return { devices: [] };
+    if (this.#phase !== "running") return { devices: [], outside: { ports: {}, unrouted: 0 } };
     const instances: Instance[] = [];
     for (const slot of this.#ordered()) {
       if (slot.installed !== null && !slot.removed) instances.push(slot.installed);
@@ -2998,7 +3000,7 @@ class Rack implements InstanceHost {
         devices.push({ device: instance.slot, firmware: instance.firmware.hash, ...answer.value });
       }
     }
-    return { devices };
+    return { devices, outside: this.#backplane.outside() };
   }
 
   #swapFailed(

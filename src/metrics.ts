@@ -87,10 +87,24 @@ export interface DeviceMetrics {
   needs: Record<string, NeedMetrics>;
 }
 
+/**
+ * Counters of the calls from outside the rack, through `rack.call` and the panel, that the
+ * rack's main thread keeps: the same counters as a need's, since the rack is their caller.
+ *
+ * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision
+ */
+export interface OutsideMetrics {
+  /** By address, `<device>.<port>`, then by member. */
+  ports: Record<string, Record<string, CalledRpcMetrics>>;
+  /** Calls to an address or member that didn't exist, which failed with `RACK_NO_ROUTE`. */
+  unrouted: number;
+}
 /** What `rack.metrics()` resolves with. */
 export interface RackMetrics {
   /** One entry per device whose installed instance answered, ordered by slot from the bottom up. */
   devices: DeviceMetrics[];
+  /** The calls from outside the rack, from its start; empty after `stop()`. */
+  outside: OutsideMetrics;
 }
 
 /** What an instance reports; the rack adds the device name and firmware hash. */

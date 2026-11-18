@@ -75,6 +75,7 @@ export type {
   EmittedEventMetrics,
   LoopMetrics,
   NeedMetrics,
+  OutsideMetrics,
   PortMetrics,
   RackMetrics,
   ReceivedEventMetrics,
