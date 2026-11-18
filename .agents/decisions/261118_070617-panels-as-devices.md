@@ -357,6 +357,28 @@ The tests run on Linux, macOS, and Windows, and exercise each failure path:
   - The tests above, in a new `test/listeners.test.ts`.
   - The removal of the main-thread panel, which the standard HTTP panel replaces.
 
+## Implementation
+
+- **Modules.**
+  - `src/listeners.ts` is the Worker host's side: `ctx.serve`, the checks of options and certificates, binding and stopping, the requests that wait for the install, `setTls()`, `publish()`, `reload()`, the `Host` check, and the WebSocket guards.
+  - `src/rack.ts` keeps the table of addresses and the ports each device keeps. It answers the reservations, hands each `powerOn` the device's earlier listeners, switches listeners in a hot swap, and stops them for cold replacements and power-downs. It also writes the log entries and the `listeners` of `status()`.
+  - `src/instance.ts` answers the Worker host's asks and reads the listeners' counters, and `src/protocol.ts` holds the messages.
+- **Messages.**
+  - The Worker host asks the main thread to reserve an address with an `ask` notice, which the main thread answers with an `answer` message.
+  - The `powerOn` request carries the device's earlier listeners, with their ports and whether an instance of the device listens on them now.
+  - `listen` and `unlisten` put the listeners into service and out of it. Their replies list the URLs, which the log entries need.
+  - A `listeners` notice reports the URLs and certificates. Two counters per listener in the instance's shared memory hold its requests and WebSockets.
+- **Details the decision left open.**
+  - A fixed or inherited port is reserved in the table before the bind that checks for other processes, so that a device of the rack that holds it is named as the holder. Port 0 is checked first, since the check picks the port, then reserved.
+  - The Worker host checks certificates by binding a server with them on `127.0.0.1`, port 0, for a moment.
+  - A request whose handler is running JavaScript when its Worker is terminated, as in a watchdog bite, gets Bun's placeholder answer, a 200 that says "Welcome to Bun!", instead of failing; one whose handler awaits fails with `ECONNRESET`. So the Worker host runs every handler after a `setImmediate`, outside Bun's callback, and the request fails. A microtask isn't enough. Measured on 2026-11-18 on the local machine with Bun 1.4.4: 10 000 requests from 50 clients took 126 ms instead of 101 ms.
+  - The counters copy Bun's `pendingRequests` and `pendingWebSockets` at each request, at each WebSocket that opens or closes, and every 100 ms, which also lets the drain of a retirement see a streamed response end.
+  - `maxBuffered` shadows `send`, `sendText`, and `sendBinary` on each WebSocket. `backpressureLimit` is `maxBuffered` plus `maxPayloadLength`.
+  - A `Response` in `routes` is served by a handler that clones it, so that the `Host` check and the wait for the install apply to it too.
+  - Without an `error` handler, a handler that throws gets 500, and the log has `a request handler failed`.
+- **Not done yet:** the main-thread panel still runs. It goes with the change that adds [the standard HTTP panel](261118_071513-http-panel-device.md), together with the changes to `AGENTS.md` and the README's Panel entry.
+- **Tests:** `test/listeners.test.ts`, with the fixtures `test/fixtures/listener-device.ts`, `devices/listener.ts`, `devices/listener-state.ts`, `devices/listener-cold.ts`, and the test certificates in `test/fixtures/certs`.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-18. The user asked that devices can have their own HTTP panels, that network components such as the HTTP panel be devices, so that connection management is separate, and that listeners use loopback by default.
