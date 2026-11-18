@@ -194,6 +194,7 @@ package.json         manifest, exports, bin, and scripts
 tsconfig.json        TypeScript configuration
 biome.json           formatter and linter configuration
 bun.lock             lockfile
+.gitattributes       LF line endings in every checkout, Windows included
 src/                 framework source
   index.ts           entry point of rack42u
   cli.ts             the rack command (start, dev, plan, ctl); dev.ts holds the file watcher

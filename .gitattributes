@@ -1,0 +1,4 @@
+# Every checkout uses LF line endings, on Windows too, so the files, and the firmware built from
+# them, are the same on every system.
+# @decision .agents/decisions/261118_015204-windows.md#changes-to-the-repository-and-the-tests
+* text=auto eol=lf
