@@ -24,7 +24,7 @@ const fifos: string[] = [];
 afterEach(async () => {
   for (const fifo of fifos.splice(0)) {
     try {
-      release(fifo);
+      await release(fifo);
     } catch {
       // Already removed: no thread can block on it any more.
     }
@@ -123,16 +123,25 @@ function fifoIn(created: TempApp): string {
  * Opens the FIFO for writing and closes it again, which lets every thread blocked opening it
  * go on.
  *
+ * Once its Worker is terminated, a blocked thread leaves its open for an instant each time
+ * JavaScriptCore signals it to deliver the termination, about every half millisecond, and the
+ * FIFO has no reader in that instant. So an open that finds no reader is tried again, for up to
+ * 100 ms.
+ *
  * @returns Whether a thread was blocked on it.
  */
-function release(fifo: string): boolean {
-  try {
-    closeSync(openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK));
-    return true;
-  } catch (error) {
-    // ENXIO: nothing has the FIFO open for reading.
-    if ((error as { code?: string }).code === "ENXIO") return false;
-    throw error;
+async function release(fifo: string): Promise<boolean> {
+  const until = performance.now() + 100;
+  for (;;) {
+    try {
+      closeSync(openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK));
+      return true;
+    } catch (error) {
+      // ENXIO: nothing has the FIFO open for reading, at least at this instant.
+      if ((error as { code?: string }).code !== "ENXIO") throw error;
+      if (performance.now() >= until) return false;
+      await Bun.sleep(1);
+    }
   }
 }
 
@@ -246,7 +255,7 @@ describe.skipIf(WINDOWS)("a thread stuck in native code", () => {
     );
     await Bun.sleep(300);
     const released = Date.now();
-    expect(release(fifo)).toBe(true);
+    expect(await release(fifo)).toBe(true);
     const [result] = await restart;
     expect(result?.error).toBeUndefined();
     const runs = await powerOns(created);
@@ -291,7 +300,7 @@ describe.skipIf(WINDOWS)("a thread stuck in native code", () => {
     expect(performance.now() - started).toBeLessThan(900);
     expect(await powerOns(created)).toHaveLength(1);
     // Once the thread stops, the device restarts.
-    expect(release(fifo)).toBe(true);
+    expect(await release(fifo)).toBe(true);
     await waitFor(() => jamStatus(running).stuck.length === 0, 5_000);
     const [result] = await running.restart("jam");
     expect(result?.error).toBeUndefined();
@@ -319,7 +328,7 @@ describe.skipIf(WINDOWS)("a thread stuck in native code", () => {
       },
     });
     expect(jamStatus(running).stuck).toHaveLength(1);
-    expect(release(fifo)).toBe(true);
+    expect(await release(fifo)).toBe(true);
     await waitFor(() => jamStatus(running).stuck.length === 0, 5_000);
     await running.swap("jam");
     expect(jamStatus(running).state).toBe("online");
@@ -345,7 +354,7 @@ describe.skipIf(WINDOWS)("a thread stuck in native code", () => {
     const refused = await errorOf(running.swap("jam"));
     expect(refused.code).toBe("RACK_SWAP_REJECTED");
     expect(refused.message).toContain("stuck in native code");
-    expect(release(fifo)).toBe(true);
+    expect(await release(fifo)).toBe(true);
     await waitFor(() => jamStatus(running).stuck.length === 0, 5_000);
     await created.write("devices/jam.ts", jam(created, { version: "v3" }));
     await running.swap("jam");
@@ -363,7 +372,7 @@ describe.skipIf(WINDOWS)("a thread stuck in native code", () => {
     expect(jamStatus(running)).toMatchObject({ state: "faulted", firmware: null });
     expect(jamStatus(running).stuck).toHaveLength(1);
     expect((await errorOf(running.unplug("jam"))).code).toBe("RACK_DEVICE_FAULT");
-    expect(release(fifo)).toBe(true);
+    expect(await release(fifo)).toBe(true);
     await waitFor(() => jamStatus(running).stuck.length === 0, 5_000);
     await running.unplug("jam");
     expect(running.status()).toEqual([]);
@@ -377,7 +386,7 @@ describe.skipIf(WINDOWS)("a thread stuck in native code", () => {
     await waitFor(() => jamStatus(running).state === "faulted", 8_000);
     expect(jamStatus(running).stuck).toHaveLength(1);
     expect((await errorOf(running.restart("jam"))).code).toBe("RACK_SWAP_REJECTED");
-    expect(release(fifo)).toBe(true);
+    expect(await release(fifo)).toBe(true);
     await waitFor(() => jamStatus(running).stuck.length === 0, 5_000);
     await running.restart("jam");
     expect(jamStatus(running).state).toBe("online");
@@ -466,7 +475,7 @@ describe.skipIf(WINDOWS)("a thread stuck in native code", () => {
     expect(again.message).toContain("stuck in native code");
     expect(performance.now() - started).toBeLessThan(900);
     expect(await running.call("jam.jam", "version", undefined)).toBe("v1");
-    expect(release(fifo)).toBe(true);
+    expect(await release(fifo)).toBe(true);
     await waitFor(
       () =>
         rec.logs.some((entry) => /the stuck thread of firmware \w+ stopped$/.test(entry.message)),
