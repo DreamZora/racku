@@ -7,6 +7,7 @@
  * @decision .agents/decisions/261115_222025-p0-api-details.md#error-codes
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { slot } from "rack42u";
 import {
   codeOf,
@@ -74,7 +75,9 @@ describe("swap", () => {
     const after = (await running.call("counter.counter", "get", undefined)) as Count;
     expect(after).toMatchObject({ n: 1, version: "v2" });
     expect(after.firmware).not.toBe(before as string);
-    expect(running.status()[0]?.source).toBe(`${app.dir}/devices/counter-v2.ts`);
+    // With the system's separator, \ on Windows.
+    // @decision .agents/decisions/261118_015204-windows.md#differences-the-readme-states
+    expect(running.status()[0]?.source).toBe(join(app.dir, "devices", "counter-v2.ts"));
     expect(rec.events.at(-1)).toMatchObject({
       type: "swap",
       action: "swap",

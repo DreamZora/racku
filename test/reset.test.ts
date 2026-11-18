@@ -5,6 +5,7 @@
  * @decision .agents/decisions/261115_222025-p0-api-details.md#resets
  */
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { type RackEvent, type RackHandle, slot } from "rack42u";
 import { codeOf, type Recorder, useRacks, waitFor } from "./fixtures/app.ts";
 
@@ -99,6 +100,8 @@ describe("crash resets", () => {
     await waitFor(() => count(rec, poweredOn) === 1);
     const entry = rec.logs.find((e) => e.message.startsWith("probe crashed"));
     expect(entry?.message).toContain("thrown on purpose");
-    expect(entry?.message).toContain("devices/probe.ts");
+    // With the system's separator, \ on Windows.
+    // @decision .agents/decisions/261118_015204-windows.md#differences-the-readme-states
+    expect(entry?.message).toContain(join("devices", "probe.ts"));
   });
 });
