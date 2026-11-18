@@ -230,6 +230,33 @@ Measured on 2026-11-18 on the local machine, Ubuntu 26.04.1 LTS, Linux 7.0.0-43-
   - The tests above, in a new `test/streams.test.ts`.
   - A benchmark through rack42u: one stream of 256 MiB between two devices, with chunks of 16 KiB, 64 KiB, and 256 KiB, recorded in `## Implementation`.
 
+## Implementation
+
+- **Modules.**
+  - `src/streams.ts` holds both ends of a stream on one channel: `StreamChannel`, `StreamSender`, and `StreamReceiver`. It also holds `takeStream`, `putStream`, and `cancelStreams`, which find a stream at the top of a value, put it back, and cancel the ones a failed call carried.
+  - `stream()` is in `src/connector.ts`, and `StreamMetrics` in `src/metrics.ts`.
+  - `src/worker.ts` carries streams on links and on the data channel, and `src/backplane.ts` carries them for calls from outside the rack.
+- **Messages,** in `src/protocol.ts`:
+  - All five travel as one message type, `stream`, whose field `k` is `chunk`, `end`, `error`, `credit`, or `cancel`. A separate type was needed because `cancel` already names the cancel of a call.
+  - A call carries `idle`, the stream timeout, and `stream`, the key and id of its input stream. A result carries `stream` for its output stream.
+  - `drain` gains `streams`, which only the drains of a retirement and of `stop()` set. `drop` gains the error that the link's streams fail with.
+- **Details the decision left open.**
+  - A receiving end gives its reader the pieces that arrived before the source's error, then the error. Failures that the rack starts, such as a cancel, a timeout, or a lost channel, error the stream at once.
+  - A reader that cancels with a `RackError` passes its code to the source; any other reason is `RACK_CANCELLED`.
+  - Bun runs a timer whose delay is longer than 2³¹ − 1 ms, `Infinity` included, after 1 ms. So `armTimer` arms no timer for an infinite deadline, and caps longer ones. A call with `timeout: Infinity` therefore no longer fails after 1 ms.
+- **Tests:** `test/streams.test.ts`, with the fixtures `test/fixtures/devices/streamer.ts`, `streamer-cold.ts`, and `stream-client.ts`.
+- **Benchmark,** on 2026-11-18 on the local machine of [Evidence](#evidence), with Bun 1.4.4. It ran outside the repository.
+  - One stream of 256 MiB went from one device to another. The provider's source enqueued one buffer again and again, since the sending end copies each chunk, and the consumer counted the bytes.
+  - Five runs per chunk size, after a warm-up:
+
+    | Chunk | Median | Runs |
+    |---|---:|---|
+    | 16 KiB | 2,198 MiB/s | 1,826 to 3,103 |
+    | 64 KiB | 4,777 MiB/s | 4,597 to 5,036 |
+    | 256 KiB | 4,813 MiB/s | 4,121 to 5,403 |
+
+  - So a stream between devices carries 18 times what a 1 Gbit/s network carries at 16 KiB, and 4 times what 10 Gbit/s carries at 64 KiB.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-18. The user asked for streaming bodies, and left it to the Agent to research how to implement them while keeping performance good.
