@@ -8,19 +8,28 @@
  * @decision .agents/decisions/261117_062959-watchdog.md#configuration-and-observation
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { join } from "node:path";
 import { type RackHandle, slot } from "rack42u";
 import { crashWindow } from "../src/rack.ts";
 import { Cli, errorOf, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
+import { type BlockingPipe, blockingPipe } from "./fixtures/pipe.ts";
 
 const startRack = useRacks();
 
 const apps: TempApp[] = [];
 const processes: Cli[] = [];
+const pipes: BlockingPipe[] = [];
 afterEach(async () => {
   await Promise.all(processes.splice(0).map((cli) => cli.stop()));
+  for (const pipe of pipes.splice(0)) await pipe.close();
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
+
+/** A pipe that blocks the thread reading it until the test releases it, or the test ends. */
+async function pipeIn(created: TempApp): Promise<BlockingPipe> {
+  const pipe = await blockingPipe(created.dir);
+  pipes.push(pipe);
+  return pipe;
+}
 
 const CONNECTORS = `import { connector, rpc } from "rack42u";
 import * as v from "valibot";
@@ -277,60 +286,50 @@ describe("biting", () => {
     expect(probeStatus(running).crashes).toBe(4);
   }, 20_000);
 
-  test.skipIf(process.platform === "win32")(
-    "README.md: a Worker stuck in native code faults its slot once hookTimeout passes, and a swap brings the device back",
-    async () => {
-      const created = await app(probe());
-      const fifo = join(created.dir, "fifo");
-      expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
-      const { running, rec } = await startRack(RACK, {
-        baseDir: created.dir,
-        watchdog: 1_000,
-        hookTimeout: 1_000,
-      });
-      // Opening a FIFO without a writer blocks the Worker's thread inside a system call.
-      const read = running.call("probe.probe", "read", fifo);
-      expect((await errorOf(read)).code).toBe("RACK_DEVICE_FAULT");
-      expect(probeStatus(running).state).toBe("resetting");
-      await waitFor(() => probeStatus(running).state === "faulted", 5_000);
-      expect(rec.logs.map((entry) => entry.message)).toContainEqual(
-        expect.stringContaining("its thread is stuck in native code"),
-      );
-      // The thread returns once a writer comes, but the slot stays faulted.
-      await Bun.write(fifo, "x");
-      await Bun.sleep(300);
-      expect(probeStatus(running).state).toBe("faulted");
-      await running.swap("probe");
-      expect(probeStatus(running).state).toBe("online");
-      expect(await running.call("probe.probe", "inc", undefined)).toBe(1);
-    },
-    15_000,
-  );
+  test("README.md: a Worker stuck in native code faults its slot once hookTimeout passes, and a swap brings the device back", async () => {
+    const created = await app(probe());
+    const pipe = await pipeIn(created);
+    const { running, rec } = await startRack(RACK, {
+      baseDir: created.dir,
+      watchdog: 1_000,
+      hookTimeout: 1_000,
+    });
+    // Reading a pipe that nothing writes to blocks the Worker's thread inside a system call.
+    const read = running.call("probe.probe", "read", pipe.path);
+    expect((await errorOf(read)).code).toBe("RACK_DEVICE_FAULT");
+    expect(probeStatus(running).state).toBe("resetting");
+    await waitFor(() => probeStatus(running).state === "faulted", 5_000);
+    expect(rec.logs.map((entry) => entry.message)).toContainEqual(
+      expect.stringContaining("its thread is stuck in native code"),
+    );
+    // The thread returns once the pipe is released, but the slot stays faulted.
+    await pipe.release();
+    await Bun.sleep(300);
+    expect(probeStatus(running).state).toBe("faulted");
+    await running.swap("probe");
+    expect(probeStatus(running).state).toBe("online");
+    expect(await running.call("probe.probe", "inc", undefined)).toBe(1);
+  }, 15_000);
 
-  test.skipIf(process.platform === "win32")(
-    "an update stuck in native code on probation doesn't become known-good while the rack waits for it",
-    async () => {
-      const created = await app(probe());
-      const fifo = join(created.dir, "fifo");
-      expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
-      // Probation would end during the wait for the stuck thread: at 1.5 s, between the bite
-      // after 1 to 1.25 s and the end of hookTimeout after 2 to 2.25 s.
-      const { running } = await startRack(RACK, {
-        baseDir: created.dir,
-        watchdog: 1_000,
-        hookTimeout: 1_000,
-        probation: 1_500,
-      });
-      const good = probeStatus(running).firmware;
-      const stuck = `    scope.after(50, () => readFileSync(${JSON.stringify(fifo)}));`;
-      await created.write("devices/probe.ts", probe({ activate: stuck, version: "v2" }));
-      await running.reload();
-      await waitFor(() => probeStatus(running).state === "faulted", 5_000);
-      expect(probeStatus(running).knownGood).toBe(good);
-      await Bun.write(fifo, "x");
-    },
-    15_000,
-  );
+  test("an update stuck in native code on probation doesn't become known-good while the rack waits for it", async () => {
+    const created = await app(probe());
+    const pipe = await pipeIn(created);
+    // Probation would end during the wait for the stuck thread: at 1.5 s, between the bite
+    // after 1 to 1.25 s and the end of hookTimeout after 2 to 2.25 s.
+    const { running } = await startRack(RACK, {
+      baseDir: created.dir,
+      watchdog: 1_000,
+      hookTimeout: 1_000,
+      probation: 1_500,
+    });
+    const good = probeStatus(running).firmware;
+    const stuck = `    scope.after(50, () => readFileSync(${JSON.stringify(pipe.path)}));`;
+    await created.write("devices/probe.ts", probe({ activate: stuck, version: "v2" }));
+    await running.reload();
+    await waitFor(() => probeStatus(running).state === "faulted", 5_000);
+    expect(probeStatus(running).knownGood).toBe(good);
+    await pipe.release();
+  }, 15_000);
 
   test("README.md: the window of the crash limit is 60 s, or four times the longest watchdog timeout", () => {
     expect([crashWindow(0), crashWindow(10_000), crashWindow(15_000)]).toEqual([

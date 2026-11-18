@@ -118,8 +118,8 @@ The tests block a device in native code with a FIFO, as the watchdog tests do, a
   - `#unplugSlot()` keeps a device whose thread is stuck, and `#finishChange()` reports that as a failed unplug.
   - `#endAll()` waits for the threads together, at `stop()` and when a start fails.
 - After a watchdog bite whose thread is stuck, the slot's error stays the bite's, as [Watchdog](261117_062959-watchdog.md#biting) decides. `status()` shows the thread in `stuck`.
-- `test/ending.test.ts` holds the tests above. Those that block a thread with a FIFO are skipped on Windows, which has no `mkfifo`.
-- After `terminate()`, JavaScriptCore signals the thread about every half millisecond to deliver the termination, and a thread blocked opening a FIFO leaves the open for an instant each time, when the FIFO has no reader. Measured on 2026-11-18 on Bun 1.4.4 and Linux. The tests' `release` therefore retries its non-blocking open for up to 100 ms, so such an instant doesn't look like a thread that isn't blocked.
+- `test/ending.test.ts` holds the tests above. They block a thread with a pipe from `test/fixtures/pipe.ts`: a FIFO on Linux and macOS, and on Windows, which has no FIFOs, a named pipe that the test process serves.
+- After `terminate()`, JavaScriptCore signals the thread about every half millisecond to deliver the termination, and a thread blocked opening a FIFO leaves the open for an instant each time, when the FIFO has no reader. Measured on 2026-11-18 on Bun 1.4.4 and Linux. `releaseFifo` in `test/fixtures/pipe.ts` therefore retries its non-blocking open for up to 100 ms, so such an instant doesn't look like a thread that isn't blocked.
 
 ## Confirmation
 
