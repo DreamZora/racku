@@ -5,8 +5,9 @@
  *
  * `start`, `dev`, and `plan` load the manifest, which references devices only by path, and use
  * the manifest's directory as the base directory. `start` and `dev` run the rack with its
- * management endpoint, and shut down in order on `SIGINT`, `SIGTERM`, or `rack ctl stop`; `plan`
- * prints the plan without starting the rack. `ctl` sends one operation to a running rack.
+ * management endpoint, and shut down in order on `SIGINT`, `SIGTERM`, `SIGBREAK`, or
+ * `rack ctl stop`; `plan` prints the plan without starting the rack. `ctl` sends one operation to
+ * a running rack.
  *
  * @decision .agents/decisions/261112_043034-device-api.md#command-line
  * @decision .agents/decisions/261115_222025-p0-api-details.md#command-line
@@ -257,6 +258,9 @@ async function main(args: string[]): Promise<void> {
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  // Ctrl+Break on Windows, which has no SIGTERM. Other systems never send it.
+  // @decision .agents/decisions/261118_015204-windows.md#changes-to-the-rack
+  process.on("SIGBREAK", onSignal);
 
   const manifest = await load(manifestPath);
   const baseDir = dirname(manifestPath);

@@ -69,6 +69,17 @@ describe("rack start", () => {
     expect(await cli.exited()).toBe(0);
   });
 
+  // README.md, "Running a rack". Only Windows sends SIGBREAK.
+  // @decision .agents/decisions/261118_015204-windows.md#changes-to-the-rack
+  test.skipIf(!WINDOWS)("README.md: on Windows, Ctrl-Break shuts down in order", async () => {
+    const { dir } = await app();
+    const cli = run(["start"], dir);
+    await cli.panelUrl();
+    cli.kill("SIGBREAK");
+    expect(await cli.exited()).toBe(0);
+    expect(cli.output).toContain("[rack] info rack cli stopped");
+  });
+
   test("a second signal during shutdown exits at once with code 1", async () => {
     const created = await app(`import { rack, slot } from "rack42u";
 export default rack("slow", {

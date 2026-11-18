@@ -281,7 +281,7 @@ rack plan [manifest]    # print the plan without starting; --write or --check th
 rack ctl <operation>    # operate the rack running from this directory; see below
 ```
 
-On `SIGINT` or `SIGTERM` both commands shut down in order and exit with code 0; a second signal exits at once with code 1. They exit with code 1 when the rack fails to start.
+On `SIGINT` (Ctrl-C) or `SIGTERM`, and on Windows on `SIGBREAK` (Ctrl-Break), both commands shut down in order and exit with code 0; a second signal exits at once with code 1. They exit with code 1 when the rack fails to start.
 
 `rack dev` watches the base directory, ignoring `node_modules` and dot directories. After a change it rebuilds every device and replaces the ones whose firmware hash changed, so editing a file that several devices bundle, such as a shared connector, replaces all of them. A device that fails to build keeps running its old firmware. Edits to the manifest itself take effect at once, as [Changed plans and edited manifests](#changed-plans-and-edited-manifests) describes.
 
