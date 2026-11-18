@@ -65,11 +65,14 @@ import {
   parsePlan,
 } from "./plan.ts";
 import {
+  type CertificateInfo,
   type DataFromWorker,
   type Fru,
+  type InheritedListener,
   type LogNotice,
   type Marker,
   QUEUE_LIMIT,
+  type ReserveAsk,
   WATCHDOG_MIN,
 } from "./protocol.ts";
 import { cancelStreams } from "./streams.ts";
@@ -110,6 +113,24 @@ export interface SlotStatus {
   stuck: StuckThread[];
   /** The last failed swap or crash. */
   error?: WireError;
+  /** One entry per listener of the installed instance; empty when none is installed. */
+  listeners: ListenerStatus[];
+}
+
+/**
+ * A listener of an instance, as `status()` shows it.
+ *
+ * @decision .agents/decisions/261118_070617-panels-as-devices.md#observation
+ */
+export interface ListenerStatus {
+  /** For example `https://127.0.0.1:3443/`. */
+  url: string;
+  /** The certificates new connections get; empty without TLS. */
+  certificates: CertificateInfo[];
+  /** Requests in flight, as Bun counts them. */
+  requests: number;
+  /** Open WebSockets, as Bun counts them. */
+  webSockets: number;
 }
 
 /**
@@ -122,6 +143,11 @@ export interface StuckThread {
   firmware: string;
   /** When the rack terminated the instance, a millisecond timestamp. */
   since: number;
+  /**
+   * The listeners the thread hadn't stopped, which keep their ports until it stops; the system
+   * still accepts connections to them, and nothing answers.
+   */
+  listeners: ListenerStatus[];
 }
 
 /** What a management operation did to a device. */
@@ -430,6 +456,20 @@ class Rack implements InstanceHost {
   readonly #ending = new Map<Instance, Ending>();
   /** Threads of ended instances that didn't stop within `hookTimeout`, until they stop. */
   readonly #stuck = new Map<Instance, Stuck>();
+  /**
+   * The rack's table of listeners: the addresses each instance reserved, until its thread
+   * stops, which a thread stuck in native code doesn't.
+   *
+   * @decision .agents/decisions/261118_070617-panels-as-devices.md#conflicts
+   */
+  readonly #addresses = new Map<Instance, Address[]>();
+  /**
+   * The ports each device's listeners got, which its later instances keep, until the device is
+   * unplugged or the rack stops.
+   *
+   * @decision .agents/decisions/261118_070617-panels-as-devices.md#port-0
+   */
+  readonly #ports = new Map<string, Omit<InheritedListener, "held">[]>();
   #phase: Phase = "starting";
   readonly #controlOption: StartOptions["control"];
   #control: Control | undefined;
@@ -519,8 +559,135 @@ class Rack implements InstanceHost {
     this.#log(notice.level, notice.message, notice.data, instance.slot);
   }
 
+  /**
+   * Reserves a listener's address for an instance in `powerOn`. Two listeners on one port
+   * conflict, whatever their hostnames, unless they belong to two instances of one device, as
+   * in a hot swap.
+   *
+   * @decision .agents/decisions/261118_070617-panels-as-devices.md#conflicts
+   */
+  onAsk(instance: Instance, ask: ReserveAsk): Promise<unknown> {
+    const device = instance.slot;
+    const listener = `${ask.hostname}:${ask.port}`;
+    for (const [other, addresses] of this.#addresses) {
+      if (other === instance) continue;
+      const clash = addresses.find((a) => a.port === ask.port && a.device !== device);
+      if (clash !== undefined) {
+        const message = `${device}: ctx.serve: ${listener} is taken by ${clash.device}`;
+        return Promise.reject(
+          new RackError("RACK_HOOK_FAILED", message, { listener, holder: clash.device }),
+        );
+      }
+    }
+    let addresses = this.#addresses.get(instance);
+    if (addresses === undefined) {
+      addresses = [];
+      this.#addresses.set(instance, addresses);
+      // The thread holds its ports until it stops, even after its Worker is gone.
+      void instance.closed.then(() => this.#addresses.delete(instance));
+    }
+    const same = (a: Omit<InheritedListener, "held">) =>
+      a.hostname === ask.hostname && a.declared === ask.declared && a.ordinal === ask.ordinal;
+    const { hostname, declared, ordinal, port } = ask;
+    const address = addresses.find(same);
+    if (address === undefined) addresses.push({ device, hostname, declared, ordinal, port });
+    else address.port = port;
+    const ports = this.#ports.get(device) ?? [];
+    const kept = ports.find(same);
+    if (kept === undefined) ports.push({ hostname, declared, ordinal, port });
+    else kept.port = port;
+    this.#ports.set(device, ports);
+    return Promise.resolve(undefined);
+  }
+
+  /**
+   * The listeners a device's next instance takes over: the ports its earlier instances got, and
+   * whether an instance of the device listens on each now.
+   *
+   * @decision .agents/decisions/261118_070617-panels-as-devices.md#port-0
+   */
+  #inherited(device: string): InheritedListener[] {
+    return (this.#ports.get(device) ?? []).map((kept) => {
+      let held = false;
+      for (const instance of this.#addresses.keys()) {
+        if (instance.dead || instance.slot !== device) continue;
+        const port = String(kept.port);
+        if (instance.listenerReports.some((r) => r.listening && new URL(r.url).port === port)) {
+          held = true;
+        }
+      }
+      return { ...kept, held };
+    });
+  }
+
+  /** Runs `powerOn`, handing the instance the listeners of the device's earlier instances. */
+  #powerOnHook(instance: Instance): Promise<unknown> {
+    const listeners = this.#inherited(instance.slot);
+    return instance.hook("powerOn", this.#hookTimeout, { listeners });
+  }
+
+  /**
+   * Puts an instance's listeners into service: those that don't listen bind. Logs `listening`
+   * for each, unless `quiet`, as in a hot swap, which logs the handover instead.
+   *
+   * @returns The URLs of the listeners that bound.
+   * @throws RackError `RACK_HOOK_FAILED` when a bind fails, as when `activate` fails.
+   * @decision .agents/decisions/261118_070617-panels-as-devices.md#when-listeners-listen
+   */
+  async #listen(instance: Instance, quiet = false): Promise<string[]> {
+    if (instance.dead || instance.listenerReports.length === 0) return [];
+    const bound = (await instance.request({ op: "listen" }, this.#hookTimeout)) as string[];
+    if (!quiet) for (const url of bound) this.#log("info", "listening", { url }, instance.slot);
+    return bound;
+  }
+
+  /**
+   * Takes an instance's listeners out of service: they stop listening, the requests that wait
+   * for the install get 503, and the WebSockets close with `code` once their messages in flight
+   * are handled.
+   *
+   * @param logClosed Log `listener closed` for each, as when no other instance takes it over.
+   * @returns The URLs of the listeners that stopped, or `undefined` when the instance didn't
+   *   confirm the stop within `hookTimeout`.
+   * @decision .agents/decisions/261118_070617-panels-as-devices.md#when-listeners-listen
+   */
+  async #unlisten(
+    instance: Instance,
+    code: number,
+    logClosed: boolean,
+  ): Promise<string[] | undefined> {
+    if (instance.dead || !instance.listenerReports.some((r) => r.listening)) return [];
+    let stopped: string[];
+    try {
+      stopped = (await instance.request({ op: "unlisten", code }, this.#hookTimeout)) as string[];
+    } catch {
+      // An instance that is gone took its listeners with it; one that didn't answer didn't stop.
+      return instance.dead ? [] : undefined;
+    }
+    if (logClosed) {
+      for (const url of stopped) this.#log("info", "listener closed", { url }, instance.slot);
+    }
+    return stopped;
+  }
+
+  /** The listeners of an instance as `status()` shows them; with `listening`, those that listen. */
+  #listenerStatus(instance: Instance | null, listening = false): ListenerStatus[] {
+    if (instance === null) return [];
+    return instance.listeners
+      .filter((l) => !listening || l.listening)
+      .map(({ url, certificates, requests, webSockets }) => ({
+        url,
+        certificates,
+        requests,
+        webSockets,
+      }));
+  }
+
   onExit(instance: Instance, deliberate: boolean, detail: string): void {
     this.#instances.delete(instance);
+    for (const { url } of instance.listenerReports.filter((r) => r.listening)) {
+      this.#log("info", "listener closed", { url }, instance.slot);
+    }
     const message = `${instance.slot}: instance ${detail}`;
     this.#backplane.disconnect(
       instance,
@@ -1002,6 +1169,7 @@ class Rack implements InstanceHost {
     }
     await this.#endAll();
     this.#slots.clear();
+    this.#ports.clear();
     this.#phase = "stopped";
     this.#log("info", `rack ${this.#manifest.name} stopped`);
   }
@@ -1948,6 +2116,9 @@ class Rack implements InstanceHost {
     const old = slot.installed;
     const markers = await this.#backplane.hold(slot);
     if (old === null) return undefined;
+    // Its listeners leave service with its calls held; nothing listens until the next instance.
+    // @decision .agents/decisions/261118_070617-panels-as-devices.md#cold-swaps-restarts-and-resets
+    await this.#unlisten(old, 1012, true);
     const alive = !old.dead;
     const saved = await this.#powerDown(old, markers, takeSnapshot);
     slot.installed = null;
@@ -1964,12 +2135,13 @@ class Rack implements InstanceHost {
     saved: { state: unknown; from: string } | undefined,
   ): Promise<void> {
     await this.#backplane.connect(instance);
-    await instance.hook("powerOn", this.#hookTimeout);
+    await this.#powerOnHook(instance);
     instance.poweredOn = true;
     await instance.hook("selfTest", this.#hookTimeout);
     if (saved !== undefined) await instance.hook("restore", this.#hookTimeout, saved);
     await instance.hook("activate", this.#hookTimeout);
     instance.active = true;
+    await this.#listen(instance);
     if (instance.dead) {
       throw new RackError(
         "RACK_SWAP_REJECTED",
@@ -2137,6 +2309,34 @@ class Rack implements InstanceHost {
     let deactivated = false;
     let held = false;
     let markers: Marker[] = [];
+    /** The listeners' switch: what the new instance bound and the old one stopped. */
+    let handover: { bound: string[]; stopped: string[] } | undefined;
+    /** The old instance stopped listening, or was asked to and didn't confirm. */
+    let switched = false;
+    let unconfirmed = false;
+    /**
+     * Binds the new instance's listeners while the slot is held, then stops the old ones: make
+     * before break, with reusePort. A bind that fails fails the swap while the old ones listen.
+     *
+     * @decision .agents/decisions/261118_070617-panels-as-devices.md#hot-swaps
+     */
+    const switchListeners = async (next: Instance) => {
+      const bound = await this.#listen(next, true);
+      let stopped: string[] = [];
+      if (old !== null && !old.dead) {
+        switched = true;
+        const confirmed = await this.#unlisten(old, 1012, false);
+        if (confirmed === undefined) {
+          unconfirmed = true;
+          throw new RackError(
+            "RACK_SWAP_REJECTED",
+            `${slot.name}: the old instance did not confirm within ${this.#hookTimeout} ms that its listeners stopped`,
+          );
+        }
+        stopped = confirmed;
+      }
+      handover = { bound, stopped };
+    };
     try {
       neo = await this.#boot(firmware, slot.name, slot.u, slot.config, "RACK_SWAP_REJECTED");
       const fru = neo.fru as Fru;
@@ -2153,7 +2353,7 @@ class Rack implements InstanceHost {
       this.#checkCompatibility(slot, fru);
       // A standby instance can call its needs from powerOn on; events reach it once installed.
       await this.#backplane.connect(neo);
-      await neo.hook("powerOn", this.#hookTimeout);
+      await this.#powerOnHook(neo);
       neo.poweredOn = true;
       await neo.hook("selfTest", this.#hookTimeout);
       // Background tasks are break-before-make: the old ones stop before the new ones start.
@@ -2166,6 +2366,9 @@ class Rack implements InstanceHost {
       if (old !== null && !old.dead && old.fru?.snapshot && fru.restore) {
         markers = await this.#backplane.hold(slot);
         held = true;
+        // The old instance stops taking requests before it drains, so every request during the
+        // handover waits for the new instance and sees the restored state.
+        await switchListeners(neo);
         if (!(await this.#backplane.drain(old, markers, this.#drainTimeout))) {
           throw new RackError(
             "RACK_SWAP_REJECTED",
@@ -2184,6 +2387,7 @@ class Rack implements InstanceHost {
         markers = await this.#backplane.hold(slot);
         held = true;
       }
+      if (handover === undefined) await switchListeners(neo);
       // The new instance may have exited while the hold waited; it must not be installed then.
       if (neo.dead) {
         throw new RackError(
@@ -2192,6 +2396,26 @@ class Rack implements InstanceHost {
         );
       }
     } catch (error) {
+      // A switch goes back: the old instance listens again while the new one still holds the
+      // ports, then the new one answers the requests it held with 503.
+      // @decision .agents/decisions/261118_070617-panels-as-devices.md#hot-swaps
+      let lost: WireError | undefined;
+      if (unconfirmed && old !== null) {
+        lost = {
+          code: "RACK_DEVICE_FAULT",
+          message: `${slot.name}: the old instance did not confirm within ${this.#hookTimeout} ms that its listeners stopped`,
+        };
+      } else if (switched && old !== null && !old.dead) {
+        try {
+          await this.#listen(old, true);
+        } catch (relisten) {
+          lost = {
+            code: "RACK_DEVICE_FAULT",
+            message: `${slot.name}: the old instance did not listen again: ${asRackError(relisten).message}`,
+          };
+        }
+      }
+      if (neo !== undefined) await this.#unlisten(neo, 1012, false);
       // The new instance goes at once, but the wait for its thread comes after the old instance
       // serves again, so that a stuck new instance doesn't keep the old one waiting.
       const neoStopped = neo === undefined ? Promise.resolve(true) : this.#end(neo, slot.name);
@@ -2200,8 +2424,7 @@ class Rack implements InstanceHost {
       // watch it again. One that didn't answer deactivate, or doesn't activate again, can't keep
       // serving, and goes the way of a watchdog bite.
       // @decision .agents/decisions/261117_185131-ending-instances.md#failed-hot-swaps
-      let lost: WireError | undefined;
-      if (old !== null && !old.dead && deactivating) {
+      if (lost === undefined && old !== null && !old.dead && deactivating) {
         if (!deactivated && timedOut(error)) {
           lost = {
             code: "RACK_DEVICE_FAULT",
@@ -2253,6 +2476,7 @@ class Rack implements InstanceHost {
     slot.crashes = [];
     await this.#backplane.install(slot, neo, old);
     if (!neo.dead) this.#powered(neo);
+    this.#logHandover(slot.name, handover, from, firmware.hash);
     if (old !== null) await this.#retire(old, markers);
     slot.busy = false;
     this.#emit({
@@ -2267,6 +2491,31 @@ class Rack implements InstanceHost {
     // A crash while the slot was busy was counted but not reset; the reset starts now.
     // @decision .agents/decisions/261115_222025-p0-api-details.md#resets
     if (neo.dead && slot.installed === null) this.#recover(slot);
+  }
+
+  /**
+   * Logs what a hot swap did to the device's listeners: `listener handed over` for each address
+   * that both instances listen on, `listening` for one only the new instance has, and `listener
+   * closed` for one only the old instance had.
+   *
+   * @decision .agents/decisions/261118_070617-panels-as-devices.md#observation
+   */
+  #logHandover(
+    device: string,
+    handover: { bound: string[]; stopped: string[] } | undefined,
+    from: string | null,
+    to: string,
+  ): void {
+    if (handover === undefined) return;
+    const { bound, stopped } = handover;
+    for (const url of bound) {
+      if (stopped.includes(url))
+        this.#log("info", "listener handed over", { url, from, to }, device);
+      else this.#log("info", "listening", { url }, device);
+    }
+    for (const url of stopped) {
+      if (!bound.includes(url)) this.#log("info", "listener closed", { url }, device);
+    }
   }
 
   async #plug(u: number, spec: SlotSpec): Promise<void> {
@@ -2397,6 +2646,7 @@ class Rack implements InstanceHost {
     if (stuck !== undefined) throw jammed(stuck);
     this.#slots.delete(name);
     this.#backplane.forget(name);
+    this.#ports.delete(name);
     this.#emit({ type: "swap", device: name, action: "unplug", mode: "unplug", from, to: null });
     this.#log("info", `${name} unplugged`);
   }
@@ -2674,12 +2924,14 @@ class Rack implements InstanceHost {
     }
   }
 
+  /** Powers an instance on, and puts its listeners into service once `activate` succeeded. */
   async #powerOn(instance: Instance): Promise<void> {
-    await instance.hook("powerOn", this.#hookTimeout);
+    await this.#powerOnHook(instance);
     instance.poweredOn = true;
     await instance.hook("selfTest", this.#hookTimeout);
     await instance.hook("activate", this.#hookTimeout);
     instance.active = true;
+    await this.#listen(instance);
   }
 
   /**
@@ -2702,6 +2954,10 @@ class Rack implements InstanceHost {
     streams = false,
   ): Promise<{ state: unknown; from: string } | undefined> {
     if (instance.dead) return undefined;
+    // An unplug and stop() take the listeners out of service as the power-down starts; after a
+    // hot swap or for a cold replacement, they are out already.
+    // @decision .agents/decisions/261118_070617-panels-as-devices.md#when-listeners-listen
+    await this.#unlisten(instance, 1001, true);
     const silent = () =>
       this.#backplane.fail(
         instance,
@@ -2997,9 +3253,14 @@ class Rack implements InstanceHost {
           .length,
         knownGood: this.#knownGood.get(slot.name)?.hash ?? null,
         watchdogs: slot.installed?.watchdogs ?? [],
-        stuck: [...this.#stuck.values()]
-          .filter((stuck) => stuck.device === slot.name)
-          .map(({ firmware, since }) => ({ firmware, since })),
+        stuck: [...this.#stuck]
+          .filter(([, stuck]) => stuck.device === slot.name)
+          .map(([instance, { firmware, since }]) => ({
+            firmware,
+            since,
+            listeners: this.#listenerStatus(instance, true),
+          })),
+        listeners: this.#listenerStatus(slot.installed),
       };
       const owner = owners.get(slot.name);
       if (owner !== undefined) status.owner = owner;
@@ -3088,8 +3349,13 @@ interface Ending {
   done: Promise<boolean>;
 }
 
+/** A listener's address in the rack's table, and the device whose instance reserved it. */
+interface Address extends Omit<InheritedListener, "held"> {
+  device: string;
+}
+
 /** A stuck thread: the instance's {@link StuckThread} status, and the device it belongs to. */
-interface Stuck extends StuckThread {
+interface Stuck extends Omit<StuckThread, "listeners"> {
   /** As in {@link Ending}; a stuck thread without a device keeps its firmware from loading. */
   device: string | undefined;
 }

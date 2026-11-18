@@ -29,6 +29,8 @@
  * @decision .agents/decisions/261118_071155-backplane-streams.md#cancellation-and-errors
  * @decision .agents/decisions/261118_071155-backplane-streams.md#swaps-and-resets
  * @decision .agents/decisions/261118_071155-backplane-streams.md#observation
+ * @decision .agents/decisions/261118_070617-panels-as-devices.md#listeners
+ * @decision .agents/decisions/261118_070617-panels-as-devices.md#when-listeners-listen
  */
 import { type ConnectorInfo, describeConnector, type EventSpec } from "./connector.ts";
 import {
@@ -46,6 +48,7 @@ import {
   type Watchdog,
 } from "./device.ts";
 import { fromWireError, isCloneable, RackError, toWireError, type WireError } from "./errors.ts";
+import { ListenerHost } from "./listeners.ts";
 import type {
   CalledRpcMetrics,
   EmittedEventMetrics,
@@ -58,6 +61,7 @@ import type {
   StreamMetrics,
 } from "./metrics.ts";
 import {
+  type AnswerMessage,
   type AttachRequest,
   type BootRequest,
   type CallResult,
@@ -78,6 +82,8 @@ import {
   type NeedInfo,
   type NeedLinkRequest,
   QUEUE_LIMIT,
+  type ReserveAsk,
+  SHARED_LISTENERS,
   SHARED_LOOP,
   SHARED_SERVING,
   SHARED_WATCHDOGS,
@@ -248,6 +254,25 @@ const markers = new Map<number, number>();
 const drains = new Set<{ markers: Marker[]; streams: boolean; resolve: () => void }>();
 /** The streams of calls from outside the rack, on the data channel; set at boot. */
 let dataStreams: StreamChannel | undefined;
+/** Requests to the main thread that wait for their answers, by id. */
+const asking = new Map<
+  number,
+  { resolve: (value: unknown) => void; reject: (error: unknown) => void }
+>();
+let nextAsk = 1;
+/** The device's listeners. */
+const listeners = new ListenerHost({
+  name: () => booted?.name ?? "device",
+  queueLimit: () => queueLimit,
+  ask,
+  report: (reports) => post({ op: "listeners", listeners: reports }),
+  log,
+  count(index, requests, webSockets) {
+    Atomics.store(gauge, SHARED_LISTENERS + 2 * index, requests);
+    Atomics.store(gauge, SHARED_LISTENERS + 2 * index + 1, webSockets);
+  },
+  wake: () => checkDrains(),
+});
 const served = new Map<string, Map<string, ServedRpcMetrics>>();
 const emitted = new Map<string, Map<string, EmittedEventMetrics>>();
 
@@ -310,9 +335,28 @@ function channelOn(port: MessagePort): StreamChannel {
 
 // ---- Control channel ----
 
-addEventListener("message", (event: MessageEvent<ControlRequest>) => {
-  void control(event.data);
+addEventListener("message", (event: MessageEvent<ControlRequest | AnswerMessage>) => {
+  const message = event.data;
+  if (message.op === "answer") answered(message);
+  else void control(message);
 });
+
+/** Asks the main thread, which answers on the control channel. */
+function ask(question: ReserveAsk): Promise<unknown> {
+  const id = nextAsk++;
+  return new Promise((resolve, reject) => {
+    asking.set(id, { resolve, reject });
+    post({ op: "ask", id, ask: question });
+  });
+}
+
+function answered(message: AnswerMessage): void {
+  const waiting = asking.get(message.id);
+  if (waiting === undefined) return;
+  asking.delete(message.id);
+  if (message.ok) waiting.resolve(message.value);
+  else waiting.reject(fromWireError(message.error));
+}
 
 async function control(request: ControlRequest): Promise<void> {
   let reply: ControlReply;
@@ -363,7 +407,12 @@ function handle(request: ControlRequest): unknown {
       return drop(request.link, request.error);
     case "installed":
       installed = request.installed;
+      listeners.setInstalled(installed);
       return undefined;
+    case "listen":
+      return listeners.listen();
+    case "unlisten":
+      return listeners.unlisten(request.code);
     case "drain":
       return drain(request);
     case "metrics":
@@ -552,6 +601,7 @@ function makeContext(def: DeviceDefinition, input: ContextInput): DeviceContext 
     ports: Object.freeze(ports),
     on: Object.freeze(on),
     emit: Object.freeze(emit),
+    serve: (options: Parameters<DeviceContext["serve"]>[0]) => listeners.serve(options),
     config: input.config,
     log: Object.freeze(logger),
     signal: powered.signal,
@@ -1368,11 +1418,14 @@ function drain({ markers: expected, streams }: DrainRequest): Promise<void> {
  * open for a drain that waits for streams too.
  */
 function checkDrains(): void {
-  if (drains.size === 0 || serving > 0) return;
+  // A drain waits for the requests that the device's listeners are handling, as for calls.
+  // @decision .agents/decisions/261118_070617-panels-as-devices.md#when-listeners-listen
+  if (drains.size === 0 || serving > 0 || listeners.handling > 0) return;
   let streaming: boolean | undefined;
   for (const entry of [...drains]) {
     if (entry.streams) {
-      streaming ??= openStreams() > 0;
+      // A response that still streams counts as an open stream.
+      streaming ??= openStreams() > 0 || listeners.pending > 0;
       if (streaming) continue;
     }
     // A link that closed brings no marker, and no call either.
@@ -1480,9 +1533,23 @@ async function runHook(request: HookRequest): Promise<unknown> {
   if (state === undefined) throw new RackError("RACK_HOOK_FAILED", "the instance is not booted");
   const { def, ctx } = state;
   switch (request.hook) {
-    case "powerOn":
-      impls = checkImpls(state, await def.powerOn?.(ctx));
+    case "powerOn": {
+      listeners.begin(request.listeners ?? []);
+      let result: unknown;
+      try {
+        result = await def.powerOn?.(ctx);
+      } catch (error) {
+        await listeners.end().catch(() => {
+          // powerOn failed already, and its own error is the one the rack reports.
+        });
+        throw error;
+      }
+      // A powerOn in which a serve() rejected fails, even if the device caught the rejection.
+      // @decision .agents/decisions/261118_070617-panels-as-devices.md#listeners
+      await listeners.end();
+      impls = checkImpls(state, result);
       return undefined;
+    }
     case "selfTest":
       await def.selfTest?.(ctx);
       return undefined;

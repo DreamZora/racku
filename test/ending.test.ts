@@ -327,7 +327,10 @@ describe("a thread stuck in native code", () => {
     expect(await running.call("jam.jam", "version", undefined)).toBe("v1");
     const status = jamStatus(running);
     expect(status.state).toBe("degraded");
-    expect(status.stuck).toEqual([{ firmware: expect.any(String), since: expect.any(Number) }]);
+    // A stuck thread lists the listeners it keeps, as panels-as-devices decides; jam has none.
+    expect(status.stuck).toEqual([
+      { firmware: expect.any(String), since: expect.any(Number), listeners: [] },
+    ]);
     expect(status.stuck[0]?.firmware).not.toBe(status.firmware);
     const refused = await errorOf(running.swap("jam"));
     expect(refused.code).toBe("RACK_SWAP_REJECTED");

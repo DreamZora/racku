@@ -7,20 +7,27 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
  * @decision .agents/decisions/261117_062959-watchdog.md#feeding-and-checking
  * @decision .agents/decisions/261117_185131-ending-instances.md#ending-an-instance
+ * @decision .agents/decisions/261118_070617-panels-as-devices.md#observation
  */
 import type { HookName } from "./device.ts";
-import { fromWireError, RackError } from "./errors.ts";
+import { fromWireError, RackError, toWireError } from "./errors.ts";
 import type { Firmware } from "./firmware.ts";
 import type { InstanceMetrics } from "./metrics.ts";
 import {
+  type AnswerMessage,
+  type AskNotice,
   type ControlNotice,
   type ControlPayload,
   type DataFromWorker,
   type DataToWorker,
   type Fru,
+  type InheritedListener,
+  type ListenerReport,
   type LogNotice,
   type Marker,
+  type ReserveAsk,
   SHARED_LENGTH,
+  SHARED_LISTENERS,
   SHARED_LOOP,
   SHARED_SERVING,
   SHARED_WATCHDOGS,
@@ -37,6 +44,14 @@ export interface InstanceHost {
   onExit(instance: Instance, deliberate: boolean, detail: string): void;
   /** A watchdog of the active instance went `timeout` ms without a feed; it is no longer checked. */
   onBite(instance: Instance, name: string, timeout: number): void;
+  /** The instance asks to reserve a listener's address; rejects with a `RackError` to refuse. */
+  onAsk(instance: Instance, ask: ReserveAsk): Promise<unknown>;
+}
+
+/** A listener of an instance with its counters, as `status()` shows it. */
+export interface ListenerState extends ListenerReport {
+  requests: number;
+  webSockets: number;
 }
 
 /** A watchdog of an instance, as `status()` reports it. */
@@ -113,6 +128,8 @@ export class Instance {
   dead = false;
   /** When the rack terminated the Worker, a millisecond timestamp. */
   terminatedAt: number | undefined;
+  /** The instance's listeners, as its Worker host last reported them. */
+  listenerReports: ListenerReport[] = [];
 
   readonly #worker: Worker;
   readonly #data: MessagePort;
@@ -182,6 +199,15 @@ export class Instance {
       name,
       timeout,
       lastFed: fedAt,
+    }));
+  }
+
+  /** The instance's listeners, with their requests in flight and open WebSockets. */
+  get listeners(): ListenerState[] {
+    return this.listenerReports.map((report) => ({
+      ...report,
+      requests: Atomics.load(this.#gauge, SHARED_LISTENERS + 2 * report.index),
+      webSockets: Atomics.load(this.#gauge, SHARED_LISTENERS + 2 * report.index + 1),
     }));
   }
 
@@ -262,7 +288,7 @@ export class Instance {
   async hook(
     hook: HookName,
     timeout: number,
-    extra: { state?: unknown; from?: string } = {},
+    extra: { state?: unknown; from?: string; listeners?: InheritedListener[] } = {},
   ): Promise<unknown> {
     // @decision .agents/decisions/261117_062959-watchdog.md#two-kinds-of-watchdog
     if (hook === "deactivate") this.#unwatch();
@@ -425,6 +451,8 @@ export class Instance {
   #onControl(notice: ControlNotice): void {
     if ("op" in notice) {
       if (notice.op === "watchdog") this.#onWatchdog(notice);
+      else if (notice.op === "ask") this.#onAsk(notice);
+      else if (notice.op === "listeners") this.listenerReports = notice.listeners;
       else this.#host.onLog(this, notice);
       return;
     }
@@ -434,6 +462,20 @@ export class Instance {
     clearTimeout(request.timer);
     if (notice.ok) request.resolve(notice.value);
     else request.reject(fromWireError(notice.error));
+  }
+
+  /** Answers a request of the Worker host, unless the instance is gone. */
+  #onAsk(notice: AskNotice): void {
+    this.#host.onAsk(this, notice.ask).then(
+      (value) => this.#answer({ op: "answer", id: notice.id, ok: true, value }),
+      (error: unknown) =>
+        this.#answer({ op: "answer", id: notice.id, ok: false, error: toWireError(error) }),
+    );
+  }
+
+  #answer(message: AnswerMessage): void {
+    if (this.dead) return;
+    this.#worker.postMessage(message);
   }
 
   // ---- Watchdogs ----

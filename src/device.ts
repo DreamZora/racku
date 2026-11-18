@@ -13,6 +13,7 @@
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#start-priority
  * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#cold-swaps
  * @decision .agents/decisions/261118_071155-backplane-streams.md#timeouts
+ * @decision .agents/decisions/261118_070617-panels-as-devices.md#listeners
  */
 import {
   type Connector,
@@ -29,6 +30,7 @@ import {
   type RpcSpec,
 } from "./connector.ts";
 import { RackError } from "./errors.ts";
+import type { Listener, ServeOptions } from "./listeners.ts";
 import { isStandardSchema, type StandardSchemaV1 } from "./schema.ts";
 
 /** Connectors keyed by need or port name. */
@@ -255,6 +257,17 @@ export interface DeviceContext<N extends Needs = Needs, P extends Ports = Ports,
   readonly on: { readonly [K in keyof N]: PortEvents<NeedConnector<N[K]>["members"]> };
   /** Event publishers for every provided port; the payload is validated before it is sent. */
   readonly emit: { readonly [K in keyof P]: PortEmitter<P[K]["members"]> };
+  /**
+   * Opens a listener: an HTTP server, WebSocket included, that the rack hands over across swaps.
+   * Call it in `powerOn` only. It resolves once the rack has reserved the address; the listener
+   * binds when the rack puts the instance into service, and stops when the instance leaves
+   * service. Until the instance is installed, the requests it takes wait.
+   *
+   * @throws RackError `RACK_HOOK_FAILED` for invalid options, outside `powerOn`, or an address
+   *   that can't be reserved, with `data.listener` and, for a conflict, `data.holder`. `powerOn`
+   *   fails with it, even when the device catches it.
+   */
+  serve<T = unknown>(options: ServeOptions<T>): Promise<Listener<T>>;
   /** The validated configuration. */
   readonly config: C;
   /** Logging through the management bus. */

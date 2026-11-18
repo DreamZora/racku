@@ -55,7 +55,18 @@ export {
   type WireError,
 } from "./errors.ts";
 export { type FetchHandler, Http, httpHandler } from "./http.ts";
-export type { WatchdogStatus } from "./instance.ts";
+export type { ListenerState, WatchdogStatus } from "./instance.ts";
+export type {
+  Listener,
+  ListenerHandler,
+  ListenerHandlers,
+  ListenerMethod,
+  ListenerRoute,
+  ListenerRouteHandler,
+  ListenerTls,
+  ListenerWebSocket,
+  ServeOptions,
+} from "./listeners.ts";
 export type { LogEntry, Logger } from "./log.ts";
 export {
   type HttpPanelSpec,
@@ -83,6 +94,7 @@ export type {
   ServedRpcMetrics,
   StreamMetrics,
 } from "./metrics.ts";
+export type { CertificateInfo } from "./protocol.ts";
 export {
   type RackEvent,
   type RackHandle,

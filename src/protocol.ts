@@ -12,6 +12,7 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#links
  * @decision .agents/decisions/261116_024226-backplane-links.md#rpc
  * @decision .agents/decisions/261118_071155-backplane-streams.md#transport
+ * @decision .agents/decisions/261118_070617-panels-as-devices.md#listeners
  */
 import type { ConnectorInfo } from "./connector.ts";
 import type { HookName, LogLevel } from "./device.ts";
@@ -40,8 +41,68 @@ export const SHARED_WATCHDOGS = 2;
 export const WATCHDOG_LIMIT = 16;
 /** Shortest timeout of a device watchdog, in ms; shorter ones would trip on garbage collection. */
 export const WATCHDOG_MIN = 1_000;
+/** The most listeners one instance may have. */
+export const LISTENER_LIMIT = 16;
+/**
+ * The first of two counters per listener in the shared memory: its requests in flight, then its
+ * open WebSockets, as Bun counts them.
+ *
+ * @decision .agents/decisions/261118_070617-panels-as-devices.md#observation
+ */
+export const SHARED_LISTENERS = SHARED_WATCHDOGS + WATCHDOG_LIMIT;
 /** Number of `Int32` elements in the shared memory of an instance. */
-export const SHARED_LENGTH = SHARED_WATCHDOGS + WATCHDOG_LIMIT;
+export const SHARED_LENGTH = SHARED_LISTENERS + 2 * LISTENER_LIMIT;
+
+/** A certificate of a listener, as `status()` shows it. */
+export interface CertificateInfo {
+  subject: string;
+  /** The server name it serves, for one of a list of certificates for SNI. */
+  serverName?: string;
+  /** When it expires, a millisecond timestamp. */
+  notAfter: number;
+}
+
+/** A listener of an instance, as the Worker host reports it; its counters are shared memory. */
+export interface ListenerReport {
+  /** Its index among the instance's listeners, and of its counters. */
+  index: number;
+  url: string;
+  /** It is bound and takes new connections. */
+  listening: boolean;
+  /** The certificates new connections get; empty without TLS. */
+  certificates: CertificateInfo[];
+}
+
+/**
+ * A listener of a device's earlier instance, which the next instance's listener of the same
+ * declared address and order takes over.
+ *
+ * @decision .agents/decisions/261118_070617-panels-as-devices.md#port-0
+ */
+export interface InheritedListener {
+  hostname: string;
+  /** The port the listener declared; 0 picks a free one. */
+  declared: number;
+  /** Its order among the listeners that declare the same hostname and port. */
+  ordinal: number;
+  /** The port it got. */
+  port: number;
+  /** An instance of the device listens on it now, so no check for other processes runs. */
+  held: boolean;
+}
+
+/**
+ * Worker to main thread: reserve a listener's address in the rack's table of listeners.
+ *
+ * @decision .agents/decisions/261118_070617-panels-as-devices.md#conflicts
+ */
+export interface ReserveAsk {
+  kind: "reserve";
+  hostname: string;
+  declared: number;
+  ordinal: number;
+  port: number;
+}
 
 /** A need in FRU data: its connector, and whether it owns a copy of its provider. */
 export interface NeedInfo extends ConnectorInfo {
@@ -114,6 +175,29 @@ export interface HookRequest {
   state?: unknown;
   /** For `restore`: the previous instance's firmware version. */
   from?: string;
+  /** For `powerOn`: the listeners of the device's earlier instances. */
+  listeners?: InheritedListener[];
+}
+
+/**
+ * Main thread to Worker: the instance goes into service; its listeners that don't listen bind.
+ * The reply is the URLs of the ones that bound.
+ *
+ * @decision .agents/decisions/261118_070617-panels-as-devices.md#when-listeners-listen
+ */
+export interface ListenRequest {
+  id: number;
+  op: "listen";
+}
+
+/**
+ * Main thread to Worker: the instance leaves service; its listeners stop listening, and its
+ * WebSockets close with `code`. The reply, the URLs of the ones that stopped, confirms the stop.
+ */
+export interface UnlistenRequest {
+  id: number;
+  op: "unlisten";
+  code: number;
 }
 
 /** Main thread to consumer: a new link for a need, which becomes the need's current link. */
@@ -245,7 +329,9 @@ export type ControlRequest =
   | DropRequest
   | InstalledRequest
   | DrainRequest
-  | MetricsRequest;
+  | MetricsRequest
+  | ListenRequest
+  | UnlistenRequest;
 
 /** A control-channel request before the sender numbers it. */
 export type ControlPayload = ControlRequest extends infer R
@@ -281,8 +367,26 @@ export interface WatchdogNotice {
   armed?: { name: string; timeout: number };
 }
 
+/** Worker to main thread: a request the main thread answers with an {@link AnswerMessage}. */
+export interface AskNotice {
+  op: "ask";
+  id: number;
+  ask: ReserveAsk;
+}
+
+/** Main thread to Worker: the answer to an {@link AskNotice}. */
+export type AnswerMessage =
+  | { op: "answer"; id: number; ok: true; value: unknown }
+  | { op: "answer"; id: number; ok: false; error: WireError };
+
+/** Worker to main thread: what the instance's listeners are now. */
+export interface ListenersNotice {
+  op: "listeners";
+  listeners: ListenerReport[];
+}
+
 /** Anything a Worker posts on the control channel. */
-export type ControlNotice = ControlReply | LogNotice | WatchdogNotice;
+export type ControlNotice = ControlReply | LogNotice | WatchdogNotice | AskNotice | ListenersNotice;
 
 /** Backplane to provider, on the data channel: a call from outside the rack. */
 export interface CallToProvider {

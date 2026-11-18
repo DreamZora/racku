@@ -347,3 +347,32 @@ export const StreamClient = connector("test.stream-client/v1", {
   /** Exits the Worker 10 ms after it answers. */
   crash: rpc(v.undefined(), v.undefined()),
 });
+
+/** A certificate and its key, as paths relative to the rack's base directory. */
+export const PairPaths = v.object({
+  cert: v.string(),
+  key: v.string(),
+  serverName: v.optional(v.string()),
+});
+
+/** Drives a device that serves HTTP and WebSocket on a listener of its own. */
+export const ListenerControl = connector("test.listener/v1", {
+  /** The URL of the device's first listener. */
+  url: rpc(v.undefined(), v.string()),
+  /** Replaces the certificates of the first listener. */
+  setTls: rpc(v.union([PairPaths, v.array(PairPaths)]), v.undefined()),
+  /** Publishes to a topic on the first listener. */
+  publish: rpc(v.object({ topic: v.string(), data: v.string() }), v.number()),
+  /** Replaces the handlers of the first listener with ones that answer with `label`. */
+  reload: rpc(v.string(), v.undefined()),
+  /** Sends `count` messages of `size` bytes to the WebSocket with `id`, as fast as it can. */
+  flood: rpc(
+    v.object({ id: v.number(), size: v.number(), count: v.number() }),
+    v.object({ sent: v.number(), closed: v.boolean() }),
+  ),
+  /** What the instance saw: its label, the requests it served, and its WebSockets' close codes. */
+  state: rpc(
+    v.undefined(),
+    v.object({ label: v.string(), served: v.number(), closes: v.array(v.number()) }),
+  ),
+});

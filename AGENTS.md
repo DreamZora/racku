@@ -25,9 +25,8 @@ This file defines the project background, architectural constraints, and working
 - [Continuous integration with Windows checked](.agents/decisions/261118_015210-ci-with-windows.md), which replaces the earlier CI decisions, runs the checks on Linux and the tests on macOS and Windows, for pushes to `main` and manual runs. A failure on any of the three fails the run.
 - P3 is under way on `feat/p3`, with three accepted decisions:
   - [Byte streams in calls between devices](.agents/decisions/261118_071155-backplane-streams.md), implemented: calls carry `ReadableStream`s of bytes, with flow control by credit.
-  - Not implemented yet; until they are, the code and the rest of this file describe the main-thread panel:
-    - [Panels as devices, with listeners that survive swaps](.agents/decisions/261118_070617-panels-as-devices.md): devices open HTTP and WebSocket listeners with `ctx.serve`, which the rack hands over across swaps, and the main thread keeps only the management endpoint.
-    - [The standard HTTP panel device, with WebSocket and TLS](.agents/decisions/261118_071513-http-panel-device.md): `httpPanel()` in `rack42u/std`, the `http/v2` connector, and certificates that load without a restart, in place of the manifest's `panel` section.
+  - [Panels as devices, with listeners that survive swaps](.agents/decisions/261118_070617-panels-as-devices.md), implemented but for the removal of the main-thread panel: devices open HTTP and WebSocket listeners with `ctx.serve`, which the rack hands over across swaps.
+  - [The standard HTTP panel device, with WebSocket and TLS](.agents/decisions/261118_071513-http-panel-device.md), not implemented yet: `httpPanel()` in `rack42u/std`, the `http/v2` connector, and certificates that load without a restart, in place of the manifest's `panel` section. Until it is, the code and the rest of this file describe the main-thread panel.
 - The minimum Bun version is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list, such as the `inline` and `chassis` forms, still needs its own decision before work starts.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
@@ -213,6 +212,7 @@ src/                 framework source
   control.ts         the management endpoint that rack ctl talks to
   transfer.ts        checks and moves the buffers that calls and results transfer
   streams.ts         both ends of the byte streams in calls, on a link or the data channel
+  listeners.ts       the listeners that devices open with ctx.serve, in the Worker host
   firmware.ts        per-device Bun.build with content hashes
   panel.ts, http.ts  the HTTP panel and the http/v1 connector
   std/               entry point of rack42u/std and the standard devices
