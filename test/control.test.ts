@@ -105,6 +105,34 @@ async function raw(url: string, request: string): Promise<number> {
   return Number(/^HTTP\/1\.1 (\d+)/.exec(response)?.[1]);
 }
 
+/**
+ * Returns a function that posts an operation to the endpoint of the rack whose base directory is
+ * `dir`, over the platform's default transport: the Unix socket, or on Windows loopback TCP with
+ * the token from the control file. The file is read here, so each post goes out at once.
+ *
+ * @decision .agents/decisions/261118_015204-windows.md#changes-to-the-repository-and-the-tests
+ */
+async function endpointOf(
+  dir: string,
+): Promise<(op: string, args: unknown[]) => Promise<Response>> {
+  const paths = controlPaths(dir);
+  if (!WINDOWS) {
+    return (op, args) =>
+      fetch(`http://localhost/v1/${op}`, {
+        method: "POST",
+        unix: paths.socket,
+        body: JSON.stringify({ args }),
+      });
+  }
+  const { url, token } = (await Bun.file(paths.file).json()) as ControlFile;
+  return (op, args) =>
+    fetch(`${url}/v1/${op}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ args }),
+    });
+}
+
 describe.skipIf(WINDOWS)("the Unix socket", () => {
   // README.md, "Managing a running rack".
   test("README.md: rack start opens a socket only its user can use, and rack ctl operates the rack through it", async () => {
@@ -268,47 +296,35 @@ describe("transports by platform", () => {
 });
 
 describe("the protocol", () => {
-  test.skipIf(WINDOWS)(
-    "README.md: operations from the endpoint and from code run one at a time, in call order",
-    async () => {
-      const created = await app();
-      const { running } = await startRack(
-        {
-          slots: {
-            1: slot("./devices/busy.ts", { config: { activateDelayMs: 150 } }),
-          },
+  test("README.md: operations from the endpoint and from code run one at a time, in call order", async () => {
+    const created = await app();
+    const { running } = await startRack(
+      {
+        slots: {
+          1: slot("./devices/busy.ts", { config: { activateDelayMs: 150 } }),
         },
-        { baseDir: created.dir, control: true },
-      );
-      const fromCode = running.swap("busy");
-      const fromEndpoint = fetch("http://localhost/v1/restart", {
-        method: "POST",
-        unix: controlPaths(created.dir).socket,
-        body: JSON.stringify({ args: ["busy"] }),
-      });
-      await fromCode;
-      expect(((await (await fromEndpoint).json()) as { ok: boolean }).ok).toBe(true);
-      expect(running.history().map((record) => record.cause)).toEqual(["restart", "swap"]);
-    },
-  );
+      },
+      { baseDir: created.dir, control: true },
+    );
+    const post = await endpointOf(created.dir);
+    const fromCode = running.swap("busy");
+    const fromEndpoint = post("restart", ["busy"]);
+    await fromCode;
+    expect(((await (await fromEndpoint).json()) as { ok: boolean }).ok).toBe(true);
+    expect(running.history().map((record) => record.cause)).toEqual(["restart", "swap"]);
+  });
 
-  test.skipIf(WINDOWS)(
-    "README.md: plug takes its slot spec as { source, name, config }",
-    async () => {
-      const created = await app();
-      const { running } = await startRack(
-        { slots: { 1: slot("./devices/counter.ts") } },
-        { baseDir: created.dir, control: true },
-      );
-      const answer = await fetch("http://localhost/v1/plug", {
-        method: "POST",
-        unix: controlPaths(created.dir).socket,
-        body: JSON.stringify({ args: [3, { source: "./devices/counter.ts", name: "second" }] }),
-      });
-      expect(await answer.json()).toEqual({ ok: true, value: null });
-      expect(running.status().map((s) => s.name)).toEqual(["counter", "second"]);
-    },
-  );
+  test("README.md: plug takes its slot spec as { source, name, config }", async () => {
+    const created = await app();
+    const { running } = await startRack(
+      { slots: { 1: slot("./devices/counter.ts") } },
+      { baseDir: created.dir, control: true },
+    );
+    const post = await endpointOf(created.dir);
+    const answer = await post("plug", [3, { source: "./devices/counter.ts", name: "second" }]);
+    expect(await answer.json()).toEqual({ ok: true, value: null });
+    expect(running.status().map((s) => s.name)).toEqual(["counter", "second"]);
+  });
 
   test("rack ctl reports when no rack runs for the directory", async () => {
     const created = await app();
