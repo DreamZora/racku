@@ -105,6 +105,21 @@ The tests block a device in native code with a FIFO, as the watchdog tests do, a
   - The tests above, in `test/ending.test.ts`.
   - The README's "Hot swaps, cold swaps, and restarts", "Hangs and watchdogs", `status()`, and the error table.
 
+## Implementation
+
+- In `src/instance.ts`, `Instance.end()` terminates the Worker and waits for its `close` event, and `terminatedAt` records when the rack terminated it. `timedOut()` tells a request that the Worker didn't answer in time from one that the device failed.
+- In `src/rack.ts`:
+  - `#end()` is the one way to end an instance. It keeps the instances being ended in `#ending`, and the stuck threads in `#stuck`, each with its device's name, or none for a Worker that loaded firmware without one.
+  - `#boot()` waits until no thread of the device is still being ended, then refuses while one of the device's threads is stuck, or one of the same firmware without a name. `#describe()` refuses in the same way.
+  - `#powerDown()` runs the hooks of a stop and skips the rest after an unanswered one. `#retire()`, `#stopForReplacement()`, and `stop()` use it.
+  - `#replaceCold()` fails when an old thread is stuck after the stop, before any new instance starts, and `#rollBackCold()` starts the old firmware of the other members.
+  - When a hot swap fails, `#swapSlot()` activates the old instance again, or ends it and recovers the slot through `#crashed()`.
+  - `#reset()` faults the slot while a thread of the device is stuck, without counting another crash.
+  - `#unplugSlot()` keeps a device whose thread is stuck, and `#finishChange()` reports that as a failed unplug.
+  - `#endAll()` waits for the threads together, at `stop()` and when a start fails.
+- After a watchdog bite whose thread is stuck, the slot's error stays the bite's, as [Watchdog](261117_062959-watchdog.md#biting) decides. `status()` shows the thread in `stuck`.
+- `test/ending.test.ts` holds the tests above. Those that block a thread with a FIFO are skipped on Windows, which has no `mkfifo`.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-17, together with [Counters for calls from outside the rack](261117_185225-outside-call-metrics.md), after asking for both limits that P2 left documented to be decided together.

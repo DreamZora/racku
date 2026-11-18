@@ -15,11 +15,12 @@ This file defines the project background, architectural constraints, and working
   - [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md): cold swaps, restarts, group replacements for contract changes, and changed plans and edited manifests applied to a running rack.
   - [Fallback, rollback, and update history](.agents/decisions/261117_005743-fallback-rollback-and-history.md): probation with passive fallback, `rollback()`, a bounded `history()`, and deleting firmware that nothing needs.
   - [Management endpoint and the rack ctl command](.agents/decisions/261117_005821-management-endpoint.md): `rack ctl` over a Unix socket on Linux and macOS, and over token-protected loopback TCP on Windows or with `--control-port`.
-- The four accepted decisions of P2 are implemented:
+- The accepted decisions of P2 are implemented:
   - [Design goals and principles](.agents/decisions/261117_062916-design-principles.md): the goals and practices that [Design principles](#design-principles) summarizes.
   - [Watchdog](.agents/decisions/261117_062959-watchdog.md): an event-loop watchdog for every device, and watchdogs that devices feed from their work loops.
   - [Bounded backlogs instead of a breaker and thermal](.agents/decisions/261117_063228-bounded-backlogs.md): one bound on the calls and events waiting between devices, `RACK_OVERLOADED`, and no work on expired calls.
   - [Continuous integration on main and on request](.agents/decisions/261117_182058-ci-on-main-and-on-request.md), which replaces the first CI decision: the checks on Linux, and the tests on macOS and Windows, for pushes to `main` and manual runs.
+  - [Ending instances and stuck threads](.agents/decisions/261117_185131-ending-instances.md): every stop waits for the device's thread, a thread stuck in native code keeps its device from starting again, and a failed hot swap reactivates or resets the old instance.
 - The minimum Bun version is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. Everything else on that list, such as the `inline` and `chassis` forms and the WebSocket panel, still needs its own decision before work starts.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.

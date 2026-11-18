@@ -90,6 +90,7 @@ export {
   type SlotState,
   type SlotStatus,
   type StartOptions,
+  type StuckThread,
   type SwapAction,
   start,
   type UpdateCause,

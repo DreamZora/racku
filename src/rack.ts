@@ -20,6 +20,9 @@
  * @decision .agents/decisions/261117_005743-fallback-rollback-and-history.md#update-history
  * @decision .agents/decisions/261117_062959-watchdog.md#biting
  * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
+ * @decision .agents/decisions/261117_185131-ending-instances.md#ending-an-instance
+ * @decision .agents/decisions/261117_185131-ending-instances.md#stuck-threads
+ * @decision .agents/decisions/261117_185131-ending-instances.md#failed-hot-swaps
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dirent } from "node:fs";
@@ -31,7 +34,13 @@ import { type Control, openControl } from "./control.ts";
 import type { CallOptions } from "./device.ts";
 import { RackError, toWireError, type WireError } from "./errors.ts";
 import { buildFirmware as buildBundle, type Firmware } from "./firmware.ts";
-import { Instance, type InstanceHost, type WatchdogStatus, type Wire } from "./instance.ts";
+import {
+  Instance,
+  type InstanceHost,
+  timedOut,
+  type WatchdogStatus,
+  type Wire,
+} from "./instance.ts";
 import { consoleLogger, type LogEntry, type Logger } from "./log.ts";
 import {
   checkDeviceName,
@@ -92,8 +101,25 @@ export interface SlotStatus {
    * no instance is installed.
    */
   watchdogs: WatchdogStatus[];
+  /**
+   * Threads of the device's earlier instances that didn't stop within `hookTimeout` of their
+   * termination, stuck in native code. No other instance of the device starts until they stop.
+   */
+  stuck: StuckThread[];
   /** The last failed swap or crash. */
   error?: WireError;
+}
+
+/**
+ * A thread of an ended instance that is still running, stuck in native code.
+ *
+ * @decision .agents/decisions/261117_185131-ending-instances.md#observation
+ */
+export interface StuckThread {
+  /** Firmware hash of the instance. */
+  firmware: string;
+  /** When the rack terminated the instance, a millisecond timestamp. */
+  since: number;
 }
 
 /** What a management operation did to a device. */
@@ -398,6 +424,10 @@ class Rack implements InstanceHost {
   readonly #listeners = new Set<(event: RackEvent) => void>();
   /** Every instance whose Worker has not exited. */
   readonly #instances = new Set<Instance>();
+  /** Instances being ended, until their thread stops or turns out stuck; see {@link #end}. */
+  readonly #ending = new Map<Instance, Ending>();
+  /** Threads of ended instances that didn't stop within `hookTimeout`, until they stop. */
+  readonly #stuck = new Map<Instance, Stuck>();
   #phase: Phase = "starting";
   readonly #controlOption: StartOptions["control"];
   #control: Control | undefined;
@@ -528,7 +558,7 @@ class Rack implements InstanceHost {
     this.#log("error", message, { firmware: instance.firmware.hash });
     // Fail the calls in flight with the code of a crash before the exit reports the rest.
     this.#backplane.disconnect(instance, "RACK_DEVICE_FAULT", message);
-    const stopped = instance.kill(this.#hookTimeout);
+    const stopped = this.#end(instance, instance.slot);
     if (this.#phase === "starting") {
       this.#startFault ??= new RackError("RACK_DEVICE_FAULT", message, error.data);
       return;
@@ -566,7 +596,7 @@ class Rack implements InstanceHost {
       });
       this.#log(
         "error",
-        `${slot.name} faulted: its Worker did not stop within ${this.#hookTimeout} ms of the watchdog, so its thread is stuck in native code. A swap or a restart brings the device back; only a restart of the rack reclaims the thread.`,
+        `${slot.name} faulted: its Worker did not stop within ${this.#hookTimeout} ms of the watchdog, so its thread is stuck in native code. A swap or a restart brings the device back once the thread stops; only a restart of the rack reclaims a thread that never stops.`,
       );
     });
   }
@@ -843,10 +873,19 @@ class Rack implements InstanceHost {
     return firmware;
   }
 
-  /** Reads what a firmware declares, booting it once in a Worker that is terminated after. */
+  /**
+   * Reads what a firmware declares, loading it once in a Worker that is ended after. While the
+   * thread of an earlier such Worker of the firmware is stuck, it isn't loaded again.
+   *
+   * @decision .agents/decisions/261117_185131-ending-instances.md#inspecting-firmware
+   */
   async #describe(firmware: Firmware): Promise<Fru> {
     const known = this.#described.get(firmware.hash);
     if (known !== undefined) return known;
+    const stuck = this.#stuckFirmware(firmware.hash);
+    if (stuck !== undefined) {
+      throw new RackError("RACK_MANIFEST", this.#stuckMessage(firmware.source, stuck));
+    }
     const instance = new Instance(firmware, firmware.source, this);
     try {
       const fru = await instance.describe(this.#hookTimeout);
@@ -855,7 +894,7 @@ class Rack implements InstanceHost {
     } catch (error) {
       throw new RackError("RACK_MANIFEST", `${firmware.source}: ${asRackError(error).message}`);
     } finally {
-      instance.terminate();
+      await this.#end(instance, undefined);
     }
   }
 
@@ -930,10 +969,10 @@ class Rack implements InstanceHost {
       slot.installed = null;
       slot.removed = true;
       if (instance === null || instance.dead) continue;
-      if (instance.active) await this.#bestEffort(instance, "deactivate");
-      if (instance.poweredOn) await this.#bestEffort(instance, "powerOff");
+      const answered = !instance.active || (await this.#bestEffort(instance, "deactivate"));
+      if (answered && instance.poweredOn) await this.#bestEffort(instance, "powerOff");
     }
-    for (const instance of [...this.#instances]) instance.terminate();
+    await this.#endAll();
     this.#slots.clear();
     this.#phase = "stopped";
   }
@@ -949,14 +988,32 @@ class Rack implements InstanceHost {
     // @decision .agents/decisions/261112_035942-rack-architecture.md#gravity-rule
     for (const slot of this.#ordered().reverse()) {
       const instance = slot.installed;
-      if (instance !== null) await this.#retire(instance);
+      if (instance !== null) {
+        const wasAlive = !instance.dead;
+        await this.#powerDown(instance, []);
+        // Terminated now, in order; the wait for the threads comes once, for all of them.
+        void this.#end(instance, slot.name);
+        if (wasAlive) this.#poweredOff(instance);
+      }
       slot.installed = null;
       slot.removed = true;
     }
-    for (const instance of [...this.#instances]) instance.terminate();
+    await this.#endAll();
     this.#slots.clear();
     this.#phase = "stopped";
     this.#log("info", `rack ${this.#manifest.name} stopped`);
+  }
+
+  /**
+   * Ends every instance left, and waits for every thread being ended, together: a stuck thread
+   * delays a stop by one `hookTimeout` at most. The rack forgets its stuck threads after.
+   *
+   * @decision .agents/decisions/261117_185131-ending-instances.md#ending-an-instance
+   */
+  async #endAll(): Promise<void> {
+    for (const instance of [...this.#instances]) void this.#end(instance, instance.slot);
+    await Promise.all([...this.#ending.values()].map((ending) => ending.done));
+    this.#stuck.clear();
   }
 
   // ---- Assembly ----
@@ -1458,8 +1515,13 @@ class Rack implements InstanceHost {
         results.push({ device: slot.name, from, to: from, mode: "unplug", error: failure });
         continue;
       }
-      await this.#unplugSlot(slot, from);
-      results.push({ device: slot.name, from, to: null, mode: "unplug" });
+      try {
+        await this.#unplugSlot(slot, from);
+        results.push({ device: slot.name, from, to: null, mode: "unplug" });
+      } catch (error) {
+        const failure = toWireError(asRackError(error));
+        results.push({ device: slot.name, from, to: from, mode: "unplug", error: failure });
+      }
     }
     const routes = this.#manifest.panel.http?.routes;
     if (this.#panel !== undefined && routes !== undefined) this.#panel.setRoutes(routes);
@@ -1792,7 +1854,7 @@ class Rack implements InstanceHost {
         this.#checkCompatibility(m.slot, fru, group);
       }
     } catch (error) {
-      for (const neo of neos.values()) neo.terminate();
+      await Promise.all([...neos].map(([slot, neo]) => this.#end(neo, slot.name)));
       for (const m of ordered) {
         m.slot.busy = false;
         const old = m.slot.installed;
@@ -1812,15 +1874,25 @@ class Rack implements InstanceHost {
     }
     const started: Member[] = [];
     let failure: RackError | undefined;
-    for (const m of ordered) {
-      const neo = neos.get(m.slot) as Instance;
-      try {
-        await this.#startReplacement(m.slot, neo, states.get(m.slot));
-        await this.#installReplacement(m.slot, neo, m.firmware, m.source);
-        started.push(m);
-      } catch (error) {
-        failure = asRackError(error);
-        break;
+    // A new instance starts only once the old one's thread has stopped.
+    // @decision .agents/decisions/261117_185131-ending-instances.md#stuck-threads
+    const jammed = ordered.find((m) => this.#stuckDevice(m.slot.name) !== undefined);
+    if (jammed !== undefined) {
+      failure = new RackError(
+        "RACK_DEVICE_FAULT",
+        `${jammed.slot.name}: the old instance's thread did not stop within ${this.#hookTimeout} ms; it is stuck in native code`,
+      );
+    } else {
+      for (const m of ordered) {
+        const neo = neos.get(m.slot) as Instance;
+        try {
+          await this.#startReplacement(m.slot, neo, states.get(m.slot));
+          await this.#installReplacement(m.slot, neo, m.firmware, m.source);
+          started.push(m);
+        } catch (error) {
+          failure = asRackError(error);
+          break;
+        }
       }
     }
     if (failure !== undefined) {
@@ -1848,8 +1920,9 @@ class Rack implements InstanceHost {
 
   /**
    * Stops the installed instance of a slot for a cold replacement: holds the slot, lets the
-   * instance finish its calls, takes its snapshot when asked, powers it off, and terminates it.
-   * The slot stays held, without an instance, until the next one is installed.
+   * instance finish its calls, takes its snapshot when asked, powers it off, and ends it. The
+   * slot stays held, without an instance, until the next one is installed. When the instance's
+   * thread doesn't stop, the rack records it as stuck.
    *
    * @returns The snapshot and the firmware it came from, when one was taken.
    */
@@ -1860,32 +1933,12 @@ class Rack implements InstanceHost {
     const old = slot.installed;
     const markers = await this.#backplane.hold(slot);
     if (old === null) return undefined;
-    let saved: { state: unknown; from: string } | undefined;
     const alive = !old.dead;
-    if (alive) {
-      if (old.active) await this.#bestEffort(old, "deactivate");
-      old.active = false;
-      if (!(await this.#backplane.drain(old, markers, this.#drainTimeout))) {
-        this.#backplane.fail(
-          old,
-          "RACK_LINK_DOWN",
-          `${slot.name} was powered off before the call finished`,
-        );
-      }
-      if (takeSnapshot && old.fru?.snapshot && !old.dead) {
-        try {
-          saved = { state: await old.hook("snapshot", this.#hookTimeout), from: old.firmware.hash };
-        } catch (error) {
-          this.#log("error", `${slot.name}: snapshot failed; the new instance starts without it`, {
-            error: toWireError(error),
-          });
-        }
-      }
-      if (old.poweredOn && !old.dead) await this.#bestEffort(old, "powerOff");
-    }
+    const saved = await this.#powerDown(old, markers, takeSnapshot);
     slot.installed = null;
-    old.terminate();
+    const stopped = this.#end(old, slot.name);
     if (alive) this.#poweredOff(old);
+    await stopped;
     return saved;
   }
 
@@ -1947,10 +2000,10 @@ class Rack implements InstanceHost {
     for (const m of [...started].reverse()) await this.#stopForReplacement(m.slot, false);
     // A new instance that powered on may hold what the old firmware needs, such as a lock, so
     // it powers off before the old firmware starts again.
-    for (const neo of neos.values()) {
-      if (!neo.dead && neo.active) await this.#bestEffort(neo, "deactivate");
-      if (!neo.dead && neo.poweredOn) await this.#bestEffort(neo, "powerOff");
-      neo.terminate();
+    for (const [slot, neo] of neos) {
+      const answered = neo.dead || !neo.active || (await this.#bestEffort(neo, "deactivate"));
+      if (answered && !neo.dead && neo.poweredOn) await this.#bestEffort(neo, "powerOff");
+      await this.#end(neo, slot.name);
     }
     for (const m of ordered) {
       const was = before.get(m.slot) as SlotRecord;
@@ -2057,6 +2110,7 @@ class Rack implements InstanceHost {
     const old = slot.installed;
     slot.state = "swapping";
     let neo: Instance | undefined;
+    let deactivating = false;
     let deactivated = false;
     let held = false;
     let markers: Marker[] = [];
@@ -2081,6 +2135,7 @@ class Rack implements InstanceHost {
       await neo.hook("selfTest", this.#hookTimeout);
       // Background tasks are break-before-make: the old ones stop before the new ones start.
       if (old !== null && !old.dead) {
+        deactivating = true;
         await old.hook("deactivate", this.#hookTimeout);
         old.active = false;
         deactivated = true;
@@ -2114,26 +2169,52 @@ class Rack implements InstanceHost {
         );
       }
     } catch (error) {
-      neo?.terminate();
+      // The new instance goes at once, but the wait for its thread comes after the old instance
+      // serves again, so that a stuck new instance doesn't keep the old one waiting.
+      const neoStopped = neo === undefined ? Promise.resolve(true) : this.#end(neo, slot.name);
       const failure = asRackError(error);
-      if (old !== null && !old.dead) {
-        if (deactivated) {
+      // An old instance that began to deactivate activates again, which also has its watchdogs
+      // watch it again. One that didn't answer deactivate, or doesn't activate again, can't keep
+      // serving, and goes the way of a watchdog bite.
+      // @decision .agents/decisions/261117_185131-ending-instances.md#failed-hot-swaps
+      let lost: WireError | undefined;
+      if (old !== null && !old.dead && deactivating) {
+        if (!deactivated && timedOut(error)) {
+          lost = {
+            code: "RACK_DEVICE_FAULT",
+            message: `${slot.name}: the old instance did not answer deactivate within ${this.#hookTimeout} ms`,
+          };
+        } else {
           try {
             await old.hook("activate", this.#hookTimeout);
             old.active = true;
           } catch (reactivation) {
-            this.#log("error", `${slot.name}: the old instance did not reactivate`, {
-              error: toWireError(reactivation),
-            });
+            lost = {
+              code: "RACK_DEVICE_FAULT",
+              message: `${slot.name}: the old instance did not activate again: ${asRackError(reactivation).message}`,
+            };
           }
         }
+      }
+      if (old !== null && lost !== undefined) {
+        slot.installed = null;
+        slot.state = "resetting";
+        old.active = false;
+        this.#log("error", lost.message, { firmware: old.firmware.hash });
+        // Fail the calls in flight with the code of a crash before the end reports the rest.
+        this.#backplane.disconnect(old, "RACK_DEVICE_FAULT", lost.message);
+        await this.#end(old, slot.name);
+      } else if (old !== null && !old.dead) {
         slot.state = "degraded";
       }
       if (held) await this.#backplane.release(slot);
+      await neoStopped;
       slot.busy = false;
-      if (old === null) slot.state = "faulted";
+      const reported = this.#swapFailed(slot.name, "swap", from, firmware.hash, failure, slot);
+      if (old !== null && lost !== undefined) this.#crashed(slot, old, lost);
+      else if (old === null) slot.state = "faulted";
       else if (old.dead) this.#recover(slot);
-      throw this.#swapFailed(slot.name, "swap", from, firmware.hash, failure, slot);
+      throw reported;
     }
     // Requests are make-before-break: the routes switch to the new instance in one step.
     // @decision .agents/decisions/261112_035943-hot-swap.md#the-swap-sequence
@@ -2214,7 +2295,7 @@ class Rack implements InstanceHost {
       await this.#powerOn(instance);
       this.#requireRunning();
     } catch (error) {
-      instance?.terminate();
+      if (instance !== undefined) await this.#end(instance, instance.fru?.name ?? spec.name);
       const name = instance?.fru?.name ?? label;
       throw this.#swapFailed(name, "plug", null, firmware.hash, asRackError(error));
     }
@@ -2263,14 +2344,34 @@ class Rack implements InstanceHost {
     await this.#unplugSlot(slot, from);
   }
 
-  /** Retires a device that nothing uses any more and removes its slot. */
+  /**
+   * Retires a device that nothing uses any more and removes its slot, once no thread of the
+   * device runs. While one is stuck, the device stays in the rack, `faulted`.
+   *
+   * @throws RackError `RACK_DEVICE_FAULT` when a thread of the device is stuck.
+   * @decision .agents/decisions/261117_185131-ending-instances.md#stuck-threads
+   */
   async #unplugSlot(slot: Slot, from: string | null): Promise<void> {
     const { name } = slot;
+    const jammed = (stuck: Stuck): RackError => {
+      slot.removed = false;
+      slot.busy = false;
+      slot.state = "faulted";
+      const failure = new RackError(
+        "RACK_DEVICE_FAULT",
+        `${name} stays in the rack: ${this.#stuckMessage(name, stuck)}`,
+      );
+      return this.#swapFailed(name, "unplug", from, null, failure, slot);
+    };
+    const before = this.#stuckDevice(name);
+    if (before !== undefined) throw jammed(before);
     slot.removed = true;
     slot.busy = true;
     const instance = slot.installed;
     slot.installed = null;
     if (instance !== null) await this.#retire(instance);
+    const stuck = this.#stuckDevice(name);
+    if (stuck !== undefined) throw jammed(stuck);
     this.#slots.delete(name);
     this.#emit({ type: "swap", device: name, action: "unplug", mode: "unplug", from, to: null });
     this.#log("info", `${name} unplugged`);
@@ -2506,6 +2607,15 @@ class Rack implements InstanceHost {
 
   // ---- Instances ----
 
+  /**
+   * Starts a Worker for a firmware and boots it. No instance of a device starts while a thread
+   * of an earlier one may still run: the rack waits for the threads it is ending, and refuses
+   * while one is stuck.
+   *
+   * @param name The device's name; `undefined` when the firmware's FRU data names it.
+   * @throws RackError `RACK_SWAP_REJECTED` while a thread of the device, or of the firmware
+   *   loaded without a name, is stuck; `code`, or `RACK_INVALID_CONFIG`, when the boot fails.
+   */
   async #boot(
     firmware: Firmware,
     name: string | undefined,
@@ -2513,6 +2623,14 @@ class Rack implements InstanceHost {
     config: unknown,
     code: "RACK_MANIFEST" | "RACK_SWAP_REJECTED",
   ): Promise<Instance> {
+    // @decision .agents/decisions/261117_185131-ending-instances.md#stuck-threads
+    if (name !== undefined) await this.#stopping(name);
+    const stuck =
+      (name === undefined ? undefined : this.#stuckDevice(name)) ??
+      this.#stuckFirmware(firmware.hash);
+    if (stuck !== undefined) {
+      throw new RackError("RACK_SWAP_REJECTED", this.#stuckMessage(name ?? firmware.source, stuck));
+    }
     const instance = new Instance(firmware, name ?? firmware.source, this);
     this.#instances.add(instance);
     try {
@@ -2528,7 +2646,7 @@ class Rack implements InstanceHost {
       });
       return instance;
     } catch (error) {
-      instance.terminate();
+      await this.#end(instance, name);
       const failure = asRackError(error);
       if (failure.code === "RACK_INVALID_CONFIG") throw failure;
       throw new RackError(code, `${firmware.source}: ${failure.message}`, {
@@ -2546,27 +2664,160 @@ class Rack implements InstanceHost {
   }
 
   /**
-   * Deactivates if needed, drains, powers off, and terminates an instance.
+   * Runs the hooks that power an instance down: `deactivate` when it is active, a drain of its
+   * calls, `snapshot` when asked, and `powerOff`. A hook that the instance doesn't answer within
+   * `hookTimeout` is its last: its calls fail with `RACK_DEVICE_FAULT`, and the rest is skipped.
    *
    * @param markers Hold markers of the switch that retired the instance; calls sent before
    *   them still reach it and must finish first.
+   * @returns The snapshot and the firmware it came from, when one was asked for and taken.
+   * @decision .agents/decisions/261117_185131-ending-instances.md#ending-an-instance
    */
-  async #retire(instance: Instance, markers: Marker[] = []): Promise<void> {
-    const wasAlive = !instance.dead;
-    if (wasAlive) {
-      if (instance.active) await this.#bestEffort(instance, "deactivate");
-      instance.active = false;
-      if (!(await this.#backplane.drain(instance, markers, this.#drainTimeout))) {
-        this.#backplane.fail(
-          instance,
-          "RACK_LINK_DOWN",
-          `${instance.slot} was powered off before the call finished`,
-        );
-      }
-      if (instance.poweredOn && !instance.dead) await this.#bestEffort(instance, "powerOff");
+  async #powerDown(
+    instance: Instance,
+    markers: Marker[],
+    takeSnapshot = false,
+  ): Promise<{ state: unknown; from: string } | undefined> {
+    if (instance.dead) return undefined;
+    const silent = () =>
+      this.#backplane.fail(
+        instance,
+        "RACK_DEVICE_FAULT",
+        `${instance.slot} stopped answering while it powered off`,
+      );
+    const answered = !instance.active || (await this.#bestEffort(instance, "deactivate"));
+    instance.active = false;
+    if (!answered) {
+      silent();
+      return undefined;
     }
-    instance.terminate();
+    if (!(await this.#backplane.drain(instance, markers, this.#drainTimeout))) {
+      this.#backplane.fail(
+        instance,
+        "RACK_LINK_DOWN",
+        `${instance.slot} was powered off before the call finished`,
+      );
+    }
+    let saved: { state: unknown; from: string } | undefined;
+    if (takeSnapshot && instance.fru?.snapshot && !instance.dead) {
+      try {
+        const state = await instance.hook("snapshot", this.#hookTimeout);
+        saved = { state, from: instance.firmware.hash };
+      } catch (error) {
+        this.#log(
+          "error",
+          `${instance.slot}: snapshot failed; the new instance starts without it`,
+          {
+            error: toWireError(error),
+          },
+        );
+        if (timedOut(error)) {
+          silent();
+          return undefined;
+        }
+      }
+    }
+    if (instance.poweredOn && !instance.dead) await this.#bestEffort(instance, "powerOff");
+    return saved;
+  }
+
+  /**
+   * Powers an instance down and ends it.
+   *
+   * @param markers As for {@link #powerDown}.
+   * @returns Whether its thread stopped within `hookTimeout`.
+   */
+  async #retire(instance: Instance, markers: Marker[] = []): Promise<boolean> {
+    const wasAlive = !instance.dead;
+    await this.#powerDown(instance, markers);
+    const stopped = this.#end(instance, instance.slot);
     if (wasAlive) this.#poweredOff(instance);
+    return stopped;
+  }
+
+  /**
+   * Ends an instance: terminates its Worker and waits for the thread to stop, up to
+   * `hookTimeout`. A thread that hasn't stopped by then is stuck, and the rack keeps a record
+   * of it until it stops. Every path that ends an instance goes through here.
+   *
+   * @param device The device the instance belongs to; `undefined` for a Worker that loaded
+   *   firmware without a name.
+   * @returns Whether the thread stopped in time.
+   * @decision .agents/decisions/261117_185131-ending-instances.md#ending-an-instance
+   */
+  #end(instance: Instance, device: string | undefined): Promise<boolean> {
+    const ending = this.#ending.get(instance);
+    if (ending !== undefined) return ending.done;
+    if (this.#stuck.has(instance)) return Promise.resolve(false);
+    const done = instance.end(this.#hookTimeout).then((stopped) => {
+      this.#ending.delete(instance);
+      if (!stopped) this.#addStuck(instance, device);
+      return stopped;
+    });
+    this.#ending.set(instance, { device, done });
+    return done;
+  }
+
+  /** Waits until the rack ends no thread of the device any more: each stopped, or is stuck. */
+  async #stopping(device: string): Promise<void> {
+    const pending = [...this.#ending.values()].filter((ending) => ending.device === device);
+    await Promise.all(pending.map((ending) => ending.done));
+  }
+
+  /**
+   * Records a stuck thread and reports it, then forgets it once the thread stops.
+   *
+   * @decision .agents/decisions/261117_185131-ending-instances.md#stuck-threads
+   */
+  #addStuck(instance: Instance, device: string | undefined): void {
+    const stuck: Stuck = {
+      device,
+      firmware: instance.firmware.hash,
+      since: instance.terminatedAt ?? Date.now(),
+    };
+    this.#stuck.set(instance, stuck);
+    const what = device ?? instance.firmware.source;
+    const error: WireError = {
+      code: "RACK_DEVICE_FAULT",
+      message: `${what}: the thread of firmware ${stuck.firmware} did not stop within ${this.#hookTimeout} ms of its termination; it is stuck in native code`,
+    };
+    const blocks =
+      device === undefined
+        ? "The rack doesn't load this firmware again until the thread stops"
+        : `No other instance of ${device} starts until the thread stops`;
+    this.#log(
+      "error",
+      `${error.message}. ${blocks}; only a restart of the rack reclaims a thread that never stops.`,
+    );
+    if (device !== undefined) {
+      this.#emit({ type: "fault", device, firmware: stuck.firmware, error, reset: false });
+    }
+    void instance.closed.then(() => {
+      if (!this.#stuck.delete(instance)) return;
+      this.#log("info", `${what}: the stuck thread of firmware ${stuck.firmware} stopped`, {
+        stuckMs: Date.now() - stuck.since,
+      });
+    });
+  }
+
+  /** A stuck thread of the device. */
+  #stuckDevice(name: string): Stuck | undefined {
+    for (const stuck of this.#stuck.values()) if (stuck.device === name) return stuck;
+    return undefined;
+  }
+
+  /** A stuck thread of a Worker that loaded the firmware without a name. */
+  #stuckFirmware(hash: string): Stuck | undefined {
+    for (const stuck of this.#stuck.values()) {
+      if (stuck.device === undefined && stuck.firmware === hash) return stuck;
+    }
+    return undefined;
+  }
+
+  /** Why nothing of `what` starts while `stuck` runs. */
+  #stuckMessage(what: string, stuck: Stuck): string {
+    const since = new Date(stuck.since).toISOString();
+    return `${what}: a thread of firmware ${stuck.firmware} has been stuck in native code since ${since}; nothing of it starts until that thread stops, or the rack restarts`;
   }
 
   /** Announces that an instance has powered off. */
@@ -2580,11 +2831,18 @@ class Rack implements InstanceHost {
     this.#log("info", `${instance.slot} powered off`, { firmware: instance.firmware.hash });
   }
 
-  async #bestEffort(instance: Instance, hook: "deactivate" | "powerOff"): Promise<void> {
+  /**
+   * Runs a hook whose failure doesn't stop what the rack is doing, and logs the failure.
+   *
+   * @returns `false` when the instance didn't answer within `hookTimeout`.
+   */
+  async #bestEffort(instance: Instance, hook: "deactivate" | "powerOff"): Promise<boolean> {
     try {
       await instance.hook(hook, this.#hookTimeout);
+      return true;
     } catch (error) {
       this.#log("warn", `${instance.slot}: ${hook} failed`, { error: toWireError(error) });
+      return !timedOut(error);
     }
   }
 
@@ -2630,13 +2888,24 @@ class Rack implements InstanceHost {
 
   /**
    * Resets a slot from the same firmware: a new instance runs `powerOn`, `selfTest`, and
-   * `activate`. A failed attempt counts as another crash.
+   * `activate`. A failed attempt counts as another crash. While a thread of the device is
+   * stuck, the slot is faulted instead.
    */
   async #reset(slot: Slot): Promise<void> {
     slot.busy = true;
     slot.state = "resetting";
     try {
       while (this.#phase === "running" && !slot.removed) {
+        // @decision .agents/decisions/261117_185131-ending-instances.md#stuck-threads
+        await this.#stopping(slot.name);
+        const stuck = this.#stuckDevice(slot.name);
+        if (stuck !== undefined) {
+          const failure = new RackError("RACK_DEVICE_FAULT", this.#stuckMessage(slot.name, stuck));
+          slot.state = "faulted";
+          slot.error = toWireError(failure);
+          this.#log("error", `${slot.name} faulted instead of resetting: ${failure.message}`);
+          return;
+        }
         this.#log("warn", `${slot.name} resetting`, { crashes: slot.crashes.length });
         let instance: Instance | undefined;
         try {
@@ -2651,7 +2920,7 @@ class Rack implements InstanceHost {
           await this.#backplane.connect(instance);
           await this.#powerOn(instance);
           if (this.#phase !== "running" || slot.removed) {
-            instance.terminate();
+            await this.#end(instance, slot.name);
             return;
           }
           slot.installed = instance;
@@ -2669,7 +2938,7 @@ class Rack implements InstanceHost {
           this.#powered(instance);
           return;
         } catch (error) {
-          instance?.terminate();
+          if (instance !== undefined) await this.#end(instance, slot.name);
           if (this.#phase !== "running") return;
           if (!this.#countCrash(slot, slot.firmware.hash, toWireError(error))) return;
         }
@@ -2699,6 +2968,9 @@ class Rack implements InstanceHost {
           .length,
         knownGood: this.#knownGood.get(slot.name)?.hash ?? null,
         watchdogs: slot.installed?.watchdogs ?? [],
+        stuck: [...this.#stuck.values()]
+          .filter((stuck) => stuck.device === slot.name)
+          .map(({ firmware, since }) => ({ firmware, since })),
       };
       const owner = owners.get(slot.name);
       if (owner !== undefined) status.owner = owner;
@@ -2778,6 +3050,19 @@ class Rack implements InstanceHost {
       .filter((slot) => !slot.removed)
       .map(({ name, u, height }) => ({ name, u, height }));
   }
+}
+
+/** An instance being ended: the device it belongs to, and whether its thread stopped in time. */
+interface Ending {
+  /** The device's name; `undefined` for a Worker that loaded firmware without a name. */
+  device: string | undefined;
+  done: Promise<boolean>;
+}
+
+/** A stuck thread: the instance's {@link StuckThread} status, and the device it belongs to. */
+interface Stuck extends StuckThread {
+  /** As in {@link Ending}; a stuck thread without a device keeps its firmware from loading. */
+  device: string | undefined;
 }
 
 interface Booted {

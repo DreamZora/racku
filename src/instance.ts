@@ -6,6 +6,7 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
  * @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
  * @decision .agents/decisions/261117_062959-watchdog.md#feeding-and-checking
+ * @decision .agents/decisions/261117_185131-ending-instances.md#ending-an-instance
  */
 import type { HookName } from "./device.ts";
 import { fromWireError, RackError } from "./errors.ts";
@@ -82,6 +83,17 @@ interface WatchdogState {
 /** The checks without a feed after which a watchdog bites; they run four times per timeout. */
 const CHECKS_PER_TIMEOUT = 4;
 
+/** The errors of requests that the Worker didn't answer in time. */
+const UNANSWERED = new WeakSet<object>();
+
+/**
+ * Whether `error` failed a request to an instance, such as a hook, because the instance didn't
+ * answer within the request's timeout, rather than because the device failed it.
+ */
+export function timedOut(error: unknown): boolean {
+  return typeof error === "object" && error !== null && UNANSWERED.has(error);
+}
+
 /** One running instance of a device. */
 export class Instance {
   readonly firmware: Firmware;
@@ -97,8 +109,10 @@ export class Instance {
   wiring = new Map<string, Wire>();
   /** Calls from outside the rack this instance is serving, keyed by backplane call id. */
   readonly inFlight = new Map<number, RoutedCall>();
-  /** Set once the Worker has exited. */
+  /** Set once the Worker has exited, or the rack has terminated it. */
   dead = false;
+  /** When the rack terminated the Worker, a millisecond timestamp. */
+  terminatedAt: number | undefined;
 
   readonly #worker: Worker;
   readonly #data: MessagePort;
@@ -288,9 +302,12 @@ export class Instance {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#requests.delete(id);
-        reject(
-          new RackError("RACK_HOOK_FAILED", `${this.slot}: ${what} timed out after ${timeout} ms`),
+        const error = new RackError(
+          "RACK_HOOK_FAILED",
+          `${this.slot}: ${what} timed out after ${timeout} ms`,
         );
+        UNANSWERED.add(error);
+        reject(error);
       }, timeout);
       this.#requests.set(id, { resolve, reject, timer });
       try {
@@ -361,22 +378,31 @@ export class Instance {
     this.#drainWaiters.clear();
   }
 
-  /** Terminates the Worker on purpose; the exit is not treated as a crash. */
+  /**
+   * Terminates the Worker on purpose; the exit is not treated as a crash. The instance is gone at
+   * once, but its thread may run on: see {@link end}.
+   */
   terminate(): void {
     if (this.dead) return;
     this.#deliberate = true;
+    this.terminatedAt = Date.now();
     this.#worker.terminate();
     this.#exit("terminated by the rack");
   }
 
+  /** Settles when the Worker's thread has stopped, which can come later than {@link dead}. */
+  get closed(): Promise<void> {
+    return this.#closed.promise;
+  }
+
   /**
-   * Terminates the Worker of a hung instance, as {@link terminate} does: the instance is gone at
-   * once. A Worker that hangs in JavaScript stops within milliseconds, but one blocked in native
-   * code only when that call returns.
+   * Ends the instance: terminates the Worker, as {@link terminate} does, and waits for its thread
+   * to stop. A Worker that hangs in JavaScript stops within milliseconds, but one blocked in
+   * native code only when that call returns.
    *
    * @returns Whether the Worker's thread stopped within `timeout` ms.
    */
-  async kill(timeout: number): Promise<boolean> {
+  async end(timeout: number): Promise<boolean> {
     this.terminate();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<boolean>((resolve) => {

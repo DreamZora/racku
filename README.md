@@ -4,7 +4,7 @@ rack42u is a Bun framework for building an application out of hot-swappable **de
 
 The framework provides the rack runtime and a few standard devices. What you mount in the rack, and whether the result is an API server, a worker process, or something else, is up to you.
 
-> **Status: P2.** P2 adds watchdogs for hung devices and bounds on every backlog between devices. P1 added scanned racks, cold swaps and restarts, update safety, and `rack ctl` to P0, the first usable version. See [Not supported yet](#not-supported-yet) for what is still missing.
+> **Status: P2.** P2 adds watchdogs for hung devices, stops that wait for a device's thread to end, and bounds on every backlog between devices. P1 added scanned racks, cold swaps and restarts, update safety, and `rack ctl` to P0, the first usable version. See [Not supported yet](#not-supported-yet) for what is still missing.
 
 ## Requirements
 
@@ -315,7 +315,7 @@ The handle returned by `start`:
 
 | Method | Purpose |
 |---|---|
-| `status()` | Each device's slot, height, state, firmware and known-good hashes, probation, calls in flight, recent crashes, watchdogs, and, for a copy, its `owner`. |
+| `status()` | Each device's slot, height, state, firmware and known-good hashes, probation, calls in flight, recent crashes, watchdogs, stuck threads, and, for a copy, its `owner`. |
 | `call(address, method, input, options?)` | Call a port from outside the rack. |
 | `swap(name, source?)` | Replace a device now, optionally with another device file. |
 | `restart(name, { cascade? })` | Stop a device and start it again from scratch; its direct consumers then reload. |
@@ -364,7 +364,7 @@ Every swap follows the same sequence:
 4. The new instance runs `activate`. Calls to the slot are held for a moment and then switch to it in one step; held calls go to the new instance, and none are lost.
 5. The old instance finishes the calls it still holds, runs `powerOff`, and is terminated. Calls still running after `drainTimeout` fail with `RACK_LINK_DOWN`.
 
-If anything in steps 1–4 fails, the new instance is discarded, the old one is reactivated and keeps serving, and the slot reports `degraded`.
+If anything in steps 1–4 fails, the new instance is discarded, the old one is reactivated and keeps serving, and the slot reports `degraded`. Its watchdogs watch it again from there. An old instance that doesn't answer `deactivate` within `hookTimeout`, or doesn't activate again, can't keep serving: the rack ends it and resets the device from its old firmware, as after a watchdog bite.
 
 ### Hot swaps, cold swaps, and restarts
 
@@ -377,7 +377,7 @@ The sequence above is a **hot swap**, and `reload()`, `rack dev`, and `swap()` u
 | State | Moves through `snapshot` and `restore` | Moves through `snapshot` and `restore` | Starts fresh |
 | Used for | Every compatible change | Devices that declare `swap: "cold"`, and contract changes | `rack.restart(name)` |
 
-- **Cold swaps.** A device declares `swap: "cold"` when two of its instances must never run at the same time, for example because it holds a file lock or a serial port. Calls that arrive meanwhile wait for the new instance, up to their own timeouts. If the new instance fails to start, the old firmware starts again from its snapshot, and the slot reports `degraded`.
+- **Cold swaps.** A device declares `swap: "cold"` when two of its instances must never run at the same time, for example because it holds a file lock or a serial port. The new instance starts only once the old instance's thread has stopped, even a thread blocked in native code, as [Stuck threads](#stuck-threads) describes. Calls that arrive meanwhile wait for the new instance, up to their own timeouts. If the new instance fails to start, the old firmware starts again from its snapshot, and the slot reports `degraded`.
 - **Restarts.** `rack.restart(name)` rebuilds the device from its file and starts it from scratch, without its state. Its direct consumers then reload, keeping their state, so their `powerOn` runs again against the new instance. `{ cascade: false }` leaves the consumers running. If the restarted device fails to start, its old firmware starts again without state.
 - **Contract changes.** A new firmware can change a port that consumers use, for example by moving a connector to `/v2`. When the consumers' new firmware matches the change, as it does when they share the edited connector file, the rack replaces the provider and those consumers together. The group stops top down and starts bottom up, with each device's state carried over. When a consumer's firmware does not match, nothing stops, and the replacement fails with `RACK_SWAP_REJECTED`.
 - **Results.** `reload()` and `restart()` resolve with one result per device, and each result and `swap` event carries a `mode`: `hot`, `cold`, `restart`, `plug`, or `unplug`.
@@ -439,10 +439,26 @@ A device can hang without crashing: its event loop stays blocked, or one of its 
 - **What a bite does.** A watchdog bites between 1 and 1.25 times its timeout after its last feed.
   - The device's calls in flight fail with `RACK_DEVICE_FAULT`, and the rack resets the device as after a crash, or falls back to its known-good firmware during probation. Bites count toward the crash limit.
   - The slot's error names the watchdog in its `data`: `{ watchdog: "poller", timeout: 5000 }`, or `{ watchdog: "event loop", timeout: 10000 }`.
-- **Hangs in native code.** A device blocked inside native code, such as a long SQLite query or a blocking file read, stops only when that call returns. If it hasn't stopped within `hookTimeout`, its slot is `faulted` until a swap or restart succeeds, so that two instances of the device never run at once. Only a restart of the rack reclaims a thread whose call never returns.
+- **Hangs in native code.** A device blocked inside native code, such as a long SQLite query or a blocking file read, stops only when that call returns. If its thread hasn't stopped within `hookTimeout` of the bite, the thread is stuck, and the slot is `faulted` until the thread stops and a swap or restart succeeds, as [Stuck threads](#stuck-threads) describes.
 - **When watchdogs watch.** From the end of `activate` to the start of `deactivate`; `hookTimeout` bounds the hooks instead.
 - **Turning them off.** `watchdog: 0`, or `--no-watchdog` for `rack start` and `rack dev`, turns off every watchdog, for example while a debugger holds devices at breakpoints. Raise `watchdog` instead for devices with long synchronous work, such as large SQLite queries.
 - **Observing them.** `status()` lists each device's `watchdogs`, the event loop's first, with their `name`, `timeout`, and `lastFed`. `metrics()` reports each device's event-loop delay as `loop: { delayMs, maxDelayMs }`, the delay of the last tick of the event-loop watchdog's timer and the largest since the instance booted.
+
+### Stuck threads
+
+Wherever the rack stops an instance, in a swap, restart, rollback, unplug, reset, watchdog bite, or `stop()`, it ends it the same way: it terminates the instance's Worker and waits up to `hookTimeout` for the Worker's thread to stop.
+
+- **Unanswered hooks.** While an instance stops, a hook that it doesn't answer within `hookTimeout` is its last. Its calls in flight fail with `RACK_DEVICE_FAULT`, and the rack ends it without waiting for its calls to drain or sending it `snapshot` or `powerOff`.
+- **Stuck threads.** A thread blocked inside native code, such as a long SQLite query or a blocking file read, stops only when that call returns. One that hasn't stopped within `hookTimeout` of its termination is stuck. The rack logs it, emits a `fault` event, and lists it among the device's `stuck` threads in `status()`, with its `firmware` and `since`, when the rack terminated it. When the thread stops, the rack logs that too.
+- **No second instance.** While a thread of a device is stuck, no other instance of the device starts:
+  - `swap()`, `restart()`, `rollback()`, and `reload()` fail with `RACK_SWAP_REJECTED` for the device.
+  - A cold swap or restart whose old thread gets stuck fails with `RACK_DEVICE_FAULT`, and the slot is `faulted`.
+  - A reset, after a crash or a watchdog bite, leaves the slot `faulted` instead.
+  - `unplug()` fails with `RACK_DEVICE_FAULT`, and the device stays in the rack, `faulted`.
+
+  Once the thread stops, a swap or restart brings the device back, and `unplug()` removes it.
+- **Firmware that gets stuck loading.** If a device file's top-level code gets stuck in native code while the rack loads it, the operation fails, and the rack doesn't load that firmware again until the thread stops.
+- **Limits.** Only a restart of the rack reclaims a thread whose native call never returns. `stop()` waits for the threads of all devices together, so a stuck thread delays it by one `hookTimeout` at most.
 
 ## Update safety
 
@@ -569,10 +585,10 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 | `RACK_NO_ROUTE` | No such device, port, or method. |
 | `RACK_INVALID_INPUT` / `RACK_INVALID_OUTPUT` | Input or output failed its schema, cannot be cloned, or lists a buffer that cannot be transferred. |
 | `RACK_INVALID_CONFIG` | A device's configuration failed its schema. |
-| `RACK_DEVICE_FAULT` | The device threw a non-`RackError` exception, crashed, or hung until a watchdog bit. |
+| `RACK_DEVICE_FAULT` | The device threw a non-`RackError` exception, crashed, hung until a watchdog bit, stopped answering its hooks while it stopped, or has a stuck thread. |
 | `RACK_OVERLOADED` | The call would exceed `queueLimit`, or the device refused it for a limit of its own. |
 | `RACK_MANIFEST` | The manifest or the assembly is invalid. |
-| `RACK_SWAP_REJECTED` | A swap, plug, unplug, or reload was refused. |
+| `RACK_SWAP_REJECTED` | A swap, plug, unplug, or reload was refused, for example while a thread of the device is stuck. |
 | `RACK_HOOK_FAILED` | A lifecycle hook failed or timed out. |
 
 ## Not supported yet
