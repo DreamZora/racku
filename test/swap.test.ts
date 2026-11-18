@@ -75,7 +75,8 @@ describe("swap", () => {
     const after = (await running.call("counter.counter", "get", undefined)) as Count;
     expect(after).toMatchObject({ n: 1, version: "v2" });
     expect(after.firmware).not.toBe(before as string);
-    // With the system's separator, \ on Windows.
+    // README.md, "Windows": the rack reports paths with the system's separator, \ on Windows,
+    // though the path that swap() was given uses /.
     // @decision .agents/decisions/261118_015204-windows.md#differences-the-readme-states
     expect(running.status()[0]?.source).toBe(join(app.dir, "devices", "counter-v2.ts"));
     expect(rec.events.at(-1)).toMatchObject({

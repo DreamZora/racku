@@ -9,6 +9,7 @@ The framework provides the rack runtime and a few standard devices. What you mou
 ## Requirements
 
 - [Bun](https://bun.sh) 1.4.4 or later. rack42u runs only on Bun; it is published as TypeScript source.
+- Linux, macOS, or Windows on x64. [Windows](#windows) lists what differs there.
 
 ## Try the example
 
@@ -544,7 +545,6 @@ rack ctl stop                            # shut down in order, like Ctrl-C
   - The rack writes the address and the token to a control file in the same private directory. On Windows, that directory is `%LOCALAPPDATA%\rack42u\control\`.
   - The endpoint refuses requests that carry an `Origin` header or a `Host` other than its own, so a web page cannot drive it.
   - `rack ctl --url <url> --token <token>` reaches such a rack from anywhere on the machine.
-  - The tests cover the TCP endpoint through `--control-port` on Linux, macOS, and Windows, and the Windows defaults on Windows. CI's Windows job only reports its results, since Windows isn't a supported platform yet.
 
 **The protocol.** Each operation is `POST /v1/<operation>` with the body `{ "args": [...] }`, and runs the rack-handle method of the same name.
 - It answers `{ "ok": true, "value": ... }`, or `{ "ok": false, "error": { code, message } }`.
@@ -605,6 +605,15 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 | `RACK_MANIFEST` | The manifest or the assembly is invalid. |
 | `RACK_SWAP_REJECTED` | A swap, plug, unplug, or reload was refused, for example while a thread of the device is stuck. |
 | `RACK_HOOK_FAILED` | A lifecycle hook failed or timed out. |
+
+## Windows
+
+rack42u runs on Windows as it does on Linux and macOS, with these differences:
+
+- **Stopping.** Ctrl-C and Ctrl-Break stop `rack start` and `rack dev` in order, as `rack ctl stop` does. Windows has no `SIGTERM`. A process ended from outside, such as by Task Manager or `taskkill /F`, ends at once, as with `SIGKILL` elsewhere. Closing its console window ends the rack without an orderly shutdown, as a hangup does elsewhere.
+- **The management endpoint** listens on loopback TCP with a token, since Windows has no Unix sockets. See [Managing a running rack](#managing-a-running-rack).
+- **The control file.** Windows has no file modes: the control file is as private as `%LOCALAPPDATA%`, the local application data folder of your user profile.
+- **Paths.** The rack reports paths with `\`, such as `source` in `status()`. Manifests may write relative paths with `/` on every system.
 
 ## Not supported yet
 
