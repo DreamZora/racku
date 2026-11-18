@@ -59,11 +59,13 @@ describe("links", () => {
   // @decision .agents/decisions/261116_024226-backplane-links.md#links
   test("README.md: calls between devices complete while the rack main thread is blocked", async () => {
     const { running } = await startRack(PUMP_RACK);
+    // Taken before the call: the main thread relays nothing from here until the loop ends, and
+    // the device may start the moment the call goes out.
+    const blockedAt = Date.now();
     const burst = running.call("pump.pump", "burst", { n: 100 }) as Promise<{
       startedAt: number;
       finishedAt: number;
     }>;
-    const blockedAt = Date.now();
     while (Date.now() - blockedAt < 300) {
       // Busy-wait: the main thread cannot relay anything until the loop ends.
     }
@@ -76,8 +78,9 @@ describe("links", () => {
   // @decision .agents/decisions/261116_024226-backplane-links.md#events
   test("README.md: events between devices arrive while the rack main thread is blocked", async () => {
     const { running } = await startRack(PUMP_RACK);
-    const ping = running.call("probe.probe", "ping", { n: 1 });
+    // Taken before the call, as above.
     const blockedAt = Date.now();
+    const ping = running.call("probe.probe", "ping", { n: 1 });
     while (Date.now() - blockedAt < 300) {
       // Busy-wait: the main thread cannot relay anything until the loop ends.
     }
