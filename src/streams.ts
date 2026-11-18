@@ -289,11 +289,13 @@ export class StreamSender {
       // A piece larger than the credit left goes once nothing of the stream is in flight.
       if (piece.byteLength > this.#credit && this.#credit < STREAM_WINDOW) return;
       this.#pieces.shift();
-      this.#credit -= piece.byteLength;
+      // Counted before the post, which detaches the piece's buffer and empties the piece.
+      const size = piece.byteLength;
+      this.#credit -= size;
       this.#channel?.post({ t: "stream", k: "chunk", s: this.#id, data: piece.buffer }, [
         piece.buffer,
       ]);
-      this.#options.counters.bytesSent += piece.byteLength;
+      this.#options.counters.bytesSent += size;
       this.#arm();
     }
     if (!this.#done && this.#channel !== undefined && this.#credit > 0 && !this.#reading) {

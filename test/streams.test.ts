@@ -491,6 +491,8 @@ describe("streams in calls", () => {
       bytesReceived: 0,
       errors: { RACK_CANCELLED: 1 },
     });
+    // What it sent: the pieces taken, and at most the window more.
+    expect(served.streams?.bytesSent).toBeGreaterThanOrEqual(4 * 64 * KiB);
     expect(served.streams?.bytesSent).toBeLessThanOrEqual(4 * 64 * KiB + WINDOW);
     // Calls from outside the rack count their streams too.
     const { bytes } = await produce(running, { size: MiB, chunk: 64 * KiB });
