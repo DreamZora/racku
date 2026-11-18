@@ -181,7 +181,7 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 - Do not introduce a new architecture, public API, connector, runtime dependency, directory, or toolchain without an `accepted` decision.
 - Do not rewrite the content of an `accepted` decision, and do not change `proposed` to `accepted` without user confirmation or authorization.
 - Do not import device code in the rack main thread, and do not let devices import each other or hold each other's instances.
-- Do not modify or delete tests to make them pass. Tests may change only when an `accepted` decision covers the behavior change.
+- Do not modify or delete tests just to make them pass. A test may change only when an `accepted` decision covers the behavior change, or when it is clear that the test itself is wrong; the commit then says what was wrong and how that was shown. See [When a test may change](.agents/decisions/261118_011457-changing-tests.md).
 - Do not commit files unrelated to the task, such as temporary probe scripts, editor configuration, or build output.
 
 ## Repository structure
