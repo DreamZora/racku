@@ -178,6 +178,27 @@ describe("cold swaps", () => {
     expect(running.status()[0]?.state).toBe("degraded");
     expect(await running.call("printer.count", "inc", undefined)).toEqual({ n: 2, version: "v1" });
   });
+
+  test("a cold swap that fails to start reports the slot degraded from the moment the old firmware is installed again", async () => {
+    const failing =
+      '\n  selfTest() {\n    if (VERSION === "v2") throw new Error("v2 is broken");\n  },';
+    const cold = await app({ "devices/printer.ts": printer({ cold: true, extra: failing }) });
+    const { running } = await startRack(
+      { slots: { 1: slot("./devices/printer.ts") } },
+      { baseDir: cold.dir },
+    );
+    const v1 = running.status()[0]?.firmware;
+    // The status each time an instance powers on, read in the listener, where nothing else can
+    // run between the install and the read.
+    const seen: string[] = [];
+    running.subscribe((event) => {
+      if (event.type !== "power" || event.state !== "on") return;
+      seen.push(`${event.firmware === v1 ? "v1" : "v2"} ${running.status()[0]?.state}`);
+    });
+    await cold.write("devices/printer.ts", printer({ cold: true, version: "v2", extra: failing }));
+    await running.reload();
+    expect(seen).toEqual(["v1 degraded"]);
+  });
 });
 
 describe("restarts", () => {

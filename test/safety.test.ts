@@ -10,7 +10,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { type RackHandle, slot, type UpdateCause, type UpdateRecord } from "rack42u";
+import {
+  type RackHandle,
+  type SlotStatus,
+  slot,
+  type UpdateCause,
+  type UpdateRecord,
+} from "rack42u";
 import { errorOf, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -124,6 +130,20 @@ async function inc(running: RackHandle): Promise<{ n: number; version: string }>
   return (await running.call("counter.count", "inc", undefined)) as { n: number; version: string };
 }
 
+/**
+ * The status of a device each time one of its instances powers on, read in the event listener,
+ * where nothing else can run between the install and the read.
+ */
+function poweredOn(running: RackHandle, device: string): SlotStatus[] {
+  const seen: SlotStatus[] = [];
+  running.subscribe((event) => {
+    if (event.type !== "power" || event.state !== "on" || event.device !== device) return;
+    const status = running.status().find((s) => s.name === device);
+    if (status !== undefined) seen.push(status);
+  });
+  return seen;
+}
+
 describe("passive fallback", () => {
   // README.md, "Update safety".
   test("README.md: a new instance that crashes on probation falls back to the known-good firmware", async () => {
@@ -149,6 +169,22 @@ describe("passive fallback", () => {
       from: v2,
       to: v1,
       ok: true,
+      error: { code: "RACK_DEVICE_FAULT" },
+    });
+  });
+
+  test("a fallback reports the slot degraded, with the crash, from the moment the known-good instance is installed", async () => {
+    const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
+    const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir });
+    const v1 = counterStatus(running)?.firmware;
+    await created.write("devices/counter.ts", counter("v2", { crashOnInc: true }));
+    await running.reload();
+    const seen = poweredOn(running, "counter");
+    await inc(running);
+    await waitFor(() => seen.length > 0);
+    expect(seen[0]).toMatchObject({
+      firmware: v1,
+      state: "degraded",
       error: { code: "RACK_DEVICE_FAULT" },
     });
   });
@@ -203,6 +239,25 @@ describe("passive fallback", () => {
       ["client", true],
       ["store", true],
     ]);
+  });
+
+  test("a group fallback reports the crashed device degraded, with the crash, from the moment its known-good instance is installed", async () => {
+    const created = await app({ "devices/store.ts": STORE, "devices/client.ts": CLIENT });
+    const { running } = await startRack(
+      { slots: { 1: slot("./devices/store.ts"), 2: slot("./devices/client.ts") } },
+      { baseDir: created.dir },
+    );
+    const good = running.status()[0]?.firmware;
+    await created.write("connectors.ts", CONNECTORS.replace("demo.store/v1", "demo.store/v2"));
+    await running.reload();
+    const seen = poweredOn(running, "store");
+    await running.call("store.count", "crash", undefined);
+    await waitFor(() => seen.length > 0);
+    expect(seen[0]).toMatchObject({
+      firmware: good,
+      state: "degraded",
+      error: { code: "RACK_DEVICE_FAULT" },
+    });
   });
 });
 

@@ -1788,11 +1788,17 @@ class Rack implements InstanceHost {
    * When a start fails, the whole group starts again from its old firmware and snapshots, and
    * a device whose old firmware fails too is marked faulted.
    *
+   * @param crash For a group fallback, the device that crashed on probation and its crash: that
+   *   device is installed `degraded`, with the crash as its error.
    * @throws RackError the first failure, after every member has been reported.
    * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#cold-swaps
    * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#restarts
    */
-  async #replaceCold(members: Member[], fresh: ReadonlySet<string>): Promise<void> {
+  async #replaceCold(
+    members: Member[],
+    fresh: ReadonlySet<string>,
+    crash?: { device: string; error: WireError },
+  ): Promise<void> {
     const ordered = [...members].sort((a, b) => a.slot.u - b.slot.u);
     const modeOf = (member: Member): ReloadMode =>
       fresh.has(member.slot.name) ? "restart" : "cold";
@@ -1888,7 +1894,14 @@ class Rack implements InstanceHost {
         const neo = neos.get(m.slot) as Instance;
         try {
           await this.#startReplacement(m.slot, neo, states.get(m.slot));
-          await this.#installReplacement(m.slot, neo, m.firmware, m.source);
+          const crashed = crash !== undefined && crash.device === m.slot.name;
+          await this.#installReplacement(
+            m.slot,
+            neo,
+            m.firmware,
+            m.source,
+            crashed ? { state: "degraded", error: crash.error } : undefined,
+          );
           started.push(m);
         } catch (error) {
           failure = asRackError(error);
@@ -1964,12 +1977,19 @@ class Rack implements InstanceHost {
     }
   }
 
-  /** Installs a started instance in its slot, which switches the held calls to it. */
+  /**
+   * Installs a started instance in its slot, which switches the held calls to it.
+   *
+   * @param outcome The state and error the slot reports from the moment the instance is
+   *   installed: `degraded` after a fallback or a rollback, so status() never shows it online in
+   *   between.
+   */
   async #installReplacement(
     slot: Slot,
     instance: Instance,
     firmware: Firmware,
     source: string,
+    outcome: { state: "online" | "degraded"; error?: WireError } = { state: "online" },
   ): Promise<void> {
     slot.installed = instance;
     slot.firmware = firmware;
@@ -1978,8 +1998,8 @@ class Rack implements InstanceHost {
     slot.height = slot.fru.height;
     slot.wiring = instance.wiring;
     slot.source = source;
-    slot.state = "online";
-    slot.error = undefined;
+    slot.state = outcome.state;
+    slot.error = outcome.error;
     slot.crashes = [];
     await this.#backplane.install(slot, instance, null);
     if (!instance.dead) this.#powered(instance);
@@ -2024,8 +2044,9 @@ class Rack implements InstanceHost {
         );
         instance.wiring = was.fields.wiring;
         await this.#startReplacement(m.slot, instance, states.get(m.slot));
-        await this.#installReplacement(m.slot, instance, was.fields.firmware, was.fields.source);
-        m.slot.state = "degraded";
+        await this.#installReplacement(m.slot, instance, was.fields.firmware, was.fields.source, {
+          state: "degraded",
+        });
       } catch (error) {
         this.#log("error", `${m.slot.name}: the old firmware did not start again`, {
           error: toWireError(error),
@@ -2472,10 +2493,8 @@ class Rack implements InstanceHost {
     );
     slot.firmware = good;
     slot.source = good.source;
-    await this.#reset(slot);
+    await this.#reset(slot, crash);
     if (slot.installed !== null) {
-      slot.state = "degraded";
-      slot.error = crash;
       this.#emit({
         type: "swap",
         device: slot.name,
@@ -2501,12 +2520,9 @@ class Rack implements InstanceHost {
     }
     try {
       const context = { cause: "fallback" as const, started: Date.now(), crash };
-      await updates.run(context, () => this.#replaceCold(members, new Set([crashed])));
-      const slot = this.#slots.get(crashed);
-      if (slot?.installed != null) {
-        slot.state = "degraded";
-        slot.error = crash;
-      }
+      await updates.run(context, () =>
+        this.#replaceCold(members, new Set([crashed]), { device: crashed, error: crash }),
+      );
     } catch (error) {
       this.#log("error", "the group did not fall back to its known-good firmware", {
         error: toWireError(error),
@@ -2892,8 +2908,11 @@ class Rack implements InstanceHost {
    * Resets a slot from the same firmware: a new instance runs `powerOn`, `selfTest`, and
    * `activate`. A failed attempt counts as another crash. While a thread of the device is
    * stuck, the slot is faulted instead.
+   *
+   * @param fallback For a fallback, the crash on probation that caused it: the slot reports
+   *   `degraded`, with this error, from the moment the new instance is installed.
    */
-  async #reset(slot: Slot): Promise<void> {
+  async #reset(slot: Slot, fallback?: WireError): Promise<void> {
     slot.busy = true;
     slot.state = "resetting";
     try {
@@ -2927,7 +2946,10 @@ class Rack implements InstanceHost {
           }
           slot.installed = instance;
           slot.fru = instance.fru as Fru;
-          slot.state = "online";
+          // The state is final before the install awaits, so status() never shows a fallback
+          // online in between.
+          slot.state = fallback === undefined ? "online" : "degraded";
+          if (fallback !== undefined) slot.error = fallback;
           await this.#backplane.install(slot, instance, null);
           if (instance.dead) {
             // It exited while it was being installed. onExit counted the crash and left the

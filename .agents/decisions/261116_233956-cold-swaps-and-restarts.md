@@ -163,6 +163,7 @@ Status: accepted
   - Its stop phase holds, drains, and stops one device at a time, from the top down, through `#stopForReplacement`. Holding the whole group at once would leave a consumer's last calls waiting on its provider's hold until `drainTimeout`.
   - `#startReplacement` and `#installReplacement` start the new instances from the bottom up.
   - On a failed start, `#rollBackCold` stops the new instances already installed, powers off the ones that powered on, and starts the old firmware from its snapshots.
+  - `#installReplacement` installs the old firmware with the slot already `degraded`, so `status()` never shows it `online` while the install finishes.
   - Powering off first was found by a test: a new instance that took a lock in `powerOn` kept it, and the old firmware could not start again.
 - **Restarts:** `#restart` runs the device's replacement with `fresh` set, then hot-swaps each direct consumer from its current firmware, or cold-swaps it when the consumer declares `swap: "cold"`.
   - A restart whose new instance fails to start brings the old firmware back without state and marks the slot `degraded`, like a failed cold swap.

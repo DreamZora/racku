@@ -112,6 +112,7 @@ Status: accepted
 - **Fallback.** `onExit` checks for probation before resetting.
   - `#fallBack` resets a single device from its known-good firmware.
   - `#fallBackGroup` runs in the management queue and takes the group back through the cold engine of [Hot swaps, cold swaps, and restarts](261116_233956-cold-swaps-and-restarts.md#cold-swaps).
+  - Both pass the crash on to `#reset` or `#installReplacement`, which set the slot `degraded`, with the crash as its error, when they install the known-good instance. `status()` never shows the fallback `online` while the install finishes.
 - **Rollback.** `#rollback` finds the update that installed the current firmware, and its group, in the history.
   - The earlier firmware must have the same need names as the running plan. Their connectors may differ, as when a group undoes a contract change; the replacement checks them.
 - **Firmware files.**
