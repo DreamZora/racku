@@ -10,7 +10,7 @@
  * @decision .agents/decisions/261117_185131-ending-instances.md#observation
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { closeSync, constants, openSync } from "node:fs";
+import { closeSync, constants, existsSync, openSync } from "node:fs";
 import { join } from "node:path";
 import { type RackHandle, type SlotStatus, type StartOptions, slot } from "rack42u";
 import { errorOf, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
@@ -152,6 +152,16 @@ function jamStatus(running: RackHandle): SlotStatus {
   const [status] = running.status();
   if (status === undefined) throw new Error("the rack has no device");
   return status;
+}
+
+/**
+ * The start of a `powerOn` that leaves `marker` behind, then fails 3 s later: long enough for
+ * a watchdog of 1 s to bite the old instance in the meantime.
+ */
+function failing(marker: string): string {
+  return `appendFileSync(${JSON.stringify(marker)}, "");
+    await Bun.sleep(3_000);
+    throw new Error("powerOn failed on purpose");`;
 }
 
 function codeOf(call: Promise<unknown>): Promise<string> {
@@ -378,15 +388,19 @@ describe.skipIf(WINDOWS)("a thread stuck in native code", () => {
     const fifo = fifoIn(created);
     const { running } = await startRack(
       RACK,
-      options(created, { watchdog: 1_000, hookTimeout: 3_000 }),
+      options(created, { watchdog: 1_000, hookTimeout: 4_000 }),
     );
+    const marker = join(created.dir, "powering-on");
+    await created.write(
+      "devices/jam.ts",
+      jam(created, { version: "v2", powerOn: failing(marker) }),
+    );
+    const swap = errorOf(running.swap("jam"));
+    // Once the new instance is in powerOn, the old one blocks, and the watchdog bites it. When
+    // the swap fails, the reset must wait for the bitten thread, which then turns out stuck.
+    await waitFor(() => existsSync(marker), 5_000);
     void codeOf(running.call("jam.jam", "read", fifo));
-    const failing = `await Bun.sleep(2_000);
-    throw new Error("powerOn failed on purpose");`;
-    await created.write("devices/jam.ts", jam(created, { version: "v2", powerOn: failing }));
-    // The watchdog bites the blocked instance while the new one is in powerOn. When the swap
-    // fails, the reset must wait for the bitten thread, which then turns out stuck.
-    expect((await errorOf(running.swap("jam"))).code).toBe("RACK_HOOK_FAILED");
+    expect((await swap).code).toBe("RACK_HOOK_FAILED");
     await waitFor(() => jamStatus(running).state === "faulted", 8_000);
     // The bite is the only crash: the reset didn't try to start beside the thread.
     expect(jamStatus(running)).toMatchObject({ crashes: 1, stuck: [expect.anything()] });
@@ -398,18 +412,22 @@ describe.skipIf(WINDOWS)("a thread stuck in native code", () => {
     const fifo = fifoIn(created);
     const { running } = await startRack(
       RACK,
-      options(created, { watchdog: 1_000, hookTimeout: 3_000 }),
+      options(created, { watchdog: 1_000, hookTimeout: 4_000 }),
     );
     // Three crashes, so the coming bite reaches the crash limit and nothing resets the slot.
     for (let crash = 0; crash < 3; crash++) {
       await codeOf(running.call("jam.jam", "crash", undefined));
       await waitFor(() => jamStatus(running).state === "online", 5_000);
     }
+    const marker = join(created.dir, "powering-on");
+    await created.write(
+      "devices/jam.ts",
+      jam(created, { version: "v2", powerOn: failing(marker) }),
+    );
+    const swap = errorOf(running.swap("jam"));
+    await waitFor(() => existsSync(marker), 5_000);
     void codeOf(running.call("jam.jam", "read", fifo));
-    const failing = `await Bun.sleep(2_000);
-    throw new Error("powerOn failed on purpose");`;
-    await created.write("devices/jam.ts", jam(created, { version: "v2", powerOn: failing }));
-    expect((await errorOf(running.swap("jam"))).code).toBe("RACK_HOOK_FAILED");
+    expect((await swap).code).toBe("RACK_HOOK_FAILED");
     expect(jamStatus(running).state).toBe("faulted");
     // The bitten thread is still being ended: the restart waits for it, and finds it stuck.
     await created.write("devices/jam.ts", jam(created, { version: "v3" }));
