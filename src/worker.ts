@@ -37,13 +37,16 @@ import {
   type ActivateScope,
   type CallContext,
   type CallOptions,
+  checkNeeds,
   type DeviceContext,
   type DeviceDefinition,
   type DeviceLog,
   type HookName,
   isDevice,
   isOwn,
+  isPatched,
   type LogLevel,
+  type Needs,
   needConnector,
   type Watchdog,
 } from "./device.ts";
@@ -216,6 +219,8 @@ interface QueuedEvent {
 }
 
 let booted: Booted | undefined;
+/** The device's needs: as its file declares them, or as computed from its configuration. */
+let declared: Needs = {};
 let impls = new Map<string, Map<string, Impl>>();
 let scope: { controller: AbortController; cancels: Set<() => void> } | undefined;
 const powered = new AbortController();
@@ -436,6 +441,7 @@ async function boot(request: BootRequest): Promise<Fru> {
     }
     config = result.value;
   }
+  declared = needsFor(def, config, name);
   callTimeout = request.callTimeout;
   queueLimit = request.queueLimit;
   takenBatch = Math.max(1, Math.min(256, Math.floor(queueLimit / 4)));
@@ -456,12 +462,13 @@ async function boot(request: BootRequest): Promise<Fru> {
     model: def.model,
     name,
     height: def.height,
-    needs: describeNeeds(def.needs),
+    needs: describeNeeds(declared),
     provides: describeProvides(def.provides),
     snapshot: def.snapshot !== undefined,
     restore: def.restore !== undefined,
     priority: def.priority,
     swap: def.swap,
+    computedNeeds: def.needsOf !== undefined,
   };
 }
 
@@ -471,25 +478,62 @@ async function describe(request: DescribeRequest): Promise<Fru> {
   if (!isDevice(def)) {
     throw new RackError("RACK_MANIFEST", `${request.source} does not default-export a device()`);
   }
+  let needs = def.needs;
+  if (def.needsOf !== undefined) {
+    // Needs computed from the configuration come from the configuration the rack gives.
+    // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+    let config = request.config;
+    if (def.config !== undefined) {
+      const result = await validate(def.config, request.config);
+      if (!result.ok) {
+        throw new RackError(
+          "RACK_INVALID_CONFIG",
+          `${def.model}: invalid config: ${result.message}`,
+        );
+      }
+      config = result.value;
+    }
+    needs = needsFor(def, config, def.model);
+  }
   return {
     model: def.model,
     name: def.model,
     height: def.height,
-    needs: describeNeeds(def.needs),
+    needs: describeNeeds(needs),
     provides: describeProvides(def.provides),
     snapshot: def.snapshot !== undefined,
     restore: def.restore !== undefined,
     priority: def.priority,
     swap: def.swap,
+    computedNeeds: def.needsOf !== undefined,
   };
 }
 
-function describeNeeds(needs: DeviceDefinition["needs"]): Record<string, NeedInfo> {
+function describeNeeds(needs: Needs): Record<string, NeedInfo> {
   const result: Record<string, NeedInfo> = {};
   for (const [name, need] of Object.entries(needs)) {
-    result[name] = { ...describeConnector(needConnector(need)), own: isOwn(need) };
+    const info: NeedInfo = { ...describeConnector(needConnector(need)), own: isOwn(need) };
+    if (isPatched(need)) info.patched = need.address;
+    result[name] = info;
   }
   return result;
+}
+
+/**
+ * The needs of a device: as its file declares them, or as its `needs` function computes them
+ * from the validated configuration.
+ *
+ * @throws RackError `RACK_INVALID_CONFIG` when the function fails or returns malformed needs,
+ *   unless it throws a `RackError` of its own.
+ */
+function needsFor(def: DeviceDefinition, config: unknown, name: string): Needs {
+  if (def.needsOf === undefined) return def.needs;
+  try {
+    return checkNeeds(def.model, def.needsOf(config));
+  } catch (error) {
+    if (error instanceof RackError && error.code !== "RACK_MANIFEST") throw error;
+    throw new RackError("RACK_INVALID_CONFIG", `${name}: needs: ${toWireError(error).message}`);
+  }
 }
 
 function describeProvides(ports: DeviceDefinition["provides"]): Record<string, ConnectorInfo> {
@@ -520,7 +564,7 @@ function prepare(def: DeviceDefinition): void {
     served.set(port, calls);
     emitted.set(port, events);
   }
-  for (const [name, need] of Object.entries(def.needs)) {
+  for (const [name, need] of Object.entries(declared)) {
     const c = needConnector(need);
     const state: NeedState = {
       name,
@@ -563,7 +607,7 @@ function makeContext(def: DeviceDefinition, input: ContextInput): DeviceContext 
   const ports: Record<string, Record<string, unknown>> = {};
   const on: Record<string, Record<string, unknown>> = {};
   const emit: Record<string, Record<string, unknown>> = {};
-  for (const [name, need] of Object.entries(def.needs)) {
+  for (const [name, need] of Object.entries(declared)) {
     const c = needConnector(need);
     const state = needs.get(name) as NeedState;
     const client: Record<string, unknown> = {};
@@ -1466,7 +1510,7 @@ function snapshot(): InstanceMetrics {
   }
   for (const [name, state] of needs) {
     const members: NeedMetrics = {};
-    const need = def?.needs[name];
+    const need = declared[name];
     for (const member of Object.keys(need === undefined ? {} : needConnector(need).members)) {
       const stats = state.calls.get(member) ?? state.events.get(member);
       if (stats !== undefined) members[member] = stats;

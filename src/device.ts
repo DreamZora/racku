@@ -14,6 +14,7 @@
  * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#cold-swaps
  * @decision .agents/decisions/261118_071155-backplane-streams.md#timeouts
  * @decision .agents/decisions/261118_070617-panels-as-devices.md#listeners
+ * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
  */
 import {
   type Connector,
@@ -49,14 +50,30 @@ export interface Own<C extends Connector = Connector> {
   readonly connector: C;
 }
 
-/** A need: a connector, which shares the provider, or `own(connector)`, which gets a copy. */
-export type Need = Connector | Own;
+/** Brand of patched needs; a global symbol, because a bundle may carry its own copy of rack42u. */
+const PATCHED: unique symbol = Symbol.for("rack42u.patched");
+
+/** A need wired to the port at an address; see {@link patched}. */
+export interface Patched<C extends Connector = Connector> {
+  readonly [PATCHED]: true;
+  /** The connector the need calls. */
+  readonly connector: C;
+  /** `<device>.<port>`, or `<model>.<port>` in a scanned rack. */
+  readonly address: string;
+}
+
+/**
+ * A need: a connector, which shares the provider; `own(connector)`, which gets a copy; or
+ * `patched(connector, address)`, wired to a configured address.
+ */
+export type Need = Connector | Own | Patched;
 
 /** Needs keyed by need name. */
 export type Needs = Record<string, Need>;
 
-/** The connector a need calls, whether it shares its provider or owns a copy. */
-export type NeedConnector<T> = T extends Own<infer C> ? C : T extends Connector ? T : never;
+/** The connector a need calls, whether it shares its provider, owns a copy, or is patched. */
+export type NeedConnector<T> =
+  T extends Own<infer C> ? C : T extends Patched<infer C> ? C : T extends Connector ? T : never;
 
 /**
  * Asks for a copy of the provider that serves only this consumer instance. In a scanned rack,
@@ -88,13 +105,54 @@ export function isOwn(value: unknown): value is Own {
 }
 
 /**
+ * Wires a need to the port at `address`, which usually comes from the device's configuration:
+ * in a manifest that places devices by hand as a patch from the need to the address, and in a
+ * scanned rack to the port of the address's model. A patch, or a `use` entry keyed
+ * `<model>.<need>`, for the same need wins.
+ *
+ * @param connector The connector the need calls.
+ * @param address `<device>.<port>`, or `<model>.<port>` in a scanned rack.
+ * @returns The need, for the `needs` of a device.
+ * @throws RackError `RACK_MANIFEST` when `connector` is not a connector or `address` is not an
+ *   address.
+ * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+ */
+export function patched<C extends Connector>(connector: C, address: string): Patched<C> {
+  if (!isConnector(connector)) {
+    throw new RackError("RACK_MANIFEST", "patched() requires a connector");
+  }
+  if (typeof address !== "string" || !/^[^.]+\.[^.]+$/.test(address)) {
+    throw new RackError(
+      "RACK_MANIFEST",
+      `patched(): "${String(address)}" is not a <device>.<port> address`,
+    );
+  }
+  return Object.freeze({ [PATCHED]: true as const, connector, address });
+}
+
+/**
+ * Reports whether a need is a patched need created by {@link patched}.
+ *
+ * @param value Any value, typically an entry of a device's `needs`.
+ * @returns `true` when the value carries the patched brand.
+ */
+export function isPatched(value: unknown): value is Patched {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { [PATCHED]?: unknown })[PATCHED] === true &&
+    isConnector((value as { connector?: unknown }).connector)
+  );
+}
+
+/**
  * Returns the connector a need calls.
  *
- * @param need A connector or an own need.
+ * @param need A connector, an own need, or a patched need.
  * @returns The connector.
  */
 export function needConnector(need: Need): Connector {
-  return isOwn(need) ? need.connector : need;
+  return isOwn(need) || isPatched(need) ? need.connector : need;
 }
 
 /** Options for an outgoing RPC call. */
@@ -297,9 +355,11 @@ export interface DeviceSpec<
   height?: number;
   /**
    * Connectors this device calls, keyed by need name. A plain connector shares its provider;
-   * `own(connector)` asks for a copy of the provider for this instance alone.
+   * `own(connector)` asks for a copy of the provider for this instance alone, and
+   * `patched(connector, address)` wires the need to an address. A function computes the needs
+   * from the validated configuration when the instance boots.
    */
-  needs?: N;
+  needs?: N | ((config: ConfigOf<S>) => N);
   /** Connectors this device implements, keyed by port name. */
   provides?: P;
   /** Configuration schema; the Worker validates the slot's configuration with it at boot. */
@@ -351,7 +411,10 @@ export interface DeviceDefinition<
 > extends DeviceSpec<N, P, S> {
   readonly [DEVICE]: true;
   readonly height: number;
+  /** The needs the device file declares; empty for needs that {@link needsOf} computes. */
   readonly needs: N;
+  /** For needs computed from the configuration: the function that computes them at boot. */
+  readonly needsOf: ((config: ConfigOf<S>) => N) | undefined;
   readonly provides: P;
   readonly priority: number;
   readonly swap: "hot" | "cold";
@@ -400,7 +463,8 @@ export function device<
   if (!Number.isInteger(height) || height < 1) {
     throw new RackError("RACK_MANIFEST", `device ${model}: height must be a positive integer`);
   }
-  const needs = checkPorts(model, "needs", spec.needs, isNeed);
+  const needsOf = typeof spec.needs === "function" ? spec.needs : undefined;
+  const needs = needsOf === undefined ? checkNeeds(model, spec.needs as N | undefined) : ({} as N);
   const provides = checkPorts(model, "provides", spec.provides, isConnector);
   const priority = spec.priority ?? 0;
   if (!Number.isSafeInteger(priority)) {
@@ -423,6 +487,7 @@ export function device<
     [DEVICE]: true as const,
     height,
     needs,
+    needsOf,
     provides,
     priority,
     swap,
@@ -430,7 +495,17 @@ export function device<
 }
 
 function isNeed(value: unknown): value is Need {
-  return isConnector(value) || isOwn(value);
+  return isConnector(value) || isOwn(value) || isPatched(value);
+}
+
+/**
+ * Checks the needs of a device, as `device()` declares them or as a function of its
+ * configuration computes them.
+ *
+ * @throws RackError `RACK_MANIFEST` when a key or a value is malformed.
+ */
+export function checkNeeds<T extends Needs>(model: string, needs: T | undefined): T {
+  return checkPorts(model, "needs", needs, isNeed);
 }
 
 function checkPorts<T extends Needs>(
@@ -448,7 +523,7 @@ function checkPorts<T extends Needs>(
       throw new RackError("RACK_MANIFEST", `device ${model}: ${field} key "${name}" is invalid`);
     }
     if (!valid(value)) {
-      const what = field === "needs" ? "a connector or own(connector)" : "a connector";
+      const what = field === "needs" ? "a connector, own(connector), or patched()" : "a connector";
       throw new RackError("RACK_MANIFEST", `device ${model}: ${field}.${name} is not ${what}`);
     }
   }

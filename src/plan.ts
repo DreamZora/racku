@@ -144,7 +144,13 @@ function expand({ types, roots, use }: PlanInput): Map<string, Draft> {
   return drafts;
 }
 
-/** Picks the provider type and port of a need: the one `use` names, or the only candidate. */
+/**
+ * Picks the provider type and port of a need: the one a `use` entry for the need names, the
+ * address that `patched()` wires it to, the one a `use` entry for its connector names, or the
+ * only candidate.
+ *
+ * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+ */
 function provider(
   types: ReadonlyMap<string, PlanType>,
   use: Readonly<Record<string, string>>,
@@ -153,7 +159,25 @@ function provider(
   info: NeedInfo,
 ): { type: PlanType; port: string } {
   const where = `${consumer}.${need} (${info.id})`;
-  const chosen = use[`${consumer}.${need}`] ?? use[info.id];
+  const forNeed = use[`${consumer}.${need}`];
+  if (forNeed === undefined && info.patched !== undefined) {
+    const [model = "", port = ""] = info.patched.split(".");
+    const type = types.get(model);
+    if (type === undefined) {
+      throw new RackError(
+        "RACK_MANIFEST",
+        `${where}: patched to ${info.patched}, but ${model} is not a scanned device model`,
+      );
+    }
+    if (type.provides[port]?.id !== info.id) {
+      throw new RackError(
+        "RACK_MANIFEST",
+        `${where}: patched to ${info.patched}, which is not a ${info.id} port`,
+      );
+    }
+    return { type, port };
+  }
+  const chosen = forNeed ?? use[info.id];
   const candidates =
     chosen === undefined
       ? [...types.values()].filter((type) => portsFor(type, info).length > 0)

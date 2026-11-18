@@ -267,12 +267,14 @@ export class Instance {
    * The instance can only be terminated afterwards.
    *
    * @decision .agents/decisions/261116_233919-automatic-assembly.md#scanned-manifests
+   * @param config For needs computed from the configuration, the configuration to compute them
+   *   from.
    * @throws RackError `RACK_MANIFEST` when the firmware does not default-export a device, or
    *   `RACK_HOOK_FAILED` when the Worker does not answer within `timeout` ms.
    */
-  async describe(timeout: number): Promise<Fru> {
+  async describe(timeout: number, config?: unknown): Promise<Fru> {
     return (await this.request(
-      { op: "describe", firmware: this.firmware.url, source: this.firmware.source },
+      { op: "describe", firmware: this.firmware.url, source: this.firmware.source, config },
       timeout,
       "describe",
     )) as Fru;

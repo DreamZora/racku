@@ -147,6 +147,21 @@ Data that crosses the backplane must survive `structuredClone`: no functions, no
 
 Each Worker receives a copy of `process.env` as it is when the Worker starts.
 
+### Needs from configuration
+
+`needs` can also be a function of the validated configuration, for a device whose configuration says what it depends on, such as a panel's routes. The rack calls it when the device boots. `patched(connector, address)` wires a need to the port at a `<device>.<port>` address:
+
+```ts
+// In a device file whose config is v.object({ stores: v.array(v.string()) }):
+needs: (config) =>
+  Object.fromEntries(config.stores.map((store) => [store, patched(Kv, `${store}.kv`)])),
+```
+
+- **Placed by hand:** a need that `patched()` wires acts as a patch to its address, and a patch in the manifest for the same need wins. Needs without `patched()` are wired as any need.
+- **Scanned:** the address names a model, which the plan pulls in and wires the need to. A `use` entry keyed `<model>.<need>` wins, while one keyed by a connector id doesn't change the need. The plan computes the needs from the configuration of the model's shared instance: its entry in `config`, or else its spec's.
+- **Failures:** a function that throws, or returns something that isn't needs, fails the device's configuration with `RACK_INVALID_CONFIG`.
+- **Changes:** a reload with new configuration replaces the device, whose new instance gets the needs the function computes from it.
+
 ## Binary data
 
 Calls and events copy their data from one Worker to the next. For large binary data, a device can move the data or share it instead.

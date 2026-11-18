@@ -100,6 +100,38 @@ describe("the plan", () => {
     expect(plan.unused).toEqual([]);
   });
 
+  // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+  test("README.md: a use entry keyed <model>.<need> wins over patched(), and one keyed by a connector id doesn't", () => {
+    const all = types({
+      one: { provides: { p: port("p/v1") } },
+      two: { provides: { p: port("p/v1") } },
+      top: { needs: { n: { ...shared("p/v1"), patched: "one.p" } } },
+    });
+    const wiring = (use: Record<string, string>) =>
+      makePlan({ types: all, roots: ["top"], use, size: 42 }).instances.at(-1)?.wiring;
+    expect(wiring({})).toEqual({ n: { provider: "one", port: "p" } });
+    expect(wiring({ "p/v1": "two" })).toEqual({ n: { provider: "one", port: "p" } });
+    expect(wiring({ "top.n": "two" })).toEqual({ n: { provider: "two", port: "p" } });
+    const to = (patched: string) =>
+      failure(() =>
+        makePlan({
+          types: types({
+            ...Object.fromEntries(all),
+            top: { needs: { n: { ...shared("p/v1"), patched } } },
+          }),
+          roots: ["top"],
+          use: {},
+          size: 42,
+        }),
+      );
+    expect(to("ghost.p")).toBe(
+      "RACK_MANIFEST: top.n (p/v1): patched to ghost.p, but ghost is not a scanned device model",
+    );
+    expect(to("one.q")).toBe(
+      "RACK_MANIFEST: top.n (p/v1): patched to one.q, which is not a p/v1 port",
+    );
+  });
+
   test("a priority pulls a branch forward and never overrides the dependency graph", () => {
     const plan = makePlan({ types: example({ c: 10 }), roots: ROOTS, use: {}, size: 42 });
     expect(layout(plan)).toEqual(["U1 c-f", "U2 e", "U3 c", "U4 a-d", "U5 a-f", "U6 a", "U7 b"]);

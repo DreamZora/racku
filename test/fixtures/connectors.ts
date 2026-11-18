@@ -376,3 +376,9 @@ export const ListenerControl = connector("test.listener/v1", {
     v.object({ label: v.string(), served: v.number(), closes: v.array(v.number()) }),
   ),
 });
+
+/** Reports which device serves each need of a device whose needs come from its configuration. */
+export const Picker = connector("test.picker/v1", {
+  /** The name of the device behind each need, by need. */
+  names: rpc(v.undefined(), v.record(v.string(), v.string())),
+});

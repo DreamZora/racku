@@ -107,6 +107,13 @@ export interface ReserveAsk {
 /** A need in FRU data: its connector, and whether it owns a copy of its provider. */
 export interface NeedInfo extends ConnectorInfo {
   own: boolean;
+  /**
+   * The address that `patched()` wires the need to: `<device>.<port>`, or `<model>.<port>` in a
+   * scanned rack.
+   *
+   * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+   */
+  patched?: string;
 }
 
 /** FRU data a Worker reports after loading its firmware. */
@@ -123,6 +130,8 @@ export interface Fru {
   priority: number;
   /** Whether a replacement may overlap the old and the new instance. */
   swap: "hot" | "cold";
+  /** Whether the needs come from the configuration, so that other configuration gives others. */
+  computedNeeds: boolean;
 }
 
 /** Main thread to Worker: load the firmware and report FRU data. */
@@ -164,6 +173,8 @@ export interface DescribeRequest {
   firmware: string;
   /** Device file the firmware was built from, for messages. */
   source: string;
+  /** The configuration that needs computed from the configuration are computed from. */
+  config?: unknown;
 }
 
 /** Main thread to Worker: run a lifecycle hook. */

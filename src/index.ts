@@ -33,6 +33,7 @@ export {
   type DeviceSpec,
   device,
   isOwn,
+  isPatched,
   type LogLevel,
   type Need,
   type NeedConnector,
@@ -40,12 +41,14 @@ export {
   type NoPorts,
   type Own,
   own,
+  type Patched,
   type PortClient,
   type PortEmitter,
   type PortEvents,
   type PortImpl,
   type PortImpls,
   type Ports,
+  patched,
   type Watchdog,
 } from "./device.ts";
 export {

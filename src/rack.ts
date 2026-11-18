@@ -425,7 +425,10 @@ class Rack implements InstanceHost {
   #patch: ReadonlyArray<readonly [string, string]>;
   /** The plan a scanned rack runs. */
   #plan: Plan | undefined;
-  /** FRU data of firmware described for planning, by hash. */
+  /**
+   * FRU data of firmware described for planning: by hash, and for needs that come from the
+   * configuration by hash and configuration; see `describedKey`.
+   */
   readonly #described = new Map<string, Fru>();
   readonly #probationMs: number;
   readonly #historyLimit: number;
@@ -997,7 +1000,15 @@ class Rack implements InstanceHost {
             throw new RackError("RACK_MANIFEST", messageOf(error));
           },
         );
-        return { ...item, firmware, fru: await this.#describe(firmware) };
+        let fru = await this.#describe(firmware, item.config);
+        // Needs that come from the configuration come from the configuration of the model's
+        // shared instance, which the model's entry in `config` gives before the spec does.
+        // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+        const name = item.variant ?? fru.model;
+        if (fru.computedNeeds && Object.hasOwn(scan.config, name)) {
+          fru = await this.#describe(firmware, scan.config[name]);
+        }
+        return { ...item, firmware, fru };
       }),
     );
     const models = new Map<string, ModelSource>();
@@ -1046,10 +1057,16 @@ class Rack implements InstanceHost {
    * Reads what a firmware declares, loading it once in a Worker that is ended after. While the
    * thread of an earlier such Worker of the firmware is stuck, it isn't loaded again.
    *
+   * @param config The configuration that needs computed from the configuration come from.
    * @decision .agents/decisions/261117_185131-ending-instances.md#inspecting-firmware
+   * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
    */
-  async #describe(firmware: Firmware): Promise<Fru> {
-    const known = this.#described.get(firmware.hash);
+  async #describe(firmware: Firmware, config?: unknown): Promise<Fru> {
+    // Firmware whose needs don't come from the configuration describes the same for any.
+    const plain = this.#described.get(firmware.hash);
+    if (plain !== undefined && !plain.computedNeeds) return plain;
+    const key = describedKey(firmware, config);
+    const known = key === undefined ? undefined : this.#described.get(key);
     if (known !== undefined) return known;
     const stuck = this.#stuckFirmware(firmware.hash);
     if (stuck !== undefined) {
@@ -1057,8 +1074,9 @@ class Rack implements InstanceHost {
     }
     const instance = new Instance(firmware, firmware.source, this);
     try {
-      const fru = await instance.describe(this.#hookTimeout);
-      this.#described.set(firmware.hash, fru);
+      const fru = await instance.describe(this.#hookTimeout, config);
+      const keep = fru.computedNeeds ? key : firmware.hash;
+      if (keep !== undefined) this.#described.set(keep, fru);
       return fru;
     } catch (error) {
       throw new RackError("RACK_MANIFEST", `${firmware.source}: ${asRackError(error).message}`);
@@ -1264,8 +1282,12 @@ class Rack implements InstanceHost {
     const wiring = new Map<string, Wire>();
     for (const [need, info] of Object.entries(fru.needs)) {
       const where = `${name}.${need} (${info.id})`;
-      // A patch decides first: when a plan or a manifest changes, its wiring wins.
-      const patch = this.#patch.find(([consumer]) => consumer === `${name}.${need}`);
+      // A patch decides first: when a plan or a manifest changes, its wiring wins. A need that
+      // patched() wires carries a patch of its own, which a patch of the manifest overrides.
+      // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+      const patch =
+        this.#patch.find(([consumer]) => consumer === `${name}.${need}`) ??
+        (info.patched === undefined ? undefined : ([`${name}.${need}`, info.patched] as const));
       const kept = patch === undefined ? previous.get(need) : undefined;
       const keptSlot = kept && this.#slots.get(kept.provider);
       const keptPort = kept && keptSlot && !keptSlot.removed && fruOf(keptSlot).provides[kept.port];
@@ -1552,7 +1574,7 @@ class Rack implements InstanceHost {
       const firmware = await build.catch((error: unknown) => {
         throw new RackError("RACK_SWAP_REJECTED", messageOf(error));
       });
-      const name = spec.name ?? (await this.#describeForSwap(firmware)).model;
+      const name = spec.name ?? (await this.#describeForSwap(firmware, spec.config)).model;
       if (devices.has(name)) {
         throw new RackError(
           "RACK_SWAP_REJECTED",
@@ -1806,7 +1828,7 @@ class Rack implements InstanceHost {
     let members: Member[];
     let cold: boolean;
     try {
-      const fru = await this.#describeForSwap(firmware);
+      const fru = await this.#describeForSwap(firmware, slot.config);
       members = await this.#groupFor(slot, firmware, source, fru, builds);
       cold = members.length > 1 || slot.fru.swap === "cold" || fru.swap === "cold";
     } catch (error) {
@@ -1876,9 +1898,9 @@ class Rack implements InstanceHost {
   }
 
   /** Reads what a firmware declares, with the error code of a swap. */
-  async #describeForSwap(firmware: Firmware): Promise<Fru> {
+  async #describeForSwap(firmware: Firmware, config?: unknown): Promise<Fru> {
     try {
-      return await this.#describe(firmware);
+      return await this.#describe(firmware, config);
     } catch (error) {
       throw new RackError("RACK_SWAP_REJECTED", asRackError(error).message);
     }
@@ -1940,7 +1962,7 @@ class Rack implements InstanceHost {
           );
         }
         members.push({ slot: consumer, firmware: next, source: consumer.source });
-        frus.set(consumer.name, await this.#describeForSwap(next));
+        frus.set(consumer.name, await this.#describeForSwap(next, consumer.config));
       }
     }
     return members;
@@ -2253,7 +2275,7 @@ class Rack implements InstanceHost {
       const firmware = await build.catch((error: unknown) => {
         throw new RackError("RACK_SWAP_REJECTED", messageOf(error));
       });
-      const fru = await this.#describeForSwap(firmware);
+      const fru = await this.#describeForSwap(firmware, slot.config);
       members = await this.#groupFor(slot, firmware, slot.source, fru, builds);
     } catch (error) {
       throw this.#swapFailed(name, "swap", from, null, asRackError(error), slot, "restart");
@@ -2696,7 +2718,7 @@ class Rack implements InstanceHost {
       if (firmware === undefined || !(await Bun.file(firmware.path).exists())) {
         throw reject(`firmware ${record.from} of ${record.device} is no longer kept`);
       }
-      const fru = await this.#describeForSwap(firmware);
+      const fru = await this.#describeForSwap(firmware, member.config);
       // A rollback restores code only: the plan, with every need and its wire, stays as it runs.
       // Connectors may differ, as when a group undoes a contract change; the replacement checks them.
       const needs = (info: Fru) => Object.keys(info.needs).sort().join(",");
@@ -2709,7 +2731,7 @@ class Rack implements InstanceHost {
     }
     const only = members[0] as Member;
     if (members.length === 1 && only.slot.fru.swap !== "cold") {
-      const fru = await this.#describeForSwap(only.firmware);
+      const fru = await this.#describeForSwap(only.firmware, only.slot.config);
       if (fru.swap !== "cold") {
         const from = only.slot.installed?.firmware.hash ?? null;
         await this.#swapSlot(only.slot, only.firmware, only.source);
@@ -2833,6 +2855,10 @@ class Rack implements InstanceHost {
       if (keep.has(firmware.hash)) continue;
       this.#built.delete(path);
       if (this.#firmwares.get(firmware.hash) === firmware) this.#firmwares.delete(firmware.hash);
+      for (const key of this.#described.keys()) {
+        if (key === firmware.hash || key.startsWith(`${firmware.hash} `))
+          this.#described.delete(key);
+      }
       await unlink(path).catch(() => {
         // Already gone, for example removed with .rack/; there is nothing left to delete.
       });
@@ -3632,4 +3658,18 @@ function positive(name: string, value: number): number {
     throw new RackError("RACK_MANIFEST", `${name} must be a positive number of milliseconds`);
   }
   return value;
+}
+
+/**
+ * The key a description of firmware is kept under: its hash, and the configuration it was
+ * described with; `undefined` for a configuration that has no plain-text form, which isn't kept.
+ */
+function describedKey(firmware: Firmware, config: unknown): string | undefined {
+  if (config === undefined) return firmware.hash;
+  try {
+    return `${firmware.hash} ${JSON.stringify(config)}`;
+  } catch {
+    // Not plain data, such as a BigInt: the firmware is described again each time.
+    return undefined;
+  }
 }
