@@ -346,9 +346,11 @@ export class Instance {
    * Waits until every hold marker in `markers` has reached the instance and it serves no call,
    * from links or from outside the rack.
    *
+   * @param streams Wait until no stream is open at the instance, too.
    * @returns `true` once drained, `false` after `timeout` ms.
+   * @decision .agents/decisions/261118_071155-backplane-streams.md#swaps-and-resets
    */
-  async drain(timeout: number, markers: Marker[] = []): Promise<boolean> {
+  async drain(timeout: number, markers: Marker[] = [], streams = false): Promise<boolean> {
     if (this.dead) return true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<boolean>((resolve) => {
@@ -356,7 +358,7 @@ export class Instance {
     });
     const drained = (async () => {
       try {
-        await this.request({ op: "drain", markers }, timeout);
+        await this.request({ op: "drain", markers, streams }, timeout);
       } catch {
         // The instance died, which ends its calls too, or it did not answer in time.
         if (!this.dead) return false;

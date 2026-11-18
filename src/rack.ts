@@ -72,6 +72,7 @@ import {
   QUEUE_LIMIT,
   WATCHDOG_MIN,
 } from "./protocol.ts";
+import { cancelStreams } from "./streams.ts";
 import { detach, transferList } from "./transfer.ts";
 
 export type { SlotState } from "./backplane.ts";
@@ -485,7 +486,7 @@ class Rack implements InstanceHost {
       call: (address: string, method: string, input: unknown, options: CallOptions = {}) =>
         this.#phase === "running"
           ? this.#backplane.call(address, method, input, options, "rack")
-          : refuse(`${address}.${method}`, options),
+          : refuse(`${address}.${method}`, input, options),
       reload: (manifest?: RackManifest) => this.#operate("reload", () => this.#reload(manifest)),
       swap: (name: string, source?: string | URL) =>
         this.#operate("swap", () => this.#swap(name, source)),
@@ -991,7 +992,7 @@ class Rack implements InstanceHost {
       const instance = slot.installed;
       if (instance !== null) {
         const wasAlive = !instance.dead;
-        await this.#powerDown(instance, []);
+        await this.#powerDown(instance, [], false, true);
         // Terminated now, in order; the wait for the threads comes once, for all of them.
         void this.#end(instance, slot.name);
         if (wasAlive) this.#poweredOff(instance);
@@ -2688,13 +2689,17 @@ class Rack implements InstanceHost {
    *
    * @param markers Hold markers of the switch that retired the instance; calls sent before
    *   them still reach it and must finish first.
+   * @param streams The drain waits for the instance's open streams too: it retires, or the rack
+   *   stops. A drain that holds calls for a replacement waits for results only.
    * @returns The snapshot and the firmware it came from, when one was asked for and taken.
    * @decision .agents/decisions/261117_185131-ending-instances.md#ending-an-instance
+   * @decision .agents/decisions/261118_071155-backplane-streams.md#swaps-and-resets
    */
   async #powerDown(
     instance: Instance,
     markers: Marker[],
     takeSnapshot = false,
+    streams = false,
   ): Promise<{ state: unknown; from: string } | undefined> {
     if (instance.dead) return undefined;
     const silent = () =>
@@ -2709,7 +2714,7 @@ class Rack implements InstanceHost {
       silent();
       return undefined;
     }
-    if (!(await this.#backplane.drain(instance, markers, this.#drainTimeout))) {
+    if (!(await this.#backplane.drain(instance, markers, this.#drainTimeout, streams))) {
       this.#backplane.fail(
         instance,
         "RACK_LINK_DOWN",
@@ -2747,7 +2752,7 @@ class Rack implements InstanceHost {
    */
   async #retire(instance: Instance, markers: Marker[] = []): Promise<boolean> {
     const wasAlive = !instance.dead;
-    await this.#powerDown(instance, markers);
+    await this.#powerDown(instance, markers, false, true);
     const stopped = this.#end(instance, instance.slot);
     if (wasAlive) this.#poweredOff(instance);
     return stopped;
@@ -3280,7 +3285,9 @@ async function deviceFiles(dir: string): Promise<string[]> {
  *
  * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
  */
-function refuse(where: string, options: CallOptions): Promise<never> {
+/** Fails a call to a rack that isn't running; the call still takes its buffers and its stream. */
+function refuse(where: string, input: unknown, options: CallOptions): Promise<never> {
+  cancelStreams(input, new RackError("RACK_CANCELLED", `${where}: the rack is not running`));
   try {
     const transfer = transferList(options.transfer, where);
     if (transfer !== undefined) detach(transfer);

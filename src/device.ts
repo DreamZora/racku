@@ -12,6 +12,7 @@
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#shared-and-own-needs
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#start-priority
  * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#cold-swaps
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#timeouts
  */
 import {
   type Connector,
@@ -98,10 +99,19 @@ export function needConnector(need: Need): Connector {
 export interface CallOptions {
   /**
    * Milliseconds before the call fails with `RACK_TIMEOUT` and is cancelled at the provider;
-   * defaults to the rack's `callTimeout`.
+   * defaults to the rack's `callTimeout`. For a call whose input carries a stream, the time runs
+   * from the end of that stream, so an upload doesn't time out while its bytes still move.
    */
   timeout?: number;
-  /** Aborting it fails the call at once with `RACK_CANCELLED` and cancels it at the provider. */
+  /**
+   * Milliseconds that a stream of the call, in its input or its result, may move nothing before
+   * it fails with `RACK_TIMEOUT` at both ends; defaults to the call's timeout.
+   */
+  streamTimeout?: number;
+  /**
+   * Aborting it fails the call at once with `RACK_CANCELLED` and cancels it at the provider. Its
+   * streams are cancelled too, also after the result has arrived.
+   */
   signal?: AbortSignal;
   /**
    * Buffers to move to the provider instead of copying them. The call takes them: they are
@@ -114,9 +124,15 @@ export interface CallOptions {
 
 /** The second argument of an RPC implementation. */
 export interface CallContext {
-  /** Aborted when the caller cancels the call or its deadline passes. */
+  /**
+   * Aborted when the caller cancels the call or its deadline passes, also after the result was
+   * sent while the call's streams are still open.
+   */
   readonly signal: AbortSignal;
-  /** The deadline of the call, a millisecond timestamp. */
+  /**
+   * The deadline of the call, a millisecond timestamp. A call whose input carries a stream has
+   * none here, `Infinity`: its caller times it out from the end of that stream, and cancels it.
+   */
   readonly deadline: number;
   /**
    * Moves these buffers to the caller with the result instead of copying them. They are

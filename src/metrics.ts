@@ -5,6 +5,24 @@
  * @decision .agents/decisions/261116_035534-call-metrics.md#reading
  */
 
+/**
+ * Counters of the byte streams that one RPC member's calls carried, at one end of them.
+ *
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#observation
+ */
+export interface StreamMetrics {
+  /** Streams that the member's calls carried, in both directions. */
+  opened: number;
+  /** Of them, the ones that haven't ended yet. */
+  open: number;
+  /** Bytes this side sent on them. */
+  bytesSent: number;
+  /** Bytes this side received on them. */
+  bytesReceived: number;
+  /** Streams that failed or were cancelled, by error code. */
+  errors: Record<string, number>;
+}
+
 /** Counters of one RPC member of a provided port: the calls the device served. */
 export interface ServedRpcMetrics {
   kind: "rpc";
@@ -14,10 +32,12 @@ export interface ServedRpcMetrics {
   ok: number;
   /** Failed calls by error code. */
   errors: Record<string, number>;
-  /** Calls received and not answered yet. */
+  /** Calls received and not finished yet: not answered, or answered with streams still open. */
   active: number;
   /** Total time from receipt to reply of the answered calls, in milliseconds. */
   timeMs: number;
+  /** The streams of the member's calls; present once a call carried one. */
+  streams?: StreamMetrics;
 }
 
 /** Counters of one event member of a provided port. */
@@ -38,12 +58,17 @@ export interface CalledRpcMetrics {
   ok: number;
   /** Failed calls by error code, `RACK_TIMEOUT` and `RACK_CANCELLED` included. */
   errors: Record<string, number>;
-  /** Calls started and not finished yet, queued ones included. */
+  /**
+   * Calls started and not finished yet, queued ones included; a call with streams finishes once
+   * its result came and its streams ended.
+   */
   pending: number;
   /** Calls waiting because the provider's slot is held. */
   queued: number;
   /** Total time from call to result of the finished calls, in milliseconds. */
   timeMs: number;
+  /** The streams of the member's calls; present once a call carried one. */
+  streams?: StreamMetrics;
 }
 
 /** Counters of one event member of a need. */

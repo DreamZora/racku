@@ -3,6 +3,7 @@
  *
  * @decision .agents/decisions/261112_043034-device-api.md#connectors
  */
+import * as v from "valibot";
 import { RackError } from "./errors.ts";
 import { isStandardSchema, type StandardSchemaV1 } from "./schema.ts";
 
@@ -73,6 +74,23 @@ export function event<P extends StandardSchemaV1>(payload: P): EventSpec<P> {
     throw new RackError("RACK_MANIFEST", "event() requires a Standard Schema payload schema");
   }
   return { kind: "event", payload };
+}
+
+/**
+ * A schema for a byte stream in the input or the output of an RPC member: a `ReadableStream`
+ * of `Uint8Array` chunks. A call carries at most one stream in its input and one in its output,
+ * each as the value itself or as a top-level property of an object; the rack finds it by its
+ * value. With another schema library, a schema that accepts `ReadableStream` instances does the
+ * same, such as zod's `z.instanceof(ReadableStream)`.
+ *
+ * @returns A valibot schema, for use on its own or inside valibot schemas such as `v.object`.
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#streams-in-calls
+ */
+export function stream(): v.CustomSchema<ReadableStream<Uint8Array>, string> {
+  return v.custom<ReadableStream<Uint8Array>, string>(
+    (value) => value instanceof ReadableStream,
+    "Expected a ReadableStream",
+  );
 }
 
 /**

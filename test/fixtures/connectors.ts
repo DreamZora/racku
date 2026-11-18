@@ -3,7 +3,7 @@
  *
  * @decision .agents/decisions/261115_222025-p0-api-details.md#test-fixtures
  */
-import { connector, event, rpc } from "rack42u";
+import { connector, event, rpc, stream } from "rack42u";
 import * as v from "valibot";
 
 export const Hook = v.picklist([
@@ -203,4 +203,147 @@ export const BytesClient = connector("test.bytes-client/v1", {
   ),
   /** Passes a shared buffer to `mark` and returns its first byte after the call. */
   share: rpc(v.undefined(), v.number()),
+});
+
+/** What a stream source or reader saw, as the stream tests report it. */
+const Outcome = v.object({
+  ok: v.boolean(),
+  /** The error code of the call, or of the stream when the call succeeded and the stream failed. */
+  code: v.nullable(v.string()),
+  total: v.number(),
+  chunks: v.number(),
+  largest: v.number(),
+});
+
+/** Produces, consumes, and echoes byte streams, and reports what its sources saw. */
+export const Streams = connector("test.streams/v1", {
+  /**
+   * Reads its input stream: all of it, or `take` chunks, waiting `delay` ms before each read,
+   * then waits `after` ms before it returns. Reports what it read, the call's deadline, and the
+   * code of an error the stream failed with.
+   */
+  consume: rpc(
+    v.object({
+      bytes: stream(),
+      take: v.optional(v.number()),
+      delay: v.optional(v.number()),
+      after: v.optional(v.number()),
+    }),
+    v.object({
+      total: v.number(),
+      chunks: v.number(),
+      largest: v.number(),
+      sum: v.number(),
+      deadline: v.number(),
+      error: v.nullable(v.string()),
+    }),
+  ),
+  /**
+   * Returns a stream of `size` bytes set to `fill`, in chunks of `chunk` bytes, which its
+   * source makes only when the stream reads it. The source waits `delay` ms before each chunk,
+   * fails with `SOURCE_FAILED` at chunk `failAt`, makes a string at the first chunk with `junk`,
+   * stops making anything after the first chunk with `stall`, and writes into the same buffer
+   * again for each chunk with `reuse`.
+   */
+  produce: rpc(
+    v.object({
+      size: v.number(),
+      chunk: v.number(),
+      fill: v.optional(v.number()),
+      delay: v.optional(v.number()),
+      failAt: v.optional(v.number()),
+      junk: v.optional(v.boolean()),
+      stall: v.optional(v.boolean()),
+      reuse: v.optional(v.boolean()),
+    }),
+    v.object({ size: v.number(), bytes: stream() }),
+  ),
+  /** Returns its input stream through a `TransformStream`. */
+  echo: rpc(stream(), stream()),
+  /**
+   * What the instance saw: its firmware, the bytes its sources made, the codes they were
+   * cancelled with, how many of their buffers were detached, and the codes of the input
+   * streams that failed while `consume` read them.
+   */
+  report: rpc(
+    v.undefined(),
+    v.object({
+      firmware: v.string(),
+      produced: v.number(),
+      cancelled: v.array(v.string()),
+      detached: v.number(),
+      consumeErrors: v.array(v.string()),
+    }),
+  ),
+  /** Returns two streams at the top level, or one nested deeper. */
+  bad: rpc(v.picklist(["two", "nested"]), v.unknown()),
+  /** Emits a stream as the payload of `streamed`. */
+  publish: rpc(v.undefined(), v.undefined()),
+  /** Makes the next `snapshot` take `ms` ms. */
+  slowSnapshot: rpc(v.number(), v.undefined()),
+  /** Exits the Worker 10 ms after it answers. */
+  crash: rpc(v.undefined(), v.undefined()),
+  /** Keeps the event loop busy for `ms` ms. */
+  block: rpc(v.number(), v.undefined()),
+  streamed: event(v.unknown()),
+});
+
+/** Calls the streams device through a need, and reports what each side saw. */
+export const StreamClient = connector("test.stream-client/v1", {
+  /**
+   * Starts a call to `consume` with a stream of `size` bytes in chunks of `chunk`, which its
+   * source makes only when the stream reads it, `sourceDelay` ms apart, and stops making after
+   * `stallAt` chunks. Returns an id for `finished` and `pulled`.
+   */
+  upload: rpc(
+    v.object({
+      size: v.number(),
+      chunk: v.number(),
+      sourceDelay: v.optional(v.number()),
+      stallAt: v.optional(v.number()),
+      take: v.optional(v.number()),
+      delay: v.optional(v.number()),
+      after: v.optional(v.number()),
+      timeout: v.optional(v.number()),
+      streamTimeout: v.optional(v.number()),
+    }),
+    v.number(),
+  ),
+  /** Bytes the source of an upload made so far. */
+  pulled: rpc(v.number(), v.number()),
+  /**
+   * Waits for an upload: the call's outcome, what `consume` read, and the code its source was
+   * cancelled with.
+   */
+  finished: rpc(
+    v.number(),
+    v.object({
+      ok: v.boolean(),
+      code: v.nullable(v.string()),
+      total: v.number(),
+      deadline: v.number(),
+      cancelled: v.nullable(v.string()),
+    }),
+  ),
+  /**
+   * Calls `produce` with `args` and keeps the result's stream unread. Returns an id for `read`.
+   */
+  open: rpc(
+    v.object({
+      args: v.record(v.string(), v.unknown()),
+      timeout: v.optional(v.number()),
+      streamTimeout: v.optional(v.number()),
+    }),
+    v.number(),
+  ),
+  /**
+   * Reads the stream that `open` kept: all of it, waiting `delay` ms before each read, or
+   * `cancelAt` chunks and then cancels it.
+   */
+  read: rpc(
+    v.object({ id: v.number(), delay: v.optional(v.number()), cancelAt: v.optional(v.number()) }),
+    Outcome,
+  ),
+  /** Exits the Worker 10 ms after it answers. */
+  crash: rpc(v.undefined(), v.undefined()),
 });

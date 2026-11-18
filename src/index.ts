@@ -20,6 +20,7 @@ export {
   type RpcReturn,
   type RpcSpec,
   rpc,
+  stream,
 } from "./connector.ts";
 export {
   type ActivateScope,
@@ -80,6 +81,7 @@ export type {
   RackMetrics,
   ReceivedEventMetrics,
   ServedRpcMetrics,
+  StreamMetrics,
 } from "./metrics.ts";
 export {
   type RackEvent,

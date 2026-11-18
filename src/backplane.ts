@@ -13,14 +13,26 @@
  * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#transfer
  * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
  * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#streams-in-calls
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#timeouts
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#observation
  */
 import type { CallOptions } from "./device.ts";
 import { fromWireError, RackError, type WireError } from "./errors.ts";
 import type { Firmware } from "./firmware.ts";
 import type { Instance, RoutedCall, Wire } from "./instance.ts";
 import { parseAddress } from "./manifest.ts";
-import type { CalledRpcMetrics, OutsideMetrics } from "./metrics.ts";
-import type { CallResult, DataFromWorker, Fru, Marker } from "./protocol.ts";
+import type { CalledRpcMetrics, OutsideMetrics, StreamMetrics } from "./metrics.ts";
+import type { CallResult, CallToProvider, DataFromWorker, Fru, Marker } from "./protocol.ts";
+import {
+  armTimer,
+  cancelStreams,
+  putStream,
+  StreamChannel,
+  type StreamReceiver,
+  StreamSender,
+  takeStream,
+} from "./streams.ts";
 import { detach, moveInto, transferList } from "./transfer.ts";
 
 /** Lifecycle state of a slot as reported by `status()`. */
@@ -52,6 +64,20 @@ interface Call extends RoutedCall {
   /** When the call was made, by `performance.now()`. */
   started: number;
   cleanup: (() => void) | undefined;
+  /** The call's timeout in ms; for a call with an input stream, it runs from that stream's end. */
+  readonly ms: number;
+  /** Idle timeout of the call's streams, in ms. */
+  readonly idle: number;
+  /** The input stream, from the call until it ends. */
+  sender: StreamSender | undefined;
+  /** Where the input stream goes in the input: a top-level key, or `null` for the input itself. */
+  key: string | null;
+  /** The output stream, from the result until it ends. */
+  receiver: StreamReceiver | undefined;
+  /** The call's streams that haven't ended; the call is unfinished until none is left. */
+  streams: number;
+  /** Counted as finished: it settled, and its streams ended. */
+  finished: boolean;
 }
 
 /** One occupied slot of the rack. */
@@ -121,6 +147,8 @@ export class Backplane {
   readonly #outside = new Map<string, Map<string, CalledRpcMetrics>>();
   /** Calls from outside the rack to an address or member that didn't exist. */
   #unrouted = 0;
+  /** The streams of the calls from outside the rack, on each instance's data channel. */
+  readonly #streams = new WeakMap<Instance, StreamChannel>();
   #nextId = 1;
   #nextLink = 1;
   #nextToken = 1;
@@ -248,12 +276,14 @@ export class Backplane {
   }
 
   /**
-   * Waits until the hold markers reached the instance and it serves no call.
+   * Waits until the hold markers reached the instance and it serves no call, and with `streams`,
+   * until no stream is open at the instance either.
    *
    * @returns `false` when `timeout` ms passed first.
+   * @decision .agents/decisions/261118_071155-backplane-streams.md#swaps-and-resets
    */
-  drain(instance: Instance, markers: Marker[], timeout: number): Promise<boolean> {
-    return instance.drain(timeout, markers);
+  drain(instance: Instance, markers: Marker[], timeout: number, streams = false): Promise<boolean> {
+    return instance.drain(timeout, markers, streams);
   }
 
   /** Fails every call the instance is serving: at the consumers of its links, and here. */
@@ -288,7 +318,7 @@ export class Backplane {
         });
       } else if (link.consumer === instance) {
         this.#links.delete(link.id);
-        void this.#ask(link.provider, { op: "drop", link: link.id });
+        void this.#ask(link.provider, { op: "drop", link: link.id, error: { code, message } });
       }
     }
   }
@@ -402,9 +432,20 @@ export class Backplane {
 
   // ---- Calls from outside the rack ----
 
-  /** Handles one data-channel message from an instance: the result of a call from outside. */
+  /** Handles one data-channel message from an instance: a result, or a message of a stream. */
   onData(instance: Instance, message: DataFromWorker): void {
     if (message.t === "result") this.#fromProvider(instance, message);
+    else this.#streams.get(instance)?.onMessage(message);
+  }
+
+  /** The streams on an instance's data channel, made when a call first carries one. */
+  #streamsOf(instance: Instance): StreamChannel {
+    let channel = this.#streams.get(instance);
+    if (channel === undefined) {
+      channel = new StreamChannel((message, transfer) => instance.post(message, transfer));
+      this.#streams.set(instance, channel);
+    }
+    return channel;
   }
 
   /**
@@ -422,6 +463,7 @@ export class Backplane {
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const started = performance.now();
+      const where = `${address}.${method}`;
       const counter = this.#counterOf(address, method);
       if (counter === undefined) this.#unrouted++;
       else {
@@ -430,20 +472,26 @@ export class Backplane {
       }
       // A call that ends before it is routed counts here; a routed one counts as it settles.
       const end = (error: unknown) => {
-        if (counter !== undefined) count(counter, started, failure(codeOf(error), ""));
+        if (counter !== undefined) {
+          counted(counter, started, failure(codeOf(error), ""));
+          counter.pending--;
+        }
         reject(error);
       };
-      const { timeout, signal } = options;
+      const { timeout, signal, streamTimeout } = options;
       let transfer: ArrayBuffer[] | undefined;
       try {
-        transfer = transferList(options.transfer, `${address}.${method}`);
+        transfer = transferList(options.transfer, where);
       } catch (error) {
+        cancelStreams(input, new RackError("RACK_CANCELLED", `${where}: the call failed`));
         end(error);
         return;
       }
-      // The call owns its buffers from here on, so a call that fails early still takes them.
+      // The call owns its buffers and its stream from here on, so a call that fails early still
+      // takes them.
       const refuse = (error: RackError) => {
         if (transfer !== undefined) detach(transfer);
+        cancelStreams(input, new RackError("RACK_CANCELLED", `${where}: the call failed`));
         end(error);
       };
       let device: string;
@@ -465,28 +513,42 @@ export class Backplane {
         return;
       }
       if (timeout !== undefined && !(typeof timeout === "number" && timeout >= 0)) {
-        refuse(
-          new RackError("RACK_INVALID_INPUT", `${address}.${method}: timeout must be >= 0 ms`),
-        );
+        refuse(new RackError("RACK_INVALID_INPUT", `${where}: timeout must be >= 0 ms`));
+        return;
+      }
+      if (
+        streamTimeout !== undefined &&
+        !(typeof streamTimeout === "number" && streamTimeout >= 0)
+      ) {
+        refuse(new RackError("RACK_INVALID_INPUT", `${where}: streamTimeout must be >= 0 ms`));
         return;
       }
       if (signal?.aborted) {
-        refuse(new RackError("RACK_CANCELLED", `${address}.${method}: call cancelled`));
+        refuse(new RackError("RACK_CANCELLED", `${where}: call cancelled`));
         return;
       }
       // Calls from outside the rack are bounded per device, like the calls of a need.
       if (slot !== undefined && slot.unfinished >= this.#queueLimit) {
-        const message = `${address}.${method}: ${device} has ${this.#queueLimit} unfinished calls from outside the rack already`;
+        const message = `${where}: ${device} has ${this.#queueLimit} unfinished calls from outside the rack already`;
         refuse(new RackError("RACK_OVERLOADED", message));
         return;
       }
+      let taken: ReturnType<typeof takeStream>;
+      try {
+        taken = takeStream(input, "RACK_INVALID_INPUT", where);
+      } catch (error) {
+        refuse(error as RackError);
+        return;
+      }
+      const ms = timeout ?? this.#callTimeout;
       const call = this.#create(
         device,
         port,
         method,
-        input,
+        taken === undefined ? input : taken.value,
         transfer,
-        timeout,
+        ms,
+        streamTimeout ?? ms,
         caller,
         (outcome) => (outcome.ok ? resolve(outcome.value) : reject(fromWireError(outcome.error))),
       );
@@ -496,13 +558,39 @@ export class Backplane {
       }
       call.counter = counter;
       call.started = started;
-      if (signal !== undefined) {
-        const onAbort = () =>
+      if (taken !== undefined) {
+        try {
+          call.sender = new StreamSender(taken.stream, "RACK_INVALID_INPUT", {
+            idle: call.idle,
+            where,
+            counters: streamCounters(counter),
+            onEnd: (error) => this.#inputEnded(call, error),
+          });
+          call.key = taken.key;
+          call.streams++;
+        } catch (error) {
           this.#finish(
             call,
-            failure("RACK_CANCELLED", `${address}.${method}: call cancelled`),
-            true,
+            {
+              ok: false,
+              error: { code: "RACK_INVALID_INPUT", message: (error as RackError).message },
+            },
+            false,
           );
+          return;
+        }
+      } else this.#startTimer(call);
+      if (signal !== undefined) {
+        const onAbort = () => {
+          const error = new RackError("RACK_CANCELLED", `${where}: call cancelled`);
+          // The provider's call.signal aborts too, also when the result came and streams still run.
+          if (call.settled && call.streams > 0 && !call.finished) {
+            call.target?.post({ t: "cancel", id: call.id });
+          }
+          call.sender?.cancel(error);
+          call.receiver?.cancel(error);
+          this.#finish(call, failure("RACK_CANCELLED", `${where}: call cancelled`), true);
+        };
         signal.addEventListener("abort", onAbort, { once: true });
         call.cleanup = () => signal.removeEventListener("abort", onAbort);
       }
@@ -510,8 +598,11 @@ export class Backplane {
     });
   }
 
-  /** Fails every call from outside the rack that the instance is serving. */
+  /** Fails every call from outside the rack that the instance is serving, and their streams. */
   failInFlight(instance: Instance, code: string, message: string): void {
+    // The data channel's streams fail with the code its calls get.
+    // @decision .agents/decisions/261118_071155-backplane-streams.md#cancellation-and-errors
+    this.#streams.get(instance)?.close(new RackError(code, message));
     for (const call of instance.inFlight.values()) {
       this.#finish(call as Call, failure(code, message), false);
     }
@@ -532,13 +623,39 @@ export class Backplane {
 
   #fromProvider(provider: Instance, message: CallResult): void {
     const call = provider.inFlight.get(message.id) as Call | undefined;
-    if (call === undefined) return;
+    const slot = message.ok ? message.stream : undefined;
+    if (call === undefined) {
+      // Nobody waits for the result any more, so its stream is cancelled at its source.
+      if (slot !== undefined) {
+        this.#streamsOf(provider).refuse(
+          slot[1],
+          new RackError("RACK_CANCELLED", "the caller gave up"),
+        );
+      }
+      return;
+    }
     provider.inFlight.delete(message.id);
-    this.#finish(
-      call,
-      message.ok ? { ok: true, value: message.value } : { ok: false, error: message.error },
-      false,
-    );
+    if (!message.ok) {
+      this.#finish(call, { ok: false, error: message.error }, false);
+      provider.checkDrained();
+      return;
+    }
+    let value = message.value;
+    if (slot !== undefined) {
+      const receiver = this.#streamsOf(provider).receive(slot[1], {
+        idle: call.idle,
+        where: `${call.provider}.${call.port}.${call.member}`,
+        counters: streamCounters(call.counter),
+        onEnd: () => {
+          call.streams--;
+          this.#finishIfDone(call);
+        },
+      });
+      call.receiver = receiver;
+      call.streams++;
+      value = putStream(value, slot[0], receiver.stream);
+    }
+    this.#finish(call, { ok: true, value }, false);
     provider.checkDrained();
   }
 
@@ -548,12 +665,12 @@ export class Backplane {
     member: string,
     input: unknown,
     transfer: ArrayBuffer[] | undefined,
-    timeout: number | undefined,
+    ms: number,
+    idle: number,
     caller: string,
     deliver: (outcome: Outcome) => void,
   ): Call {
-    const ms = timeout ?? this.#callTimeout;
-    const call: Call = {
+    return {
       id: this.#nextId++,
       settled: false,
       provider,
@@ -571,15 +688,49 @@ export class Backplane {
       counter: undefined,
       started: performance.now(),
       cleanup: undefined,
+      ms,
+      idle,
+      sender: undefined,
+      key: null,
+      receiver: undefined,
+      streams: 0,
+      finished: false,
     };
-    // The backplane owns the timeout of a call from outside the rack: it fails the call and
-    // cancels it at the provider.
-    // @decision .agents/decisions/261116_024226-backplane-links.md#rpc
-    call.timer = setTimeout(() => {
-      const where = `${provider}.${port}.${member}`;
-      this.#finish(call, failure("RACK_TIMEOUT", `${where} timed out after ${ms} ms`), true);
-    }, ms);
-    return call;
+  }
+
+  /**
+   * Starts the timeout of a call. The backplane owns the timeout of a call from outside the
+   * rack: it fails the call and cancels it at the provider.
+   *
+   * @decision .agents/decisions/261116_024226-backplane-links.md#rpc
+   */
+  #startTimer(call: Call): void {
+    if (call.settled || call.timer !== undefined) return;
+    call.timer = armTimer(call.ms, () => {
+      const where = `${call.provider}.${call.port}.${call.member}`;
+      this.#finish(call, failure("RACK_TIMEOUT", `${where} timed out after ${call.ms} ms`), true);
+    });
+  }
+
+  /**
+   * The input stream of a call ended, failed, or was cancelled. The call's timeout runs from
+   * then. A call that still waits to go out fails with the stream's error, such as
+   * `RACK_TIMEOUT` once it has waited `streamTimeout`.
+   *
+   * @decision .agents/decisions/261118_071155-backplane-streams.md#swaps-and-resets
+   */
+  #inputEnded(call: Call, error: RackError | undefined): void {
+    call.streams--;
+    if (!call.settled) {
+      if (error !== undefined && call.target === undefined) {
+        this.#finish(
+          call,
+          { ok: false, error: { code: error.code, message: error.message } },
+          false,
+        );
+      } else this.#startTimer(call);
+    }
+    this.#finishIfDone(call);
   }
 
   #dispatch(call: Call): void {
@@ -616,19 +767,22 @@ export class Backplane {
       this.#finish(call, failure("RACK_LINK_DOWN", `${slot.name} is ${slot.state}`), false);
       return;
     }
+    const message: CallToProvider = {
+      t: "call",
+      id: call.id,
+      port: call.port,
+      member: call.member,
+      input: call.input,
+      // The provider sees no deadline for a call with an input stream; the backplane times it out.
+      deadline: call.sender === undefined ? call.deadline : Number.POSITIVE_INFINITY,
+      idle: call.idle,
+      caller: call.caller,
+    };
+    if (call.sender !== undefined) {
+      message.stream = [call.key, this.#streamsOf(target).attach(call.sender)];
+    }
     try {
-      target.post(
-        {
-          t: "call",
-          id: call.id,
-          port: call.port,
-          member: call.member,
-          input: call.input,
-          deadline: call.deadline,
-          caller: call.caller,
-        },
-        call.transfer,
-      );
+      target.post(message, call.transfer);
     } catch {
       // DataCloneError: input from outside the rack has not crossed a thread yet.
       const where = `${call.provider}.${call.port}.${call.member}`;
@@ -640,18 +794,15 @@ export class Backplane {
   }
 
   /**
-   * Settles a call once. A call stays in its provider's in-flight set until the provider
-   * answers, so draining still waits for work the provider has not finished.
+   * Settles a call once: its outcome is counted and delivered. A call that fails takes its input
+   * stream with it. A call stays in its provider's in-flight set until the provider answers, so
+   * draining still waits for work the provider has not finished, and it stays unfinished until
+   * its streams end.
    */
   #finish(call: Call, outcome: Outcome | undefined, cancelProvider: boolean): void {
     if (call.settled) return;
     call.settled = true;
-    if (call.counted !== undefined) {
-      call.counted.unfinished--;
-      call.counted = undefined;
-    }
     clearTimeout(call.timer);
-    call.cleanup?.();
     if (call.transfer !== undefined) detach(call.transfer);
     if (call.queuedIn !== undefined) {
       const queue = call.queuedIn.queue;
@@ -663,10 +814,27 @@ export class Backplane {
     if (cancelProvider && call.target?.inFlight.has(call.id)) {
       call.target.post({ t: "cancel", id: call.id });
     }
-    if (outcome !== undefined) {
-      if (call.counter !== undefined) count(call.counter, call.started, outcome);
-      call.deliver(outcome);
+    if (outcome !== undefined && !outcome.ok) {
+      const where = `${call.provider}.${call.port}.${call.member}`;
+      call.sender?.cancel(new RackError("RACK_CANCELLED", `${where}: the call failed`));
     }
+    if (outcome !== undefined && call.counter !== undefined) {
+      counted(call.counter, call.started, outcome);
+    }
+    this.#finishIfDone(call);
+    if (outcome !== undefined) call.deliver(outcome);
+  }
+
+  /** Counts a call as finished once it has settled and its streams have ended. */
+  #finishIfDone(call: Call): void {
+    if (call.finished || !call.settled || call.streams > 0) return;
+    call.finished = true;
+    call.cleanup?.();
+    if (call.counted !== undefined) {
+      call.counted.unfinished--;
+      call.counted = undefined;
+    }
+    if (call.counter !== undefined) call.counter.pending--;
   }
 
   // ---- Counters of calls from outside the rack ----
@@ -727,6 +895,9 @@ export class Backplane {
       const copy: Record<string, CalledRpcMetrics> = {};
       for (const [member, counter] of members) {
         copy[member] = { ...counter, errors: { ...counter.errors } };
+        if (counter.streams !== undefined) {
+          copy[member].streams = { ...counter.streams, errors: { ...counter.streams.errors } };
+        }
       }
       ports[address] = copy;
     }
@@ -738,12 +909,20 @@ function failure(code: string, message: string): Outcome {
   return { ok: false, error: { code, message } };
 }
 
-/** Counts a finished call from outside the rack. */
-function count(counter: CalledRpcMetrics, started: number, outcome: Outcome): void {
-  counter.pending--;
+/** Counts the outcome of a call from outside the rack; its `pending` counts until it finishes. */
+function counted(counter: CalledRpcMetrics, started: number, outcome: Outcome): void {
   counter.timeMs += performance.now() - started;
   if (outcome.ok) counter.ok++;
   else counter.errors[outcome.error.code] = (counter.errors[outcome.error.code] ?? 0) + 1;
+}
+
+/** The stream counters of a member, made when its calls first carry a stream. */
+function streamCounters(counter: CalledRpcMetrics | undefined): StreamMetrics {
+  if (counter === undefined) {
+    return { opened: 0, open: 0, bytesSent: 0, bytesReceived: 0, errors: {} };
+  }
+  counter.streams ??= { opened: 0, open: 0, bytesSent: 0, bytesReceived: 0, errors: {} };
+  return counter.streams;
 }
 
 /** The code of an error that ends a call, as its caller receives it. */

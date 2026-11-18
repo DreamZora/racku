@@ -11,10 +11,12 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#channels
  * @decision .agents/decisions/261116_024226-backplane-links.md#links
  * @decision .agents/decisions/261116_024226-backplane-links.md#rpc
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#transport
  */
 import type { ConnectorInfo } from "./connector.ts";
 import type { HookName, LogLevel } from "./device.ts";
 import type { WireError } from "./errors.ts";
+import type { StreamMessage, StreamSlot } from "./streams.ts";
 
 /**
  * The default of the start option `queueLimit`: the most calls a need has unfinished, sent or
@@ -194,6 +196,8 @@ export interface DropRequest {
   id: number;
   op: "drop";
   link: number;
+  /** What the link's open streams fail with; `RACK_LINK_DOWN` when absent. */
+  error?: WireError;
 }
 
 /** Main thread to Worker: whether the instance is the one installed in its slot. */
@@ -203,11 +207,18 @@ export interface InstalledRequest {
   installed: boolean;
 }
 
-/** Main thread to Worker: reply once these hold markers arrived and no call is being served. */
+/**
+ * Main thread to Worker: reply once these hold markers arrived and no call is being served, and,
+ * with `streams`, once no stream is open either.
+ *
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#swaps-and-resets
+ */
 export interface DrainRequest {
   id: number;
   op: "drain";
   markers: Marker[];
+  /** Wait for the open streams too: the instance retires. */
+  streams: boolean;
 }
 
 /** Main thread to Worker: reply with the call and event counters. */
@@ -280,13 +291,23 @@ export interface CallToProvider {
   port: string;
   member: string;
   input: unknown;
+  /** The call's deadline, a millisecond timestamp; `Infinity` for a call with an input stream. */
   deadline: number;
+  /** Idle timeout of the call's streams, in ms. */
+  idle: number;
+  /** Where the input carries its stream, which follows on this channel. */
+  stream?: StreamSlot;
   /** Address of the caller: `rack` or `panel`. */
   caller: string;
 }
 
-/** The outcome of a call, on the data channel or on a link. */
-export type CallResult = { t: "result"; id: number; ok: true; value: unknown } | CallFailure;
+/**
+ * The outcome of a call, on the data channel or on a link. `stream` says where the value
+ * carries its stream, which follows on the same channel.
+ */
+export type CallResult =
+  | { t: "result"; id: number; ok: true; value: unknown; stream?: StreamSlot }
+  | CallFailure;
 
 /** A failed call. */
 export interface CallFailure {
@@ -309,7 +330,12 @@ export interface LinkCall {
   id: number;
   member: string;
   input: unknown;
+  /** The call's deadline, a millisecond timestamp; `Infinity` for a call with an input stream. */
   deadline: number;
+  /** Idle timeout of the call's streams, in ms. */
+  idle: number;
+  /** Where the input carries its stream, which follows on the link. */
+  stream?: StreamSlot;
 }
 
 /** Consumer to provider on a link: start or stop receiving an event. */
@@ -343,13 +369,13 @@ export interface Taken {
   count: number;
 }
 
-export type ToProvider = LinkCall | Cancel | Subscription | HoldMarker | Taken;
+export type ToProvider = LinkCall | Cancel | Subscription | HoldMarker | Taken | StreamMessage;
 
 /** What a provider sends on a link. */
-export type ToConsumer = CallResult | LinkEvent | HoldMarker;
+export type ToConsumer = CallResult | LinkEvent | HoldMarker | StreamMessage;
 
 /** Data-channel messages the backplane sends. */
-export type DataToWorker = CallToProvider | Cancel;
+export type DataToWorker = CallToProvider | Cancel | StreamMessage;
 
 /** Data-channel messages a Worker sends. */
-export type DataFromWorker = CallResult;
+export type DataFromWorker = CallResult | StreamMessage;

@@ -24,6 +24,11 @@
  * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-calls
  * @decision .agents/decisions/261117_063228-bounded-backlogs.md#bounded-events
  * @decision .agents/decisions/261117_063228-bounded-backlogs.md#stale-calls
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#streams-in-calls
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#timeouts
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#cancellation-and-errors
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#swaps-and-resets
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#observation
  */
 import { type ConnectorInfo, describeConnector, type EventSpec } from "./connector.ts";
 import {
@@ -40,7 +45,7 @@ import {
   needConnector,
   type Watchdog,
 } from "./device.ts";
-import { fromWireError, isCloneable, RackError, toWireError } from "./errors.ts";
+import { fromWireError, isCloneable, RackError, toWireError, type WireError } from "./errors.ts";
 import type {
   CalledRpcMetrics,
   EmittedEventMetrics,
@@ -50,6 +55,7 @@ import type {
   PortMetrics,
   ReceivedEventMetrics,
   ServedRpcMetrics,
+  StreamMetrics,
 } from "./metrics.ts";
 import {
   type AttachRequest,
@@ -64,6 +70,7 @@ import {
   type Fru,
   type HoldEventsRequest,
   type HookRequest,
+  type LinkCall,
   type LiveRequest,
   type Marker,
   type NeedDownRequest,
@@ -80,6 +87,16 @@ import {
   WATCHDOG_MIN,
 } from "./protocol.ts";
 import { validate } from "./schema.ts";
+import {
+  armTimer,
+  cancelStreams,
+  putStream,
+  StreamChannel,
+  type StreamReceiver,
+  StreamSender,
+  type StreamSlot,
+  takeStream,
+} from "./streams.ts";
 import { detach, moveInto, transferList, untransferable } from "./transfer.ts";
 
 // Untyped on purpose: implementations come from device code and are checked at powerOn.
@@ -100,6 +117,10 @@ interface Outgoing {
   readonly stats: CalledRpcMetrics;
   readonly started: number;
   readonly deadline: number;
+  /** The call's timeout in ms; for a call with an input stream, it runs from that stream's end. */
+  readonly ms: number;
+  /** Idle timeout of the call's streams, in ms. */
+  readonly idle: number;
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: unknown) => void;
   /** The input until the call goes out on a link. */
@@ -115,7 +136,18 @@ interface Outgoing {
   link: NeedLink | undefined;
   id: number;
   queued: boolean;
+  /** The result came, or the call failed: its promise has settled. */
   settled: boolean;
+  /** The input stream, from the call until it ends. */
+  sender: StreamSender | undefined;
+  /** Where the input stream goes in the input: a top-level key, or `null` for the input itself. */
+  key: string | null;
+  /** The output stream, from the result until it ends. */
+  receiver: StreamReceiver | undefined;
+  /** The call's streams that haven't ended; the call is unfinished until none is left. */
+  streams: number;
+  /** Counted as finished: it settled, and its streams ended. */
+  finished: boolean;
 }
 
 /** The consumer end of a link. */
@@ -129,6 +161,8 @@ interface NeedLink {
   nextId: number;
   /** Events taken off the link; the provider learns the count in batches. */
   taken: number;
+  /** The streams of the calls on the link, in both directions. */
+  readonly streams: StreamChannel;
 }
 
 /** The calls, links, and subscriptions of one need. */
@@ -165,6 +199,8 @@ interface ConsumerLink {
   /** Events sent on the link, and how many of them the consumer reported taken. */
   sent: number;
   taken: number;
+  /** The streams of the calls on the link, in both directions. */
+  readonly streams: StreamChannel;
 }
 
 interface QueuedEvent {
@@ -209,7 +245,9 @@ const consumers = new Map<number, ConsumerLink>();
 const heldEvents = new Map<string, QueuedEvent[]>();
 /** The token of the last hold marker each link brought. */
 const markers = new Map<number, number>();
-const drains = new Set<{ markers: Marker[]; resolve: () => void }>();
+const drains = new Set<{ markers: Marker[]; streams: boolean; resolve: () => void }>();
+/** The streams of calls from outside the rack, on the data channel; set at boot. */
+let dataStreams: StreamChannel | undefined;
 const served = new Map<string, Map<string, ServedRpcMetrics>>();
 const emitted = new Map<string, Map<string, EmittedEventMetrics>>();
 
@@ -257,6 +295,17 @@ function errorCounts(): Record<string, number> {
 
 function failure(code: string, message: string): Outcome {
   return { ok: false, error: new RackError(code, message) };
+}
+
+/** The stream counters of an RPC member, made when one of its calls first carries a stream. */
+function streamCounters(stats: { streams?: StreamMetrics }): StreamMetrics {
+  stats.streams ??= { opened: 0, open: 0, bytesSent: 0, bytesReceived: 0, errors: errorCounts() };
+  return stats.streams;
+}
+
+/** The streams of a port, on a link or the data channel. */
+function channelOn(port: MessagePort): StreamChannel {
+  return new StreamChannel((message, transfer) => port.postMessage(message, transfer ?? []));
 }
 
 // ---- Control channel ----
@@ -311,7 +360,7 @@ function handle(request: ControlRequest): unknown {
     case "live":
       return live(request);
     case "drop":
-      return drop(request.link);
+      return drop(request.link, request.error);
     case "installed":
       installed = request.installed;
       return undefined;
@@ -348,8 +397,10 @@ async function boot(request: BootRequest): Promise<Fru> {
   const ctx = makeContext(def, { name, u: request.u, config, request });
   booted = { def, ctx, name };
   const data = request.port;
+  const streams = channelOn(data);
+  dataStreams = streams;
   data.addEventListener("message", (event) =>
-    onData(data, (event as MessageEvent<DataToWorker>).data),
+    onData(data, streams, (event as MessageEvent<DataToWorker>).data),
   );
   data.start();
   return {
@@ -527,15 +578,19 @@ function callOut(
 ): Promise<unknown> {
   const where = `${state.name}.${member}`;
   return new Promise((resolve, reject) => {
-    const { timeout, signal, transfer } = options;
+    const { timeout, signal, transfer, streamTimeout } = options;
     const valid = timeout === undefined || (typeof timeout === "number" && timeout >= 0);
     const ms = valid && timeout !== undefined ? timeout : callTimeout;
+    const validIdle =
+      streamTimeout === undefined || (typeof streamTimeout === "number" && streamTimeout >= 0);
     const call: Outgoing = {
       need: state,
       member,
       stats,
       started: performance.now(),
       deadline: Date.now() + ms,
+      ms,
+      idle: validIdle && streamTimeout !== undefined ? streamTimeout : ms,
       resolve,
       reject,
       input,
@@ -546,12 +601,37 @@ function callOut(
       id: 0,
       queued: false,
       settled: false,
+      sender: undefined,
+      key: null,
+      receiver: undefined,
+      streams: 0,
+      finished: false,
     };
     stats.calls++;
     stats.pending++;
     state.unfinished++;
+    // From here on the call owns its stream and its buffers, so they are gone whatever its
+    // outcome.
+    // @decision .agents/decisions/261118_071155-backplane-streams.md#streams-in-calls
     try {
-      // From here on the call owns the buffers, so they are gone whatever its outcome.
+      const taken = takeStream(input, "RACK_INVALID_INPUT", where);
+      if (taken !== undefined) {
+        call.input = taken.value;
+        call.key = taken.key;
+        call.sender = new StreamSender(taken.stream, "RACK_INVALID_INPUT", {
+          idle: call.idle,
+          where,
+          counters: streamCounters(stats),
+          onEnd: (error) => inputEnded(call, error),
+        });
+        call.streams++;
+      }
+    } catch (error) {
+      cancelStreams(input, new RackError("RACK_CANCELLED", `${where}: the call failed`));
+      settle(call, { ok: false, error: error as RackError });
+      return;
+    }
+    try {
       call.transfer = transferList(transfer, where);
     } catch (error) {
       settle(call, { ok: false, error: error as RackError });
@@ -559,6 +639,10 @@ function callOut(
     }
     if (!valid) {
       settle(call, failure("RACK_INVALID_INPUT", `${where}: timeout must be >= 0 ms`));
+      return;
+    }
+    if (!validIdle) {
+      settle(call, failure("RACK_INVALID_INPUT", `${where}: streamTimeout must be >= 0 ms`));
       return;
     }
     if (signal?.aborted) {
@@ -570,17 +654,16 @@ function callOut(
       settle(call, failure("RACK_OVERLOADED", message));
       return;
     }
-    // The caller's host owns the timeout of a call on a link.
-    // @decision .agents/decisions/261116_024226-backplane-links.md#rpc
-    call.timer = setTimeout(() => {
-      const target = call.link?.provider ?? state.name;
-      cancelAtProvider(call);
-      settle(call, failure("RACK_TIMEOUT", `${target}.${member} timed out after ${ms} ms`));
-    }, ms);
+    // A call with an input stream times out from the end of that stream.
+    if (call.sender === undefined) startTimer(call);
     if (signal !== undefined) {
       const onAbort = () => {
-        cancelAtProvider(call);
-        settle(call, failure("RACK_CANCELLED", `${where}: call cancelled`));
+        const error = new RackError("RACK_CANCELLED", `${where}: call cancelled`);
+        // The provider's call.signal aborts too, also when the result came and streams still run.
+        cancelAtProvider(call, true);
+        call.sender?.cancel(error);
+        call.receiver?.cancel(error);
+        settle(call, { ok: false, error });
       };
       signal.addEventListener("abort", onAbort, { once: true });
       call.cleanup = () => signal.removeEventListener("abort", onAbort);
@@ -588,6 +671,43 @@ function callOut(
     if (state.held) enqueue(state, call);
     else send(state, call);
   });
+}
+
+/**
+ * Starts the timeout of a call. The caller's host owns the timeout of a call on a link.
+ *
+ * @decision .agents/decisions/261116_024226-backplane-links.md#rpc
+ */
+function startTimer(call: Outgoing): void {
+  if (call.settled || call.timer !== undefined) return;
+  call.timer = armTimer(call.ms, () => {
+    const target = call.link?.provider ?? call.need.name;
+    cancelAtProvider(call);
+    settle(call, failure("RACK_TIMEOUT", `${target}.${call.member} timed out after ${call.ms} ms`));
+  });
+}
+
+/**
+ * The input stream of a call ended, failed, or was cancelled. The call's timeout runs from then.
+ * A call that still waits to go out fails with the stream's error, such as `RACK_TIMEOUT` once
+ * it has waited `streamTimeout`.
+ *
+ * @decision .agents/decisions/261118_071155-backplane-streams.md#swaps-and-resets
+ */
+function inputEnded(call: Outgoing, error: RackError | undefined): void {
+  call.streams--;
+  if (!call.settled) {
+    if (error !== undefined && call.link === undefined) settle(call, { ok: false, error });
+    else startTimer(call);
+  }
+  finishIfDone(call);
+  checkDrains();
+}
+
+function outputEnded(call: Outgoing): void {
+  call.streams--;
+  finishIfDone(call);
+  checkDrains();
 }
 
 /** Keeps a call until its need is released; `queueLimit` bounds the queue with the rest. */
@@ -616,13 +736,18 @@ function send(state: NeedState, call: Outgoing): void {
     return;
   }
   const id = link.nextId++;
-  const message = {
+  const message: LinkCall = {
     t: "call",
     id,
     member: call.member,
     input: call.input,
-    deadline: call.deadline,
-  } satisfies ToProvider;
+    // The provider sees no deadline for a call with an input stream; its caller times it out.
+    deadline: call.sender === undefined ? call.deadline : Number.POSITIVE_INFINITY,
+    idle: call.idle,
+  };
+  if (call.sender !== undefined) {
+    message.stream = [call.key, link.streams.attach(call.sender)] satisfies StreamSlot;
+  }
   try {
     if (call.transfer === undefined) link.port.postMessage(message);
     else link.port.postMessage(message, call.transfer);
@@ -637,17 +762,25 @@ function send(state: NeedState, call: Outgoing): void {
   link.pending.set(id, call);
 }
 
-function cancelAtProvider(call: Outgoing): void {
-  if (call.settled || call.link === undefined) return;
+/**
+ * Cancels a call at its provider, which aborts the implementation's `call.signal`.
+ *
+ * @param afterResult Cancel also a call whose result came while its streams are still open.
+ */
+function cancelAtProvider(call: Outgoing, afterResult = false): void {
+  if (call.link === undefined || call.finished) return;
+  if (call.settled && !(afterResult && call.streams > 0)) return;
   call.link.port.postMessage({ t: "cancel", id: call.id } satisfies ToProvider);
 }
 
-/** Finishes a call once: stops its timer, counts it, and resolves or rejects it. */
+/**
+ * Settles a call once: stops its timer, counts its outcome, and resolves or rejects it. A call
+ * that fails takes its input stream with it. The call stays unfinished until its streams end.
+ */
 function settle(call: Outgoing, outcome: Outcome): void {
   if (call.settled) return;
   call.settled = true;
   clearTimeout(call.timer);
-  call.cleanup?.();
   if (call.transfer !== undefined) detach(call.transfer);
   call.link?.pending.delete(call.id);
   const { stats } = call;
@@ -658,17 +791,26 @@ function settle(call: Outgoing, outcome: Outcome): void {
     const index = queue.indexOf(call);
     if (index >= 0) queue.splice(index, 1);
   }
-  stats.pending--;
-  call.need.unfinished--;
   stats.timeMs += performance.now() - call.started;
-  if (outcome.ok) {
-    stats.ok++;
-    call.resolve(outcome.value);
-    return;
+  if (outcome.ok) stats.ok++;
+  else {
+    const { code } = outcome.error;
+    stats.errors[code] = (stats.errors[code] ?? 0) + 1;
+    const where = `${call.need.name}.${call.member}`;
+    call.sender?.cancel(new RackError("RACK_CANCELLED", `${where}: the call failed`));
   }
-  const { code } = outcome.error;
-  stats.errors[code] = (stats.errors[code] ?? 0) + 1;
-  call.reject(outcome.error);
+  finishIfDone(call);
+  if (outcome.ok) call.resolve(outcome.value);
+  else call.reject(outcome.error);
+}
+
+/** Counts a call as finished once it has settled and its streams have ended. */
+function finishIfDone(call: Outgoing): void {
+  if (call.finished || !call.settled || call.streams > 0) return;
+  call.finished = true;
+  call.cleanup?.();
+  call.stats.pending--;
+  call.need.unfinished--;
 }
 
 /** Holds or releases a need; a release sends the queued calls on the current link in order. */
@@ -686,7 +828,15 @@ function setHeld(state: NeedState, held: boolean): void {
 
 function linkNeed({ need: name, link: id, end, provider, hold }: NeedLinkRequest): void {
   const state = need(name);
-  const link: NeedLink = { id, port: end, provider, pending: new Map(), nextId: 1, taken: 0 };
+  const link: NeedLink = {
+    id,
+    port: end,
+    provider,
+    pending: new Map(),
+    nextId: 1,
+    taken: 0,
+    streams: channelOn(end),
+  };
   state.links.set(id, link);
   state.current = link;
   end.addEventListener("message", (event) =>
@@ -718,6 +868,9 @@ function downNeed({ need: name, link: id, error }: NeedDownRequest): void {
   if (link === undefined) return;
   state.links.delete(id);
   if (state.current === link) state.current = undefined;
+  // The link's streams fail with the code its pending calls get.
+  // @decision .agents/decisions/261118_071155-backplane-streams.md#cancellation-and-errors
+  link.streams.close(fromWireError(error));
   for (const call of [...link.pending.values()]) {
     settle(call, { ok: false, error: fromWireError(error) });
   }
@@ -730,15 +883,36 @@ function onNeedLink(state: NeedState, link: NeedLink, message: ToConsumer): void
   switch (message.t) {
     case "result": {
       const call = link.pending.get(message.id);
-      if (call === undefined) return;
-      settle(
-        call,
-        message.ok
-          ? { ok: true, value: message.value }
-          : { ok: false, error: fromWireError(message.error) },
-      );
+      const slot = message.ok ? message.stream : undefined;
+      if (call === undefined) {
+        // Nobody waits for the result any more, so its stream is cancelled at its source.
+        if (slot !== undefined) {
+          link.streams.refuse(slot[1], new RackError("RACK_CANCELLED", "the caller gave up"));
+        }
+        return;
+      }
+      if (!message.ok) {
+        settle(call, { ok: false, error: fromWireError(message.error) });
+        return;
+      }
+      let value = message.value;
+      if (slot !== undefined) {
+        const receiver = link.streams.receive(slot[1], {
+          idle: call.idle,
+          where: `${state.name}.${call.member}`,
+          counters: streamCounters(call.stats),
+          onEnd: () => outputEnded(call),
+        });
+        call.receiver = receiver;
+        call.streams++;
+        value = putStream(value, slot[0], receiver.stream);
+      }
+      settle(call, { ok: true, value });
       return;
     }
+    case "stream":
+      link.streams.onMessage(message);
+      return;
     case "event":
       link.taken++;
       if (link.taken % takenBatch === 0) {
@@ -867,6 +1041,7 @@ function attach({ link: id, end, port, consumer, live, held }: AttachRequest): v
     serving: new Map(),
     sent: 0,
     taken: 0,
+    streams: channelOn(end),
   };
   consumers.set(id, link);
   if (held && !heldEvents.has(consumer)) heldEvents.set(consumer, []);
@@ -880,17 +1055,17 @@ function onConsumerLink(link: ConsumerLink, message: ToProvider): void {
   switch (message.t) {
     case "call":
       void serve(
-        message.id,
-        link.portName,
-        message.member,
-        message.input,
-        message.deadline,
+        { ...message, port: link.portName },
+        link.streams,
         link.serving,
         (reply, transfer) =>
           transfer === undefined
             ? link.port.postMessage(reply)
             : link.port.postMessage(reply, transfer),
       );
+      return;
+    case "stream":
+      link.streams.onMessage(message);
       return;
     case "cancel":
       link.serving.get(message.id)?.abort(new RackError("RACK_CANCELLED", "call cancelled"));
@@ -937,10 +1112,17 @@ function live({ consumer, links }: LiveRequest): void {
   }
 }
 
-function drop(id: number): void {
+function drop(id: number, error: WireError | undefined): void {
   const link = consumers.get(id);
   if (link === undefined) return;
   consumers.delete(id);
+  // The link's streams fail with the code the consumer's end got.
+  // @decision .agents/decisions/261118_071155-backplane-streams.md#cancellation-and-errors
+  link.streams.close(
+    error === undefined
+      ? new RackError("RACK_LINK_DOWN", `${link.consumer} is gone`)
+      : fromWireError(error),
+  );
   for (const controller of link.serving.values()) {
     controller.abort(new RackError("RACK_CANCELLED", "call cancelled"));
   }
@@ -951,34 +1133,42 @@ function drop(id: number): void {
 
 // ---- Calls the device serves ----
 
-function onData(data: MessagePort, message: DataToWorker): void {
+function onData(data: MessagePort, streams: StreamChannel, message: DataToWorker): void {
   if (message.t === "call") {
-    void serve(
-      message.id,
-      message.port,
-      message.member,
-      message.input,
-      message.deadline,
-      external,
-      (reply, transfer) =>
-        transfer === undefined ? data.postMessage(reply) : data.postMessage(reply, transfer),
+    void serve(message, streams, external, (reply, transfer) =>
+      transfer === undefined ? data.postMessage(reply) : data.postMessage(reply, transfer),
     );
+  } else if (message.t === "stream") {
+    streams.onMessage(message);
   } else {
     external.get(message.id)?.abort(new RackError("RACK_CANCELLED", "call cancelled"));
   }
 }
 
+/** A call to serve, from a link or from outside the rack. */
+interface Incoming {
+  id: number;
+  port: string;
+  member: string;
+  input: unknown;
+  deadline: number;
+  idle: number;
+  stream?: StreamSlot;
+}
+
+/**
+ * Serves one call. It counts as being served, for drains and `status()`, until its result is
+ * sent, and as active until its streams have ended too.
+ */
 async function serve(
-  id: number,
-  port: string,
-  member: string,
-  input: unknown,
-  deadline: number,
+  message: Incoming,
+  channel: StreamChannel,
   registry: Map<number, AbortController>,
   reply: (result: CallResult, transfer: ArrayBuffer[] | undefined) => void,
 ): Promise<void> {
   const state = booted;
   if (state === undefined) return;
+  const { id, port, member, deadline, idle } = message;
   const address = `${state.name}.${port}.${member}`;
   const stats = served.get(port)?.get(member);
   const started = performance.now();
@@ -990,9 +1180,53 @@ async function serve(
     stats.calls++;
     stats.active++;
   }
-  const timer = setTimeout(
-    () => controller.abort(new RackError("RACK_TIMEOUT", `${address}: deadline passed`)),
-    Math.max(0, deadline - Date.now()),
+  /** The call's streams that haven't ended. */
+  let open = 0;
+  let answered = false;
+  let complete = false;
+  const finishIfDone = () => {
+    if (complete || !answered || open > 0) return;
+    complete = true;
+    // A cancel that comes later finds nothing to abort.
+    if (registry.get(id) === controller) registry.delete(id);
+    if (stats !== undefined) stats.active--;
+  };
+  let input = message.input;
+  let receiver: StreamReceiver | undefined;
+  let sender: StreamSender | undefined;
+  // The receiving end opens before anything awaits, so the stream's first piece finds it.
+  if (message.stream !== undefined) {
+    const [key, streamId] = message.stream;
+    if (stats === undefined) {
+      channel.refuse(streamId, new RackError("RACK_NO_ROUTE", `${address} is not an RPC member`));
+    } else {
+      receiver = channel.receive(streamId, {
+        idle,
+        where: address,
+        counters: streamCounters(stats),
+        onEnd: () => {
+          open--;
+          finishIfDone();
+          checkDrains();
+        },
+      });
+      open++;
+      input = putStream(input, key, receiver.stream);
+    }
+  }
+  // A caller that cancels the call, also after its result, ends its streams.
+  controller.signal.addEventListener(
+    "abort",
+    () => {
+      const reason = abortReason(controller.signal, address);
+      receiver?.cancel(reason);
+      sender?.cancel(reason);
+    },
+    { once: true },
+  );
+  // A call with an input stream has no deadline here; its caller cancels it.
+  const timer = armTimer(deadline - Date.now(), () =>
+    controller.abort(new RackError("RACK_TIMEOUT", `${address}: deadline passed`)),
   );
   /** Buffers the implementation moves with the result; created when it lists one. */
   let moving: Set<ArrayBuffer> | undefined;
@@ -1018,6 +1252,8 @@ async function serve(
     },
   };
   let result: CallResult;
+  /** What the implementation returned, so a result that fails can cancel its streams. */
+  let returned: unknown;
   try {
     // Its caller has given up already: the call waited past its deadline.
     if (Date.now() >= deadline) {
@@ -1033,15 +1269,38 @@ async function serve(
     }
     const parsed = await validate(spec.input, input);
     if (!parsed.ok) throw new RackError("RACK_INVALID_INPUT", `${address}: ${parsed.message}`);
-    const value = await impl(parsed.value, call);
-    const output = await validate(spec.output, value);
+    returned = await impl(parsed.value, call);
+    const output = await validate(spec.output, returned);
     if (!output.ok) throw new RackError("RACK_INVALID_OUTPUT", `${address}: ${output.message}`);
-    result = { t: "result", id, ok: true, value: output.value };
+    returned = output.value;
+    const taken = takeStream(output.value, "RACK_INVALID_OUTPUT", address);
+    if (taken === undefined) {
+      result = { t: "result", id, ok: true, value: output.value };
+    } else {
+      // A caller that gave the call up gets no stream; its source is cancelled.
+      if (controller.signal.aborted) throw abortReason(controller.signal, address);
+      sender = new StreamSender(taken.stream, "RACK_INVALID_OUTPUT", {
+        idle,
+        where: address,
+        counters: streamCounters(stats ?? {}),
+        onEnd: () => {
+          open--;
+          // An input stream lasts as long as the output stream that reads it.
+          receiver?.cancel(new RackError("RACK_CANCELLED", `${address}: the output stream ended`));
+          finishIfDone();
+          checkDrains();
+        },
+      });
+      open++;
+      const slot: StreamSlot = [taken.key, channel.attach(sender)];
+      result = { t: "result", id, ok: true, value: taken.value, stream: slot };
+    }
   } catch (error) {
+    // A result that fails takes the streams it would have carried.
+    cancelStreams(returned, new RackError("RACK_CANCELLED", `${address}: the call failed`));
     result = { t: "result", id, ok: false, error: toWireError(error) };
   } finally {
     clearTimeout(timer);
-    registry.delete(id);
   }
   sent = true;
   // Only a result that succeeded carries the buffers, and sending it detaches them.
@@ -1057,6 +1316,7 @@ async function serve(
       ok: false,
       error: { code: "RACK_INVALID_OUTPUT", message: `${address}: output cannot be cloned` },
     };
+    sender?.cancel(new RackError("RACK_CANCELLED", `${address}: the call failed`));
     try {
       reply(result, undefined);
     } catch {
@@ -1065,36 +1325,72 @@ async function serve(
   }
   // A failed call does not carry the buffers, yet they are gone all the same.
   if (!result.ok && moving !== undefined) detach([...moving]);
+  // An input stream never outlives a result that carries no stream.
+  if (!result.ok || result.stream === undefined) {
+    receiver?.cancel(
+      new RackError(
+        "RACK_CANCELLED",
+        `${address}: the call returned before it read all of its input`,
+      ),
+    );
+  }
   serving--;
   Atomics.sub(gauge, SHARED_SERVING, 1);
   if (stats !== undefined) {
-    stats.active--;
     stats.timeMs += performance.now() - started;
     if (result.ok) stats.ok++;
     else stats.errors[result.error.code] = (stats.errors[result.error.code] ?? 0) + 1;
   }
+  answered = true;
+  finishIfDone();
   checkDrains();
+}
+
+/** The reason an aborted call's signal carries, as a `RackError`. */
+function abortReason(signal: AbortSignal, address: string): RackError {
+  const reason: unknown = signal.reason;
+  return reason instanceof RackError
+    ? reason
+    : new RackError("RACK_CANCELLED", `${address}: call cancelled`);
 }
 
 // ---- Draining and metrics ----
 
-function drain({ markers: expected }: DrainRequest): Promise<void> {
+function drain({ markers: expected, streams }: DrainRequest): Promise<void> {
   return new Promise((resolve) => {
-    drains.add({ markers: expected, resolve });
+    drains.add({ markers: expected, streams, resolve });
     checkDrains();
   });
 }
 
-/** Resolves the drains whose markers arrived, once no call is being served. */
+/**
+ * Resolves the drains whose markers arrived, once no call is being served, and once no stream is
+ * open for a drain that waits for streams too.
+ */
 function checkDrains(): void {
   if (drains.size === 0 || serving > 0) return;
+  let streaming: boolean | undefined;
   for (const entry of [...drains]) {
+    if (entry.streams) {
+      streaming ??= openStreams() > 0;
+      if (streaming) continue;
+    }
     // A link that closed brings no marker, and no call either.
     if (entry.markers.every(([link, token]) => markers.get(link) === token || !hasLink(link))) {
       drains.delete(entry);
       entry.resolve();
     }
   }
+}
+
+/** Streams open at this instance, in calls it makes and calls it serves, in both directions. */
+function openStreams(): number {
+  let count = dataStreams?.open ?? 0;
+  for (const link of consumers.values()) count += link.streams.open;
+  for (const state of needs.values()) {
+    for (const link of state.links.values()) count += link.streams.open;
+  }
+  return count;
 }
 
 function hasLink(id: number): boolean {
