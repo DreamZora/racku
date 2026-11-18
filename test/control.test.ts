@@ -7,7 +7,7 @@
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-tcp-endpoint
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-protocol
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-command
- * @decision .agents/decisions/261117_182058-ci-on-main-and-on-request.md#decision
+ * @decision .agents/decisions/261118_015210-ci-with-windows.md#decision
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";

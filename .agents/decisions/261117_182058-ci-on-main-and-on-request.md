@@ -1,6 +1,6 @@
 # Decision: Continuous integration on main and on request
 
-Status: accepted
+Status: superseded — replaced by [261118_015210-ci-with-windows.md](261118_015210-ci-with-windows.md)
 
 ## Background
 

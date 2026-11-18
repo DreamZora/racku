@@ -47,6 +47,15 @@ Status: accepted
   - The README's "Development" section, and AGENTS.md's current state.
   - The status line of the replaced decision.
 
+## Implementation
+
+- `.github/workflows/check.yml` holds the three jobs, none with `continue-on-error`.
+  - It runs on `push` to `main` and on `workflow_dispatch`.
+  - Its concurrency group is `check-${{ github.ref }}`, with `cancel-in-progress`.
+  - It pins `actions/checkout` v7.0.1 and `oven-sh/setup-bun` v2.2.0 by commit hash.
+- `test/control.test.ts` skips the Unix socket tests and the file-mode check on Windows. Its test of the Windows defaults runs only on Windows.
+- `CONTROL_DIR` in `test/fixtures/app.ts` sits in `/tmp` outside Windows, which keeps the test sockets within the 103 characters that macOS allows.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-18, after asking that Windows be supported.
