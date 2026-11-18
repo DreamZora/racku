@@ -1,14 +1,19 @@
-# The checks of every push and pull request, as
-# .agents/decisions/261117_063301-continuous-integration.md decides.
+# The checks of main and of manual runs, as
+# .agents/decisions/261117_182058-ci-on-main-and-on-request.md decides.
 name: check
 
 on:
   push:
-  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# A new run checks everything an unfinished run of the same branch would.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   linux:
@@ -25,11 +30,6 @@ jobs:
 
   macos:
     name: macOS
-    # macOS minutes cost ten times as much: only changes to main, and manual runs.
-    if: >-
-      github.event_name == 'workflow_dispatch'
-      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-      || (github.event_name == 'pull_request' && github.base_ref == 'main')
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
@@ -42,10 +42,6 @@ jobs:
 
   windows:
     name: Windows
-    if: >-
-      github.event_name == 'workflow_dispatch'
-      || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-      || (github.event_name == 'pull_request' && github.base_ref == 'main')
     runs-on: windows-latest
     timeout-minutes: 15
     # No decision makes Windows a supported platform yet, so this job reports and never fails

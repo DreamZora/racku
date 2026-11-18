@@ -19,7 +19,7 @@ This file defines the project background, architectural constraints, and working
   - [Design goals and principles](.agents/decisions/261117_062916-design-principles.md): the goals and practices that [Design principles](#design-principles) summarizes.
   - [Watchdog](.agents/decisions/261117_062959-watchdog.md): an event-loop watchdog for every device, and watchdogs that devices feed from their work loops.
   - [Bounded backlogs instead of a breaker and thermal](.agents/decisions/261117_063228-bounded-backlogs.md): one bound on the calls and events waiting between devices, `RACK_OVERLOADED`, and no work on expired calls.
-  - [Continuous integration on GitHub Actions](.agents/decisions/261117_063301-continuous-integration.md): the checks on Linux, and the tests on macOS and Windows.
+  - [Continuous integration on main and on request](.agents/decisions/261117_182058-ci-on-main-and-on-request.md), which replaces the first CI decision: the checks on Linux, and the tests on macOS and Windows, for pushes to `main` and manual runs.
 - The minimum Bun version is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. Everything else on that list, such as the `inline` and `chassis` forms and the WebSocket panel, still needs its own decision before work starts.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
@@ -146,6 +146,7 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 3. Implement only what `accepted` decisions cover, do not widen the scope along the way, and reference decisions in code as required.
 4. Put tests and implementation in the same change, using `bun:test`. See the global rules for how documented capabilities map to tests.
 5. Run the checks closest to the change first, then widen them with the scope; see [Commands](#commands). Report only commands that actually ran, with their results.
+   - CI runs only for pushes to `main` and manual runs, so `bun run check` before each commit is what checks a branch. A change to platform behavior, such as paths, sockets, signals, or file modes, needs a manual run on its branch before it merges; ask the user to start one.
 6. Finish by updating `## Implementation` in the affected decisions and the documentation they affect. Commits follow the global rules and list the relevant decisions in `Context:`.
 
 ## Commands

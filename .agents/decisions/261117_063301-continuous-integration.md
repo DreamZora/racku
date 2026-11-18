@@ -1,6 +1,6 @@
 # Decision: Continuous integration on GitHub Actions
 
-Status: accepted
+Status: superseded — replaced by [261117_182058-ci-on-main-and-on-request.md](261117_182058-ci-on-main-and-on-request.md)
 
 ## Background
 

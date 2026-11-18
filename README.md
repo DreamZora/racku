@@ -591,7 +591,7 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 | Check decision records | `bun run check:decisions` |
 | All of the above | `bun run check` |
 
-CI runs `bun run check` on Linux for every push and pull request, and `bun test` on macOS and Windows for changes to `main`; the Windows job only reports.
+CI runs for every push to `main`, and on request: `bun run check` on Linux, and `bun test` on macOS and Windows, where the Windows job only reports. To check a branch before merging it, start the workflow by hand with "Run workflow" on the Actions tab, or with `gh workflow run check.yml --ref <branch>`.
 
 Design decisions live in [`.agents/decisions/`](.agents/decisions); [`AGENTS.md`](AGENTS.md) explains how the project is run.
 
