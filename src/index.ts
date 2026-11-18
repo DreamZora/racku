@@ -57,7 +57,6 @@ export {
   type RackErrorCode,
   type WireError,
 } from "./errors.ts";
-export { type FetchHandler, Http, httpHandler } from "./http.ts";
 export type { ListenerState, WatchdogStatus } from "./instance.ts";
 export type {
   Listener,
@@ -72,8 +71,6 @@ export type {
 } from "./listeners.ts";
 export type { LogEntry, Logger } from "./log.ts";
 export {
-  type HttpPanelSpec,
-  type PanelSpec,
   type PlacedRackSpec,
   type RackManifest,
   type RackSpec,

@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { type DeviceMetrics, type RackHandle, slot } from "rack42u";
+import { httpPanel } from "rack42u/std";
 import { errorOf, FIXTURES, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -153,10 +154,13 @@ describe("rack.metrics()", () => {
     });
   });
 
-  test("README.md: calls from the HTTP panel count among the calls served", async () => {
+  // @decision .agents/decisions/261118_071513-http-panel-device.md#observation
+  test("README.md: calls from the HTTP panel count among the calls served, and under the panel's need for each route target", async () => {
     const { running, rec } = await startRack({
-      slots: { 1: slot("./devices/web.ts") },
-      panel: { http: { port: 0, routes: { "/web/*": "web.http" } } },
+      slots: {
+        1: slot("./devices/web.ts"),
+        2: httpPanel({ port: 0, routes: { "/web/*": "web.http" } }),
+      },
     });
     const response = await fetch(new URL("/web/greeting", rec.panelUrl()));
     expect(await response.text()).toBe("hello");
@@ -165,11 +169,13 @@ describe("rack.metrics()", () => {
       calls: 1,
       ok: 1,
     });
-    // The rack counts them as calls from outside the rack too, under the port the route names.
-    expect((await running.metrics()).outside.ports["web.http"]?.handle).toMatchObject({
+    expect((await device(running, "http-panel")).needs.web_http?.handle).toMatchObject({
+      kind: "rpc",
       calls: 1,
       ok: 1,
     });
+    // They are calls between devices, not calls from outside the rack.
+    expect((await running.metrics()).outside.ports).toEqual({});
   });
 
   test("README.md: counters restart when a device swaps or resets", async () => {

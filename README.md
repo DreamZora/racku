@@ -4,7 +4,7 @@ rack42u is a Bun framework for building an application out of hot-swappable **de
 
 The framework provides the rack runtime and a few standard devices. What you mount in the rack, and whether the result is an API server, a worker process, or something else, is up to you.
 
-> **Status: P2.** P2 adds watchdogs for hung devices, stops that wait for a device's thread to end, and bounds on every backlog between devices. P1 added scanned racks, cold swaps and restarts, update safety, and `rack ctl` to P0, the first usable version. See [Not supported yet](#not-supported-yet) for what is still missing.
+> **Status: P3.** P3 adds byte streams in calls, listeners that devices open and that the rack hands over across swaps, and the HTTP panel as a standard device, with WebSocket, streaming bodies, and certificates that change without a restart. P2 added watchdogs for hung devices, stops that wait for a device's thread to end, and bounds on every backlog between devices. P1 added scanned racks, cold swaps and restarts, update safety, and `rack ctl` to P0, the first usable version. See [Not supported yet](#not-supported-yet) for what is still missing.
 
 ## Requirements
 
@@ -13,7 +13,7 @@ The framework provides the rack runtime and a few standard devices. What you mou
 
 ## Try the example
 
-The repository contains an example app, [`examples/shop-api`](examples/shop-api): a SQLite database at the bottom of the rack, an in-memory cache above it, and an orders API on top.
+The repository contains an example app, [`examples/shop-api`](examples/shop-api): a SQLite database at the bottom of the rack, an in-memory cache above it, an orders API above that, and on top the HTTP panel, which passes requests for `/api/*` to the orders API.
 
 ```sh
 bun install
@@ -55,7 +55,7 @@ The sections below build a second small app, file by file. The test suite extrac
 | Backplane | The only channel between devices. Devices never import each other. |
 | Link | A direct channel the backplane sets up from one device's need to another device's port. Calls and events between devices travel on links, Worker to Worker, without passing through the rack's main thread. |
 | Patch | An explicit connection, needed when several devices provide the same connector. |
-| Panel | An external port owned by the rack, such as the HTTP panel. |
+| Panel | A device that owns external connections, such as the standard [HTTP panel](#http-panel), and passes the work to other devices through the backplane. |
 | Listener | An HTTP server, WebSocket included, that a device opens with `ctx.serve()`, and that the rack hands over when the device swaps. |
 | Firmware | The hashed bundle a device file is built into; the hash is its version. |
 | Swap | The one process behind replace, hot reload, plug, and unplug. |
@@ -284,24 +284,24 @@ A manifest names the device file in each slot. It never imports device code; the
 ```ts
 // rack.ts
 import { rack, slot } from "rack42u";
-import { memkv } from "rack42u/std";
+import { httpPanel, memkv } from "rack42u/std";
 
 export default rack("hello", {
   slots: {
     1: memkv(),
     3: slot("./devices/greeter.ts", { config: { prefix: "Hello," } }),
     4: slot("./devices/web.ts"),
+    5: httpPanel({ port: 3000, routes: { "/greet": "web.http" } }),
   },
-  panel: { http: { port: 3000, routes: { "/greet": "web.http" } } },
 });
 ```
 
-The `web` device is defined under [HTTP panel](#http-panel).
+The `web` device is defined under [HTTP panel](#http-panel). The panel is a device too, above the devices it routes to.
 
 - Relative device paths resolve against the rack base directory, which for `rack start` and `rack dev` is the manifest's directory.
 - A device's name defaults to its model. Give devices that share a model distinct names with `slot(path, { name })`.
 - Each need is wired to the only port with the same connector id among the devices below it. When there are several, add a patch: `patch: [["greeter.cache", "memkv.kv"]]`.
-- The rack refuses to start when slots overlap, a device does not fit, two devices share a name, a need has no provider below it or more than one, or a patch or panel route names something that does not exist.
+- The rack refuses to start when slots overlap, a device does not fit, two devices share a name, a need has no provider below it or more than one, or a patch names something that does not exist.
 
 ## Scanned racks
 
@@ -310,19 +310,22 @@ Instead of placing every device by hand, a manifest can name the directories tha
 ```ts
 // A scanned manifest: slots and patches are worked out from the device files.
 import { rack } from "rack42u";
-import { sqlite } from "rack42u/std";
+import { httpPanel, sqlite } from "rack42u/std";
 
 export default rack("app", {
-  devices: ["./devices", sqlite({ path: "data/app.db" })],
-  roots: ["a", "b", "c"],
-  panel: { http: { port: 3000, routes: { "/api/*": "a.http" } } },
+  devices: [
+    "./devices",
+    sqlite({ path: "data/app.db" }),
+    httpPanel({ port: 3000, routes: { "/api/*": "a.http" } }),
+  ],
+  roots: ["http-panel", "b", "c"],
 });
 ```
 
 - **`devices`** lists directories and specs.
   - Every `.ts`, `.tsx`, `.js`, and `.mjs` file below a directory, at any depth, must default-export a device. Files and folders whose names start with `_` or `.` are skipped, and so is `node_modules`.
   - A `slot()` or standard-device spec adds one file, and its `config` becomes that model's default. A `name` in it defines a variant: the same file under another model name.
-- **`roots`** names the models the rack starts on its own; a panel route that names a model adds it. Everything else starts only when something needs it.
+- **`roots`** names the models the rack starts on its own. Everything else starts only when something needs it, such as the models that a panel's routes name.
 
 A need either shares its provider or owns a copy of it:
 
@@ -333,7 +336,7 @@ needs: { d: own(D), f: own(F) },
 needs: { e: E, f: own(F) },
 ```
 
-Each model has one shared instance, named after the model, and each `own` need gets a copy named `<consumer>-<need>`. With the roots `a`, `b`, and `c`, and `b` needing `E` as well, the plan is:
+Each model has one shared instance, named after the model, and each `own` need gets a copy named `<consumer>-<need>`. With the roots `http-panel`, `b`, and `c`, the panel's route to `a`, and `b` needing `E` as well, the plan is:
 
 | Slot | Instance | Serves |
 |---|---|---|
@@ -341,9 +344,10 @@ Each model has one shared instance, named after the model, and each `own` need g
 | U2 | `a-f` | `a` only |
 | U3 | `c-f` | `c` only |
 | U4 | `e` | `b` and `c` |
-| U5 | `a` | root |
+| U5 | `a` | `http-panel` |
 | U6 | `b` | root |
 | U7 | `c` | root |
+| U8 | `http-panel` | root |
 
 - **Order:** every instance sits above what it needs, so the rack starts bottom up and stops top down as usual. Where the dependency graph leaves the order open, a higher `priority` in the device file goes first. Priority is an integer that defaults to 0, and a device passes it down to what it needs. Layers, then names, settle the rest.
 - **Cycles:** a cycle fails at startup with its path, for example `cycle: a.d → a-d.back → a`. The usual fix applies: the lower device emits events, and the upper one subscribes to them.
@@ -445,19 +449,19 @@ Management operations run one at a time, in the order they were called. Firmware
 - `ok` counts successes and `errors` counts failures by error code, `RACK_TIMEOUT` and `RACK_CANCELLED` included. `timeMs` is the total duration of the finished calls, so `timeMs / (ok + errors)` is the mean.
 - An event member a device provides counts `emitted` events and `dropped` deliveries; one it needs counts `received` events.
 - A device's counters live in its Worker, which keeps them from the moment its instance boots, so they restart when a device swaps or resets. A device that does not answer within `hookTimeout` is left out.
-- `outside` counts the calls from outside the rack, through `call()` and the panel, the way a need counts its calls, by address and member:
+- `outside` counts the calls from outside the rack, through `call()`, the way a need counts its calls, by address and member:
 
   ```js
   {
     ports: { // per <device>.<port> and member
-      "web.http": { handle: { kind: "rpc", calls: 812, ok: 805, errors: { RACK_OVERLOADED: 7 }, pending: 0, queued: 0, timeMs: 1250.7 } },
+      "greeter.greeter": { greet: { kind: "rpc", calls: 812, ok: 805, errors: { RACK_OVERLOADED: 7 }, pending: 0, queued: 0, timeMs: 1250.7 } },
     },
     unrouted: 0, // calls to an address or member that doesn't exist
   }
   ```
 
   - It includes the calls that the rack answered itself without reaching a device: refused at `queueLimit`, held past their deadline while the device swapped or reset, or sent to a device that was `faulted` or `resetting`.
-  - The panel's calls count under the member `handle` of the port its route names.
+  - The HTTP panel's calls are calls between devices, so they count under the panel's needs instead, as [HTTP panel](#http-panel) describes.
   - The main thread keeps these counters, so they last across swaps and resets. A port's counters start at its first call, and go away when its device is unplugged; a member's go away when a swap removes the member.
 - After `stop()`, `metrics()` resolves with no devices and empty `outside` counters.
 
@@ -465,7 +469,7 @@ Management operations run one at a time, in the order they were called. Firmware
 
 Every swap follows the same sequence:
 
-1. The new firmware boots in a standby instance, and the rack checks that ports other devices or panel routes use still exist with the same connector. If not, the swap is rejected with `RACK_SWAP_REJECTED`.
+1. The new firmware boots in a standby instance, and the rack checks that ports other devices use, a panel's routes included, still exist with the same connector. If not, the swap is rejected with `RACK_SWAP_REJECTED`.
 2. The new instance runs `powerOn` and `selfTest` while the old one keeps serving.
 3. The old instance runs `deactivate`. If the device has `snapshot`/`restore`, calls to the slot are held while the old instance finishes its calls, and its snapshot is restored into the new instance.
 4. The new instance runs `activate`. Calls to the slot are held for a moment and then switch to it in one step; held calls go to the new instance, and none are lost.
@@ -498,7 +502,7 @@ A hot swap hands over everything the rack holds. In-memory state crosses only th
 | Links to and from other devices | Switched to the new instance in one step |
 | Event subscriptions | Made again by the new instance, usually in `powerOn` |
 | Events sent to it during the hold | Queued, then delivered, up to `queueLimit` |
-| HTTP connections | Stay with the panel |
+| HTTP connections and WebSockets | Stay with the [HTTP panel](#http-panel), a device of its own; a device's own [listener](#listeners) hands its port over |
 | Timers and background tasks | Stopped by `deactivate`, started again by `activate` |
 | In-memory state | `snapshot` on the old instance, `restore` on the new one |
 | Open files and sockets | Not handed over: the old instance closes them and the new one opens its own |
@@ -511,11 +515,10 @@ When a scanned rack's plan changes, or `rack dev` sees the manifest change, the 
 2. Devices whose firmware or configuration changed are replaced.
 3. Needs whose provider changed are rewired. The device keeps running, and only its calls switch to the new provider.
 4. Devices that left are unplugged, from the top down, once nothing uses them.
-5. Panel routes follow the manifest.
 
 - **Failures:** each step leaves a valid rack. A step that fails is reported in the results of `reload()`, and the rest of the rack keeps running.
 - **Under `rack start`:** the plan file decides. A new plan runs only once the file records it, for example after `rack plan --write`.
-- **Restart needed:** renaming the rack, switching between slots and scanned devices, and changing the panel port.
+- **Restart needed:** renaming the rack, and switching between slots and scanned devices.
 - **From code:** `reload(manifest)` applies an edited manifest the same way.
 
 ### Crashes
@@ -600,15 +603,15 @@ An update can pass `selfTest` and still be defective. The rack guards against th
 A device that falls behind can't take the rack down with it: every backlog between devices has a limit, and what goes beyond the limit fails at once.
 
 - **Calls.** A need has at most `queueLimit` calls unfinished, 10 000 by default: calls on their way, being served, and held while the provider swaps.
-  - Calls from outside the rack, through `call()` and the panel, are counted per device the same way.
-  - A call beyond the limit fails at once with `RACK_OVERLOADED`, without reaching the provider. The panel answers it with 503.
+  - Calls from outside the rack, through `call()`, are counted per device the same way. The HTTP panel's calls are calls of its needs, bounded as any.
+  - A call beyond the limit fails at once with `RACK_OVERLOADED`, without reaching the provider. The HTTP panel answers it with 503.
 - **Events.** A subscriber that falls `queueLimit` events behind misses the next ones. The provider counts them in `dropped`, and `emit` doesn't fail. Subscribers that keep up get every event.
 - **Expired calls.** A provider doesn't start a call whose deadline passed while the call waited. It answers `RACK_TIMEOUT` at once, so a provider that falls behind spends its time on calls that someone still waits for.
 - **Observing it.**
   - A refused call counts under `RACK_OVERLOADED` among the errors of its need in `metrics()`, and an expired call under `RACK_TIMEOUT` among the errors of the provider's member.
   - A refused call from outside the rack counts in the `outside` counters of `metrics()`, under its port and member.
   - `pending`, `active`, and the event-loop delay `loop` show load building up.
-- **Policy stays in devices.** The rack doesn't retry, open circuit breakers, or limit rates on its own, since whether to retry, wait, or degrade depends on the device. A device can refuse work for a limit of its own, such as a pool of connections, by throwing `RACK_OVERLOADED`; callers and the panel treat it the same way.
+- **Policy stays in devices.** The rack doesn't retry, open circuit breakers, or limit rates on its own, since whether to retry, wait, or degrade depends on the device. A device can refuse work for a limit of its own, such as a pool of connections, by throwing `RACK_OVERLOADED`; callers and the HTTP panel treat it the same way.
 
 ## Managing a running rack
 
@@ -644,15 +647,25 @@ rack ctl stop                            # shut down in order, like Ctrl-C
 
 From code, `start(manifest, { control: true })` opens the same endpoint.
 
-## HTTP panel
+## Standard devices
 
-`panel.http.routes` maps [Bun route patterns](https://bun.sh/docs/api/http#routing), such as `/orders/:id` and `/api/*`, to ports that implement `http/v1`. Each request goes to the instance installed at that moment, so swaps do not interrupt the server.
+`rack42u/std` exports the standard connectors and the factories that mount the standard devices.
 
-`httpHandler` turns a fetch-style function, `(request: Request) => Response | Promise<Response>`, into an `http/v1` implementation:
+- **`memkv(options?)`** provides `kv: Kv` (`kv/v1`), an in-memory store of string keys and string values: `get(key)`, `set({ key, value })`, `delete(key)`, `keys(prefix)`, and a `changed` event with the key after every `set` and every `delete` that removed a key. Entries move to the new instance during swaps and hot reloads; a restart starts empty.
+- **`sqlite(config, options?)`** provides `sql: Sql` (`sql/v1`) on `bun:sqlite`: `query({ sql, params? })` returns rows as objects, `run({ sql, params? })` returns `{ changes, lastInsertRowid }`, and `batch([...statements])` runs statements in one transaction and rolls back if one fails. Parameters bind to positional `?` placeholders. `config.path` is relative to the base directory, missing directories are created, and file databases use WAL mode; `":memory:"` gives an in-memory database that moves to the new instance during a swap. Database errors fail with `SQL_ERROR`, with the driver's code, such as `SQLITE_CONSTRAINT_UNIQUE`, in `data.code`.
+
+- **`httpPanel(config, options?)`** mounts `http-panel`, the standard HTTP panel, which [HTTP panel](#http-panel) describes.
+
+Each factory takes `{ name }` in `options` to rename the device.
+
+### HTTP panel
+
+`httpPanel(config, options?)` mounts the HTTP panel, `http-panel`. It listens for HTTP and WebSocket on a [listener](#listeners) of its own, and passes each request, and each WebSocket message, to the port its route names. Such a port implements `http/v2`, to which `httpHandler` adapts a fetch-style function:
 
 ```ts
 // devices/web.ts
-import { device, Http, httpHandler } from "rack42u";
+import { device } from "rack42u";
+import { Http, httpHandler } from "rack42u/std";
 import { Greeter } from "../connectors.ts";
 
 export default device({
@@ -668,16 +681,99 @@ export default device({
 });
 ```
 
-An `http/v1` call carries the method, URL, headers, route parameters, and body of the request; `httpHandler` hands your function a standard `Request` with the same method, URL, headers, and body. Duplicate response headers, such as several `Set-Cookie` headers, are kept. Bodies are copied in full. When the call fails, the panel answers with a JSON body `{ code, message }` and status 503 for `RACK_LINK_DOWN` and `RACK_OVERLOADED`, 504 for `RACK_TIMEOUT`, and 502 for anything else. Unmatched paths get 404.
+**Routes.** `routes` maps [Bun route patterns](https://bun.sh/docs/api/http#routing), such as `/orders/:id` and `/api/*`, to `<device>.<port>` addresses. Each distinct address is a need of the panel, which [`patched()`](#needs-from-configuration) wires to it, named after the address with `.` and `-` as `_`, such as `orders_http`, and with a `_` in front of a leading digit. So the rules of needs apply:
 
-## Standard devices
+- The panel sits above every device it routes to. A route to a device that isn't below it, to an unknown device, or to a port that isn't `http/v2` fails with `RACK_MANIFEST`. Two addresses that give one need name fail with `RACK_INVALID_CONFIG`.
+- In a scanned rack, list the panel in `roots`; its routes pull in the models they name.
+- Each request goes to the instance installed at that moment, so swaps of the devices behind the panel don't interrupt it. A swap that removes a routed port is refused, as for any port in use.
+- Editing the panel's configuration, its routes included, replaces the panel without a restart. A new port moves its listener.
+- `{ name }` in `options` names a panel other than `http-panel`, so that a rack can mount several, such as a public one and an admin one on another port.
 
-`rack42u/std` exports the standard connectors and the factories that mount the standard devices.
+| Field | Default | Meaning |
+|---|---|---|
+| `hostname` | `127.0.0.1` | The address to listen on. `0.0.0.0` listens on every IPv4 interface. |
+| `port` | required | 0 to 65 535. 0 picks a free port, which the panel keeps while the rack runs, and which the log's `listening` entry and `status()` show. |
+| `routes` | required | Route patterns mapped to `<device>.<port>` addresses. Unmatched paths get 404. |
+| `allowedHosts` | none | More names that clients may send as `Host` to a panel on a loopback `hostname`, besides its address and `localhost`. Other hosts get 403. |
+| `maxBodySize` | 1 MiB | The largest request body, in bytes. A larger one gets 413. |
+| `idleTimeout` | 10 | Seconds, 1 to 255. An idle connection closes, and a body that moves nothing for so long fails. |
+| `tls` | none | `{ cert, key }`, or a list of `{ cert, key, serverName }` for SNI: paths of PEM files, relative to the base directory. |
+| `certificateCheck` | 60 | How often the panel checks its certificate files, in seconds, 1 to 3 600. |
+| `webSocket.maxMessageSize` | 1 MiB | The largest message a client may send, in bytes. A larger one closes its WebSocket with 1009. |
+| `webSocket.maxConnections` | 10 000 | The most open WebSockets. Upgrades beyond them get 503. |
 
-- **`memkv(options?)`** provides `kv: Kv` (`kv/v1`), an in-memory store of string keys and string values: `get(key)`, `set({ key, value })`, `delete(key)`, `keys(prefix)`, and a `changed` event with the key after every `set` and every `delete` that removed a key. Entries move to the new instance during swaps and hot reloads; a restart starts empty.
-- **`sqlite(config, options?)`** provides `sql: Sql` (`sql/v1`) on `bun:sqlite`: `query({ sql, params? })` returns rows as objects, `run({ sql, params? })` returns `{ changes, lastInsertRowid }`, and `batch([...statements])` runs statements in one transaction and rolls back if one fails. Parameters bind to positional `?` placeholders. `config.path` is relative to the base directory, missing directories are created, and file databases use WAL mode; `":memory:"` gives an in-memory database that moves to the new instance during a swap. Database errors fail with `SQL_ERROR`, with the driver's code, such as `SQLITE_CONSTRAINT_UNIQUE`, in `data.code`.
+A configuration that doesn't validate fails the panel's boot with `RACK_INVALID_CONFIG`.
 
-Both factories take `{ name }` in `options` to rename the device.
+**Requests.** The panel's call carries the method, URL, headers, route parameters, and body. `httpHandler` hands your function a standard `Request`, whose `signal` aborts when the client goes away or the call times out, and keeps duplicate response headers, such as several `Set-Cookie` headers.
+
+- **Bodies stream.** A request body with a declared length of at most 64 KiB travels as bytes, and a longer or chunked one streams, as [Streams](#streams) describes, to reach your function as `request.body`. A response body that ends at once within 64 KiB goes back as bytes, and any other streams, so server-sent events and large downloads start at once. Either way, the slower side slows the other.
+- **Timeouts.** The call's timeout, `callTimeout`, runs from the end of the request body to the response head. A body that moves nothing for `idleTimeout` fails, in either direction. Bun's own timer, which would cut a whole exchange, doesn't run while a request is under way.
+- **Statuses.** Where the panel writes the body, it is JSON, `{ code, message }`:
+
+  | Outcome | Status |
+  |---|---|
+  | `RACK_LINK_DOWN`, or `RACK_OVERLOADED`, also at the need's `queueLimit` | 503 |
+  | No response head within `callTimeout`, or a device that stopped reading the body for `idleTimeout` | 504 |
+  | A client that stopped sending its body for `idleTimeout` | 408 |
+  | Any other error, and response headers that `Response` rejects | 502 |
+  | A body over `maxBodySize` | 413, with an empty body; a body that streamed fails at the device with `RACK_INVALID_INPUT` |
+  | Another host, on a loopback `hostname` | 403 |
+  | No route matches | 404, with the code `RACK_NO_ROUTE` |
+
+- **After the head.** A response body that fails, or moves nothing for `idleTimeout`, after its head went out ends the response abruptly, so the client sees an incomplete body. A client that goes away cancels the call and its streams, with `RACK_CANCELLED` at the device.
+
+**WebSocket.** WebSocket is part of the HTTP panel, on the same routes. For it, `httpHandler` takes WebSocket handlers and the port's emitter:
+
+```ts
+powerOn: (ctx) => ({
+  http: httpHandler(
+    {
+      fetch(request, server) {
+        if (request.headers.get("origin") !== "https://app.example") {
+          return new Response("forbidden", { status: 403 });
+        }
+        if (server.upgrade(request, { data: { user: "ann" }, protocol: "chat" })) return;
+        return new Response("hello");
+      },
+      websocket: {
+        open: (ws) => ws.send("welcome"),
+        message: (ws, data) => ws.send(data),
+        close(ws, code, reason) {},
+      },
+    },
+    ctx.emit.http, // what the sockets send travels as this port's events
+  ),
+}),
+```
+
+- **Upgrades.** An upgrade request reaches `fetch` like any request. `server.upgrade(request, { headers?, data?, protocol? })` accepts it, and `fetch` then returns nothing; without `protocol`, the client gets the first subprotocol it offered. Any response refuses it.
+- **Messages.** Text arrives as a string, and binary as a `Uint8Array`. Each message is a call, and a socket has at most 16 unfinished: beyond that, the panel stops reading the socket, so the client sees backpressure, and the calls start in the order the messages arrived. A failed `open` or `message` closes the socket, with 1013 for the codes that give 503, and 1011 for the others.
+- **Sockets.** Each socket has an `id`, `<panel>:<instance>:<n>`, its `data`, and `send()` and `close()`, which travel as the port's `send` and `close` events. A device can emit those events itself too, to one id or a list. Each panel takes the events for its own sockets and ignores the others, so several panels can share one port.
+- **Swaps.** A hot swap of the device keeps its sockets open. Return `handler.list()` in the state of `snapshot`, and pass it to `handler.restore(list)` in `restore`, so that the new instance knows them. A reset or a restart of the device loses them: their sockets close with 1011, at their next message, or at the panel's second check of its sockets, which runs every 30 s. Swapping the panel closes its WebSockets with 1012, once the messages in flight on them are handled; clients must reconnect.
+- **Limits.** A client that reads too slowly, with more than 1 MiB unsent, is closed with 1013. When the panel crashes, its clients' connections end, and each device behind it runs its `close` handler with 1006, "abnormal closure", for the panel's sockets, at its first call after 90 s without a call from that panel.
+- **Origins.** Browsers apply no CORS to WebSockets, and any web page can send requests to `127.0.0.1`. A panel on loopback refuses other `Host` names, which stops a page that points its own domain at `127.0.0.1`, but not one that uses the address itself. So a device behind a panel checks the `Origin` of WebSocket upgrades, and of requests that change state, itself.
+
+**Certificates.** With `tls`, the panel serves HTTPS and WSS, and a pair that doesn't load fails its `powerOn`.
+
+- Every `certificateCheck` seconds, the panel reads the files again. A pair that changed and loads replaces the old one without a restart: new connections get it, and connections opened before keep working. With SNI, each pair is checked on its own, and unknown names get the first.
+- A pair that changed and doesn't load, such as a key that doesn't match its certificate, leaves the old pair serving. If it still doesn't load at the next check, the log has an error, `certificates rejected`, once until its files change again. So a renewal that writes the certificate and then the key loads at the check after the second write, without an error.
+- Tools that renew certificates should write each file under a temporary name and rename it, so that the panel never reads half a file.
+- `status()` shows each certificate's subject and expiry, `notAfter`, in the entry of the panel's listener.
+
+**Observation.** The panel's needs count its calls per route target, as every need does, with `streams` for the bodies that streamed. The entry of its listener in `status()` shows its requests in flight and its open WebSockets. Answers for which no call reached a device count nowhere, such as 404, 403, and 413 for a declared length. The log warns when the panel starts refusing upgrades at `maxConnections`, and says when it accepts them again.
+
+`http/v2` has these members:
+
+| Member | Kind | Carries |
+|---|---|---|
+| `handle` | RPC | `{ method, url, headers, params, body, socket? }` to `{ status, headers, body }`, or to `{ upgrade: { protocol?, headers? } }` for an upgrade request, which alone carries `socket` |
+| `opened`, `closed` | RPC | `{ socket }` when a WebSocket opened, and `{ socket, code, reason }` when it closed |
+| `message` | RPC | `{ socket, data }`, a message from the client |
+| `sockets` | RPC | `{ instance, open }` to `{ unknown }`: the panel's check of the sockets one side lost |
+| `send`, `close` | event | `{ socket, data }` and `{ socket, code?, reason? }`, to one socket id or a list |
+
+Headers are arrays of `[name, value]` pairs, and a body is `null`, a `Uint8Array`, or a stream. `httpHandler` answers `sockets` itself: it treats a socket as closed once two checks in a row from its panel left it out.
+
 
 ## Error codes
 
@@ -709,7 +805,7 @@ rack42u runs on Windows as it does on Linux and macOS, with these differences:
 ## Not supported yet
 
 - Devices run only as `sled` (one Worker each); the `inline` and `chassis` forms are planned.
-- A WebSocket panel, streaming HTTP bodies, and a management dashboard.
+- A management dashboard.
 - Connecting several racks, and packaging a rack with `bun build --compile`.
 
 ## Development

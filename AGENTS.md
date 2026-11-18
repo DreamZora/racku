@@ -23,10 +23,10 @@ This file defines the project background, architectural constraints, and working
   - [Counters for calls from outside the rack](.agents/decisions/261117_185225-outside-call-metrics.md): `metrics().outside` counts the calls through `call()` and the panel by port and member, including the ones the rack answers itself.
 - Windows is a supported platform, as [Windows as a supported platform](.agents/decisions/261118_015204-windows.md) decides: what the README describes works and is tested there, apart from the differences its "Windows" section states.
 - [Continuous integration with Windows checked](.agents/decisions/261118_015210-ci-with-windows.md), which replaces the earlier CI decisions, runs the checks on Linux and the tests on macOS and Windows, for pushes to `main` and manual runs. A failure on any of the three fails the run.
-- P3 is under way on `feat/p3`, with three accepted decisions:
-  - [Byte streams in calls between devices](.agents/decisions/261118_071155-backplane-streams.md), implemented: calls carry `ReadableStream`s of bytes, with flow control by credit.
-  - [Panels as devices, with listeners that survive swaps](.agents/decisions/261118_070617-panels-as-devices.md), implemented but for the removal of the main-thread panel: devices open HTTP and WebSocket listeners with `ctx.serve`, which the rack hands over across swaps.
-  - [The standard HTTP panel device, with WebSocket and TLS](.agents/decisions/261118_071513-http-panel-device.md), not implemented yet: `httpPanel()` in `rack42u/std`, the `http/v2` connector, and certificates that load without a restart, in place of the manifest's `panel` section. Until it is, the code and the rest of this file describe the main-thread panel.
+- P3 is under way on `feat/p3`. Its three accepted decisions are implemented:
+  - [Byte streams in calls between devices](.agents/decisions/261118_071155-backplane-streams.md): calls carry `ReadableStream`s of bytes, with flow control by credit.
+  - [Panels as devices, with listeners that survive swaps](.agents/decisions/261118_070617-panels-as-devices.md): devices open HTTP and WebSocket listeners with `ctx.serve`, which the rack hands over across swaps, and the rack's main thread holds no panel.
+  - [The standard HTTP panel device, with WebSocket and TLS](.agents/decisions/261118_071513-http-panel-device.md): `httpPanel()` in `rack42u/std`, the `http/v2` connector, needs that a device computes from its configuration with `patched()`, and certificates that load without a restart, in place of the manifest's `panel` section.
 - The minimum Bun version is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list, such as the `inline` and `chassis` forms, still needs its own decision before work starts.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
@@ -79,14 +79,15 @@ See [Automatic assembly from scanned device files](.agents/decisions/261116_2339
 
 ```text
 rack (one process)
-├── main thread: backplane · slot state machine · power sequencing · panel (Bun.serve) · management bus
+├── main thread: backplane · slot state machine · power sequencing · management bus
 │     never imports device code; devices are mounted by path
+├── U12 http-panel form=sled  -> a panel: listens with ctx.serve, calls the devices below it
 ├── U10 orders  form=sled     -> one Worker per device (default)
 ├── U5  memkv   form=inline   -> main thread, still called through the backplane
 └── U3  sqlite  form=chassis  -> child process
 ```
 
-- **Basic composition**: the rack is one process, devices are hot-swappable modules, the backplane is the only communication channel between devices, and the panel holds the external ports owned by the rack.
+- **Basic composition**: the rack is one process, devices are hot-swappable modules, the backplane is the only communication channel between devices, and panels are devices that hold the external ports, as [Panels as devices, with listeners that survive swaps](.agents/decisions/261118_070617-panels-as-devices.md) decides.
 - **Gravity rule**: a device may depend only on devices in lower slots. On cold start, devices power on from the bottom up; on shutdown, they power off from the top down. In a scanned rack, the plan places every device above what it needs, and a cycle fails at startup.
 - **Three buses**: the power bus carries lifecycle, the data bus carries business calls, and the management bus carries out-of-band commands.
 - **Firmware**: each device is built into one bundle with a content hash, and the hash is the version, so only devices whose hash changed are replaced.
@@ -106,7 +107,8 @@ Use the English identifiers in the table below consistently in code. Do not call
 | Backplane | `backplane` | The only communication channel between devices |
 | Link | `link` | A `MessageChannel` the backplane sets up from one need of a consumer instance to a provider port; calls and events between devices travel on it |
 | Patch | `patch` | An explicit connection that picks the target when the choice is ambiguous |
-| Panel | `panel` | An external port owned by the rack, such as HTTP or WebSocket |
+| Panel | `panel` | A device that owns external connections, such as the standard HTTP panel, and passes the work to other devices through the backplane |
+| Listener | `listener` | An HTTP server, WebSocket included, that a device opens with `ctx.serve`, and that the rack hands over across swaps |
 | Firmware | `firmware` | The hashed bundle a device is packaged into |
 | FRU data | `fru` | The model, height, and `needs`/`provides` that a loaded device reports |
 | Form | `form` | `sled` (Worker), `inline` (main thread), `chassis` (child process) |
@@ -120,7 +122,7 @@ These constraints come from the two architecture decisions above. Breaking any o
 2. The rack main thread never imports device code; devices are mounted by path.
 3. Ports carry only structured-cloneable data, errors must be serializable, and timeouts and cancellation must cross the backplane.
 4. Background tasks start only after `activate` and stop in `deactivate`; an `inline` device binds its resources to `ctx.signal`.
-5. The panel owns external connections; devices provide only the handling logic.
+5. Panels are devices. The rack's main thread holds no external connections except the management endpoint; devices open listeners with `ctx.serve`, which the rack hands over across swaps.
 6. A device may depend only on devices in lower slots.
 7. Hot reload goes through the swap process only; `bun --hot` or reloading modules in-process is not a substitute.
 8. The core contains no logic for a specific application type.
@@ -214,8 +216,9 @@ src/                 framework source
   streams.ts         both ends of the byte streams in calls, on a link or the data channel
   listeners.ts       the listeners that devices open with ctx.serve, in the Worker host
   firmware.ts        per-device Bun.build with content hashes
-  panel.ts, http.ts  the HTTP panel and the http/v1 connector
   std/               entry point of rack42u/std and the standard devices
+    http.ts          the http/v2 connector and httpHandler
+    http-panel.ts    the standard HTTP panel device
 test/                bun:test tests, named *.test.ts
   fixtures/          test devices, connectors, and helpers; no tests
 examples/shop-api/   the example app
@@ -226,7 +229,7 @@ scripts/             project scripts; check-decisions.ts is the decision gate
 
 - `docs/` does not exist yet; it will hold user-facing project documentation only.
 - The code layout for P0 is fixed by [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md); `test/fixtures/` by [P0 standard connectors, rack handle shapes, and test fixtures](.agents/decisions/261115_222025-p0-api-details.md#test-fixtures).
-- Device files, including `src/std/memkv.ts` and `src/std/sqlite.ts`, import the framework as `rack42u`, never by relative path, so firmware keeps it external.
+- Device files, including `src/std/memkv.ts`, `src/std/sqlite.ts`, and `src/std/http-panel.ts`, import the framework as `rack42u` and `rack42u/std`, never by relative path, so firmware keeps it external.
 
 ## Maintaining this file
 

@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { type RackHandle, slot } from "rack42u";
+import { httpPanel } from "rack42u/std";
 import { errorOf, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -110,7 +111,8 @@ export default device({
 `;
 
 /** An HTTP device that answers after 300 ms, and refuses /busy with its own limit. */
-const WEB = `import { device, Http, httpHandler, RackError } from "rack42u";
+const WEB = `import { device, RackError } from "rack42u";
+import { Http, httpHandler } from "rack42u/std";
 
 export default device({
   model: "web",
@@ -176,12 +178,15 @@ describe("bounded calls", () => {
     expect(provider?.provides.slow?.wait).toMatchObject({ calls: 6, ok: 6 });
   });
 
-  test("README.md: calls from outside the rack are bounded per device, and the panel answers RACK_OVERLOADED with 503", async () => {
+  test("README.md: calls from outside the rack are bounded per device, and the HTTP panel answers RACK_OVERLOADED with 503", async () => {
     const created = await app();
     const { running, rec } = await startRack(
       {
-        slots: { 1: slot("./devices/slow.ts"), 3: slot("./devices/web.ts") },
-        panel: { http: { port: 0, routes: { "/*": "web.http" } } },
+        slots: {
+          1: slot("./devices/slow.ts"),
+          3: slot("./devices/web.ts"),
+          4: httpPanel({ port: 0, routes: { "/*": "web.http" } }),
+        },
       },
       { baseDir: created.dir, queueLimit: 2 },
     );
@@ -210,18 +215,23 @@ describe("bounded calls", () => {
         return `${response.status} ${body}`.trim();
       }),
     );
-    // Which request the server takes last is up to the connections, not to the order of fetch.
+    // The panel's need to web.http is bounded like any need. Which request the server takes
+    // last is up to the connections, not to the order of fetch.
     expect(answers.sort()).toEqual(["200", "200", "503 RACK_OVERLOADED"]);
     // A device's own limit gets the same answer.
     const busy = await fetch(new URL("/busy", url));
     const { code } = (await busy.json()) as { code: string };
     expect([busy.status, code]).toEqual([503, "RACK_OVERLOADED"]);
-    // Both refusals count among the panel's calls.
-    expect((await running.metrics()).outside.ports["web.http"]?.handle).toMatchObject({
+    // Both refusals count among the calls of the panel's need, which are calls between devices.
+    const after = await running.metrics();
+    expect(
+      after.devices.find((d) => d.device === "http-panel")?.needs.web_http?.handle,
+    ).toMatchObject({
       calls: 4,
       ok: 2,
       errors: { RACK_OVERLOADED: 2 },
     });
+    expect(after.outside.ports["web.http"]).toBeUndefined();
   });
 
   test("README.md: calls held while their provider swaps count toward the limit, and the ones beyond it fail with RACK_OVERLOADED", async () => {

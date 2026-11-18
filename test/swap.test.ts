@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { slot } from "rack42u";
+import { httpPanel } from "rack42u/std";
 import {
   codeOf,
   errorOf,
@@ -182,12 +183,18 @@ describe("swap", () => {
     });
   });
 
+  // A route is a need of the panel, so its port is a port another device uses.
+  // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
   test("rejects a swap that removes a port a panel route uses", async () => {
     const { running } = await startRack({
-      slots: { 1: slot("./devices/web.ts") },
-      panel: { http: { port: 0, routes: { "/web/*": "web.http" } } },
+      slots: {
+        1: slot("./devices/web.ts"),
+        2: httpPanel({ port: 0, routes: { "/web/*": "web.http" } }),
+      },
     });
-    expect(await codeOf(running.swap("web", "./devices/probe.ts"))).toBe("RACK_SWAP_REJECTED");
+    const error = await errorOf(running.swap("web", "./devices/probe.ts"));
+    expect(error.code).toBe("RACK_SWAP_REJECTED");
+    expect(error.message).toContain("http-panel.web_http uses web.http");
   });
 
   test("rejects unknown device names with RACK_NO_ROUTE", async () => {

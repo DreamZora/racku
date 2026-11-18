@@ -10,13 +10,14 @@ import { delimiter, dirname, join } from "node:path";
 import { Cli, FIXTURES, ROOT, type TempApp, tempApp, WINDOWS } from "./fixtures/app.ts";
 
 const MANIFEST = `import { rack, slot } from "rack42u";
+import { httpPanel } from "rack42u/std";
 
 export default rack("cli", {
   slots: {
     1: slot("./devices/counter.ts"),
     3: slot("./devices/web.ts"),
+    4: httpPanel({ port: 0, routes: { "/web/*": "web.http" } }),
   },
-  panel: { http: { port: 0, routes: { "/web/*": "web.http" } } },
 });
 `;
 
@@ -52,9 +53,11 @@ describe("rack start", () => {
     expect(await greeting(url)).toBe("hello");
     cli.kill("SIGINT");
     expect(await cli.exited()).toBe(0);
+    const panel = cli.output.indexOf("[rack] info http-panel powered off");
     const web = cli.output.indexOf("[rack] info web powered off");
     const counter = cli.output.indexOf("[rack] info counter powered off");
-    expect(web).toBeGreaterThan(-1);
+    expect(panel).toBeGreaterThan(-1);
+    expect(web).toBeGreaterThan(panel);
     expect(counter).toBeGreaterThan(web);
     expect(cli.output).toContain("[rack] info rack cli stopped");
   });
@@ -209,14 +212,19 @@ describe("rack dev", () => {
     const url = await cli.panelUrl();
     await cli.waitFor(/watching /);
     expect((await fetch(new URL("/web/echo", url))).status).toBe(200);
-    // Narrow the route to one path: the device keeps serving it, and the panel stops routing
-    // the rest of /web to it.
+    // Narrow the route to one path: the panel's configuration changed, so the rack replaces the
+    // panel, which keeps its port; the device keeps serving the path, and the panel stops
+    // routing the rest of /web to it.
     await created.write("rack.ts", MANIFEST.replace('"/web/*"', '"/web/greeting"'));
     await cli.waitFor(/the manifest changed; applying it/);
-    await cli.waitFor(/reload: no firmware changed/);
+    await cli.waitFor(/\[rack\] info http-panel swapped/);
     expect(await greeting(url)).toBe("hello");
     const echo = await fetch(new URL("/web/echo", url));
-    expect([echo.status, await echo.text()]).toEqual([404, "Not Found"]);
+    expect([echo.status, await echo.json()]).toEqual([
+      404,
+      { code: "RACK_NO_ROUTE", message: "no route matches" },
+    ]);
+    expect(cli.output).not.toMatch(/(web|counter) swapped/);
   });
 
   test("ignores changes under node_modules and dot directories", async () => {

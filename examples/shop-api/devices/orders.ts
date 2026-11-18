@@ -4,8 +4,8 @@
  * It stores orders through `sql/v1`, caches them through `kv/v1`, and counts the requests it has
  * served; the count moves to the new instance when the device is hot-reloaded.
  */
-import { device, Http, httpHandler } from "rack42u";
-import { Kv, Sql } from "rack42u/std";
+import { device } from "rack42u";
+import { Http, httpHandler, Kv, Sql } from "rack42u/std";
 import * as v from "valibot";
 
 const NewOrder = v.object({

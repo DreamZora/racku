@@ -1,5 +1,5 @@
 /**
- * Rack manifests: which device file sits in which slot, explicit patches, and the panel.
+ * Rack manifests: which device file sits in which slot, and explicit patches.
  *
  * A manifest references devices only by path; building one never loads device code.
  *
@@ -7,6 +7,7 @@
  * @decision .agents/decisions/261112_035943-hot-swap.md#the-main-thread-never-loads-device-code
  * @decision .agents/decisions/261115_222025-p0-api-details.md#names
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#scanned-manifests
+ * @decision .agents/decisions/261118_071513-http-panel-device.md#manifests
  */
 import { isConnectorId, isIdentifierName } from "./connector.ts";
 import { RackError } from "./errors.ts";
@@ -32,19 +33,6 @@ export interface SlotSpec {
   readonly config: unknown;
 }
 
-/** The HTTP panel. */
-export interface HttpPanelSpec {
-  /** TCP port; 0 picks a free port, reported in the `panel http listening` log entry. */
-  port: number;
-  /** Bun route patterns mapped to `<device>.<port>` addresses of `http/v1` ports. */
-  routes: Record<string, string>;
-}
-
-/** External ports owned by the rack. */
-export interface PanelSpec {
-  http?: HttpPanelSpec;
-}
-
 /** A rack whose devices are placed in slots by hand. */
 export interface PlacedRackSpec {
   /** Capacity in U; default 42. */
@@ -53,7 +41,6 @@ export interface PlacedRackSpec {
   slots: Record<number, SlotSpec>;
   /** Explicit wiring: `[<consumer device>.<need>, <provider device>.<port>]`. */
   patch?: ReadonlyArray<readonly [string, string]>;
-  panel?: PanelSpec;
   devices?: never;
 }
 
@@ -67,13 +54,12 @@ export interface ScannedRackSpec {
    * A `name` in a spec defines a variant: the same file under that model name.
    */
   devices: ReadonlyArray<string | SlotSpec>;
-  /** Models that start of their own accord; a panel route that names a model adds it. */
+  /** Models that start of their own accord, an HTTP panel among them. */
   roots?: readonly string[];
   /** Provider choices: a connector id, or `<model>.<need>`, mapped to a model name. */
   use?: Readonly<Record<string, string>>;
   /** Configuration by instance name or by model; an instance name wins over its model. */
   config?: Readonly<Record<string, unknown>>;
-  panel?: PanelSpec;
   slots?: never;
   patch?: never;
 }
@@ -105,7 +91,6 @@ export interface RackManifest {
   readonly patch: ReadonlyArray<readonly [string, string]>;
   /** Present for a scanned rack, whose `slots` and `patch` are then empty. */
   readonly scan: ScanSpec | undefined;
-  readonly panel: PanelSpec;
 }
 
 /** A parsed `<device>.<port>` address. */
@@ -140,11 +125,11 @@ export function slot(source: string | URL, options: SlotOptions = {}): SlotSpec 
  * Declares a rack manifest.
  *
  * @param name Rack name. A scanned rack also uses it to name its plan file, `<name>.plan`.
- * @param spec Size and panel, with either slots and patches, or the devices to scan.
+ * @param spec Size, with either slots and patches, or the devices to scan.
  * @returns The validated manifest.
- * @throws RackError `RACK_MANIFEST` when a field is malformed, or when a spec has both `slots`
- *   and `devices`. Checks that need the devices' FRU data, such as overlap and wiring, run when
- *   the rack starts.
+ * @throws RackError `RACK_MANIFEST` when a field is malformed, when a spec has both `slots`
+ *   and `devices`, or when it has a `panel` section, which `httpPanel()` replaces. Checks that
+ *   need the devices' FRU data, such as overlap and wiring, run when the rack starts.
  */
 export function rack(name: string, spec: RackSpec): RackManifest {
   if (typeof name !== "string" || name === "") {
@@ -157,7 +142,14 @@ export function rack(name: string, spec: RackSpec): RackManifest {
   if (!Number.isInteger(size) || size < 1) {
     throw new RackError("RACK_MANIFEST", `rack ${name}: size must be a positive integer`);
   }
-  const panel = checkPanel(name, spec.panel);
+  // The HTTP panel is a device now; a manifest from before says where it went.
+  // @decision .agents/decisions/261118_071513-http-panel-device.md#manifests
+  if ((spec as { panel?: unknown }).panel !== undefined) {
+    throw new RackError(
+      "RACK_MANIFEST",
+      `rack ${name}: the panel section is gone; mount httpPanel() from rack42u/std in a slot, or list it in a scanned rack's devices and roots`,
+    );
+  }
   if (spec.devices !== undefined) {
     if (spec.slots !== undefined || spec.patch !== undefined) {
       throw new RackError(
@@ -172,7 +164,6 @@ export function rack(name: string, spec: RackSpec): RackManifest {
       slots: Object.freeze([]),
       patch: Object.freeze([]),
       scan: checkScan(name, spec),
-      panel,
     });
   }
   if (typeof spec.slots !== "object" || spec.slots === null) {
@@ -216,18 +207,7 @@ export function rack(name: string, spec: RackSpec): RackManifest {
     slots: Object.freeze(slots),
     patch: Object.freeze(patch.map((entry) => Object.freeze([entry[0], entry[1]] as const))),
     scan: undefined,
-    panel,
   });
-}
-
-function checkPanel(name: string, spec: PanelSpec | undefined): PanelSpec {
-  const panelSpec = spec ?? {};
-  if (typeof panelSpec !== "object" || panelSpec === null) {
-    throw new RackError("RACK_MANIFEST", `rack ${name}: panel must be an object`);
-  }
-  const panel: PanelSpec = {};
-  if (panelSpec.http !== undefined) panel.http = checkHttpPanel(name, panelSpec.http);
-  return Object.freeze(panel);
 }
 
 function checkScan(name: string, spec: ScannedRackSpec): ScanSpec {
@@ -282,20 +262,6 @@ function isAddress(value: string): boolean {
     // Not a <model>.<need> address; the caller reports the key itself.
     return false;
   }
-}
-
-function checkHttpPanel(rackName: string, http: HttpPanelSpec): HttpPanelSpec {
-  if (typeof http !== "object" || http === null) {
-    throw new RackError("RACK_MANIFEST", `rack ${rackName}: panel.http must be an object`);
-  }
-  if (!Number.isInteger(http.port) || http.port < 0 || http.port > 65535) {
-    throw new RackError("RACK_MANIFEST", `rack ${rackName}: panel.http.port must be 0..65535`);
-  }
-  if (typeof http.routes !== "object" || http.routes === null) {
-    throw new RackError("RACK_MANIFEST", `rack ${rackName}: panel.http.routes must be an object`);
-  }
-  for (const target of Object.values(http.routes)) parseAddress(target);
-  return Object.freeze({ port: http.port, routes: Object.freeze({ ...http.routes }) });
 }
 
 /**

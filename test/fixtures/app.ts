@@ -115,10 +115,10 @@ export class Recorder {
       .map((entry) => `${entry.device}.${(entry.data as { hook: string }).hook}`);
   }
 
-  /** The URL from the `panel http listening` entry. */
-  panelUrl(): string {
-    const entry = this.logs.find((e) => e.message === "panel http listening");
-    if (entry === undefined) throw new Error("the panel did not open");
+  /** The URL from the last `listening` entry of an HTTP panel, by default `http-panel`. */
+  panelUrl(device = "http-panel"): string {
+    const entry = this.logs.findLast((e) => e.message === "listening" && e.device === device);
+    if (entry === undefined) throw new Error(`${device} did not listen`);
     return (entry.data as { url: string }).url;
   }
 }
@@ -202,9 +202,9 @@ export class Cli {
     });
   }
 
-  /** Waits for the panel and returns its URL. */
+  /** Waits for the HTTP panel, `http-panel`, to listen, and returns its URL. */
   async panelUrl(): Promise<string> {
-    const match = await this.waitFor(/panel http listening \{"url":"([^"]+)"\}/);
+    const match = await this.waitFor(/\[http-panel\] info listening \{"url":"([^"]+)"\}/);
     return match[1] as string;
   }
 

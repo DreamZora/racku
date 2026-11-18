@@ -26,7 +26,7 @@ export interface StreamMetrics {
 /** Counters of one RPC member of a provided port: the calls the device served. */
 export interface ServedRpcMetrics {
   kind: "rpc";
-  /** Calls received, including calls from `rack.call` and the panel. */
+  /** Calls received, including calls from `rack.call`. */
   calls: number;
   /** Calls that succeeded. */
   ok: number;
@@ -113,7 +113,7 @@ export interface DeviceMetrics {
 }
 
 /**
- * Counters of the calls from outside the rack, through `rack.call` and the panel, that the
+ * Counters of the calls from outside the rack, through `rack.call`, that the
  * rack's main thread keeps: the same counters as a need's, since the rack is their caller.
  *
  * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision

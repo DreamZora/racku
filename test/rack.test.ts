@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { rack, slot, start } from "rack42u";
+import { httpPanel } from "rack42u/std";
 import { codeOf, errorOf, FIXTURES, Recorder, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -209,12 +210,18 @@ describe("assembly", () => {
     expect(message).toContain("breaks the gravity rule");
   });
 
-  test("rejects a panel route to a port that is not http/v1", async () => {
+  // A route is a need that patched() wires, so it fails as such a patch does.
+  // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+  test("rejects a panel route to a port that is not http/v2", async () => {
     const message = await assemblyError({
-      slots: { 1: slot("./devices/probe.ts") },
-      panel: { http: { port: 0, routes: { "/x": "probe.probe" } } },
+      slots: {
+        1: slot("./devices/probe.ts"),
+        2: httpPanel({ port: 0, routes: { "/x": "probe.probe" } }),
+      },
     });
-    expect(message).toContain("panel route /x -> probe.probe");
+    expect(message).toContain(
+      "patch http-panel.probe_probe (http/v2) -> probe.probe: not a http/v2 port",
+    );
   });
 });
 

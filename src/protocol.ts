@@ -412,7 +412,7 @@ export interface CallToProvider {
   idle: number;
   /** Where the input carries its stream, which follows on this channel. */
   stream?: StreamSlot;
-  /** Address of the caller: `rack` or `panel`. */
+  /** Address of the caller: `rack`, for `rack.call()`. */
   caller: string;
 }
 

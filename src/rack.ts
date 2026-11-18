@@ -54,7 +54,6 @@ import {
   type SlotSpec,
 } from "./manifest.ts";
 import type { DeviceMetrics, RackMetrics } from "./metrics.ts";
-import { openHttpPanel, type Panel } from "./panel.ts";
 import {
   fitPlan,
   formatPlan,
@@ -300,7 +299,7 @@ export interface RackHandle {
    * manifest the same way, as `rack dev` does when the manifest file changes.
    *
    * @throws RackError `RACK_SWAP_REJECTED` when the plan file of a rack run by `rack start` no
-   *   longer fits, or when the manifest changes the rack's name, kind, or panel port.
+   *   longer fits, or when the manifest changes the rack's name or kind.
    */
   reload(manifest?: RackManifest): Promise<ReloadResult[]>;
   /**
@@ -364,7 +363,7 @@ export interface RackHandle {
    *   ordered by slot from the bottom up; no entries after `stop()`.
    */
   metrics(): Promise<RackMetrics>;
-  /** Closes the panel and powers devices off from the top down. */
+  /** Powers devices off from the top down, so that panels stop listening first. */
   stop(): Promise<void>;
 }
 
@@ -384,8 +383,8 @@ export function crashWindow(longestWatchdog: number): number {
 }
 
 /**
- * Starts a rack: builds the firmware, boots and checks every device, powers them on from the
- * bottom up, and opens the panel.
+ * Starts a rack: builds the firmware, boots and checks every device, and powers them on from the
+ * bottom up; each device's listeners listen once it is active.
  *
  * @param manifest A manifest created by `rack()`.
  * @param options Base directory, logger, and timeouts.
@@ -477,7 +476,6 @@ class Rack implements InstanceHost {
   readonly #controlOption: StartOptions["control"];
   #control: Control | undefined;
   #startFault: RackError | undefined;
-  #panel: Panel | undefined;
   #operations: Promise<unknown> = Promise.resolve();
 
   constructor(manifest: RackManifest, options: StartOptions) {
@@ -819,15 +817,6 @@ class Rack implements InstanceHost {
         this.#powered(instance);
       }
       this.#throwStartFault();
-      const http = this.#manifest.panel.http;
-      if (http !== undefined) {
-        this.#panel = openHttpPanel(http, (address, input, options) =>
-          this.#phase === "running" || this.#phase === "starting"
-            ? this.#backplane.call(address, "handle", input, options, "panel")
-            : Promise.reject(new RackError("RACK_LINK_DOWN", "the rack is not running")),
-        );
-        this.#log("info", "panel http listening", { url: this.#panel.url.href });
-      }
       for (const slot of this.#slots.values()) this.#knownGood.set(slot.name, slot.firmware);
       this.#phase = "running";
       const control = this.#controlOption;
@@ -1085,14 +1074,10 @@ class Rack implements InstanceHost {
     }
   }
 
-  /** Works out the plan from the models, the roots, and the panel routes that name models. */
+  /** Works out the plan from the models and the roots. */
   #computePlan(models: ReadonlyMap<string, ModelSource>): Plan {
     const scan = this.#manifest.scan as ScanSpec;
     const roots = [...scan.roots];
-    for (const address of Object.values(this.#manifest.panel.http?.routes ?? {})) {
-      const { device } = parseAddress(address);
-      if (models.has(device) && !roots.includes(device)) roots.push(device);
-    }
     const types = new Map<string, PlanType>();
     for (const [name, model] of models) types.set(name, model.type);
     return makePlan({ types, roots, use: scan.use, size: this.#manifest.size });
@@ -1149,8 +1134,6 @@ class Rack implements InstanceHost {
     this.#phase = "stopping";
     await this.#control?.close().catch(() => undefined);
     this.#control = undefined;
-    await this.#panel?.stop().catch(() => undefined);
-    this.#panel = undefined;
     for (const slot of this.#ordered().reverse()) {
       const instance = slot.installed;
       slot.installed = null;
@@ -1169,8 +1152,6 @@ class Rack implements InstanceHost {
     this.#phase = "stopping";
     await this.#control?.close().catch(() => undefined);
     this.#control = undefined;
-    await this.#panel?.stop();
-    this.#panel = undefined;
     // Top down: upper devices finish their work while the devices below still serve them.
     // @decision .agents/decisions/261112_035942-rack-architecture.md#gravity-rule
     for (const slot of this.#ordered().reverse()) {
@@ -1228,16 +1209,6 @@ class Rack implements InstanceHost {
         throw new RackError(
           "RACK_MANIFEST",
           `patch ${consumer}: no device ${device} with need ${need}`,
-        );
-      }
-    }
-    for (const [pattern, address] of Object.entries(this.#manifest.panel.http?.routes ?? {})) {
-      const { device, port } = parseAddress(address);
-      const info = this.#slots.get(device)?.fru.provides[port];
-      if (info === undefined || !isHttpPort(info)) {
-        throw new RackError(
-          "RACK_MANIFEST",
-          `panel route ${pattern} -> ${address}: no http/v1 port ${port} on a device ${device}`,
         );
       }
     }
@@ -1348,7 +1319,7 @@ class Rack implements InstanceHost {
   }
 
   /**
-   * Checks that the new FRU still provides every port other devices and panel routes use.
+   * Checks that the new FRU still provides every port that other devices use.
    *
    * @throws RackError `RACK_SWAP_REJECTED` otherwise.
    */
@@ -1367,20 +1338,9 @@ class Rack implements InstanceHost {
         }
       }
     }
-    for (const [pattern, address] of Object.entries(this.#manifest.panel.http?.routes ?? {})) {
-      const { device, port } = parseAddress(address);
-      if (device !== slot.name) continue;
-      const info = fru.provides[port];
-      if (info === undefined || !isHttpPort(info)) {
-        throw new RackError(
-          "RACK_SWAP_REJECTED",
-          `panel route ${pattern} uses ${address}, which the new firmware does not provide as http/v1`,
-        );
-      }
-    }
   }
 
-  /** Names the devices and panel routes that use a device. */
+  /** Names the needs that use a device. */
   #usersOf(name: string): string[] {
     const users: string[] = [];
     for (const consumer of this.#slots.values()) {
@@ -1388,9 +1348,6 @@ class Rack implements InstanceHost {
       for (const [need, wire] of consumer.wiring) {
         if (wire.provider === name) users.push(`${consumer.name}.${need}`);
       }
-    }
-    for (const [pattern, address] of Object.entries(this.#manifest.panel.http?.routes ?? {})) {
-      if (parseAddress(address).device === name) users.push(`panel route ${pattern}`);
     }
     return users;
   }
@@ -1715,8 +1672,6 @@ class Rack implements InstanceHost {
         results.push({ device: slot.name, from, to: from, mode: "unplug", error: failure });
       }
     }
-    const routes = this.#manifest.panel.http?.routes;
-    if (this.#panel !== undefined && routes !== undefined) this.#panel.setRoutes(routes);
     const plan = change.target.plan;
     if (plan !== undefined) {
       const complete = [...earlier, ...results].every((result) => result.error === undefined);
@@ -1756,9 +1711,8 @@ class Rack implements InstanceHost {
   }
 
   /**
-   * Takes over an edited manifest. The rack keeps its name, its kind, and its panel port, which
-   * need a restart to change; its size, devices, wiring, and panel routes follow the new
-   * manifest.
+   * Takes over an edited manifest. The rack keeps its name and its kind, which need a restart to
+   * change; its size, devices, and wiring follow the new manifest.
    *
    * @throws RackError `RACK_SWAP_REJECTED` for a change that needs a restart.
    */
@@ -1773,7 +1727,6 @@ class Rack implements InstanceHost {
     if ((manifest.scan === undefined) !== (old.scan === undefined)) {
       throw restart("switch between slots and scanned devices");
     }
-    if (manifest.panel.http?.port !== old.panel.http?.port) throw restart("change its panel");
     this.#manifest = manifest;
   }
 
@@ -3633,10 +3586,6 @@ function requireCover(
       `${where} -> ${target}: the provider lacks ${missing.join(", ")}`,
     );
   }
-}
-
-function isHttpPort(info: ConnectorInfo): boolean {
-  return info.id === "http/v1" && info.members.handle === "rpc";
 }
 
 function resolveSource(source: string | URL, baseDir: string): string {

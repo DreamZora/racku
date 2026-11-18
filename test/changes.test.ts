@@ -233,10 +233,6 @@ describe("edited manifests", () => {
     ]);
     const scanned = await errorOf(running.reload(rack("test", { devices: ["./devices"] })));
     expect(scanned.message).toBe("restart the rack to switch between slots and scanned devices");
-    const panel = await errorOf(
-      running.reload(rack("test", { ...placed, panel: { http: { port: 0, routes: {} } } })),
-    );
-    expect(panel.message).toBe("restart the rack to change its panel");
     expect(running.status().map((s) => s.state)).toEqual(["online"]);
   });
 

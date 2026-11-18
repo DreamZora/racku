@@ -59,16 +59,21 @@ describe("rack", () => {
       () => rack("r", { slots: { 1: { source: "./a.ts" } as never } }),
     ],
     ["a malformed patch", () => rack("r", { slots: {}, patch: [["a", "b.c"]] })],
-    [
-      "a panel port out of range",
-      () => rack("r", { slots: {}, panel: { http: { port: 70000, routes: {} } } }),
-    ],
-    [
-      "a route to a malformed address",
-      () => rack("r", { slots: {}, panel: { http: { port: 0, routes: { "/": "web" } } } }),
-    ],
   ])("rejects %s with RACK_MANIFEST", (_label, define) => {
     expect(rejectionCode(define)).toBe("RACK_MANIFEST");
+  });
+
+  // @decision .agents/decisions/261118_071513-http-panel-device.md#manifests
+  test("rejects a panel section with RACK_MANIFEST, pointing to httpPanel()", () => {
+    // Manifests written for 0.3 still have it; the types no longer do.
+    const old = { slots: {}, panel: { http: { port: 3000, routes: {} } } } as never;
+    expect(() => rack("r", old)).toThrow(
+      new RackError(
+        "RACK_MANIFEST",
+        "rack r: the panel section is gone; mount httpPanel() from rack42u/std in a slot, or list it in a scanned rack's devices and roots",
+      ),
+    );
+    expect(rejectionCode(() => rack("r", old))).toBe("RACK_MANIFEST");
   });
 });
 

@@ -100,6 +100,32 @@ describe("the plan", () => {
     expect(plan.unused).toEqual([]);
   });
 
+  // README.md, "Scanned racks": the example with a panel among the roots.
+  // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+  test("README.md: a panel's route pulls in the model it names, and the plan places the panel above it", () => {
+    const all = example();
+    all.set("a", { ...(all.get("a") as PlanType), provides: { http: port("http/v2") } });
+    all.set("http-panel", {
+      name: "http-panel",
+      height: 1,
+      priority: 0,
+      needs: { a_http: { ...shared("http/v2"), patched: "a.http" } },
+      provides: {},
+    });
+    const plan = makePlan({ types: all, roots: ["http-panel", "b", "c"], use: {}, size: 42 });
+    expect(layout(plan)).toEqual([
+      "U1 a-d",
+      "U2 a-f",
+      "U3 c-f",
+      "U4 e",
+      "U5 a",
+      "U6 b",
+      "U7 c",
+      "U8 http-panel",
+    ]);
+    expect(plan.instances.at(-1)?.wiring).toEqual({ a_http: { provider: "a", port: "http" } });
+  });
+
   // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
   test("README.md: a use entry keyed <model>.<need> wins over patched(), and one keyed by a connector id doesn't", () => {
     const all = types({

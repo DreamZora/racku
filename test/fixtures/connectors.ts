@@ -377,6 +377,12 @@ export const ListenerControl = connector("test.listener/v1", {
   ),
 });
 
+/** Drives the test wrapper of the standard HTTP panel, which has no ports of its own. */
+export const PanelControl = connector("test.panel/v1", {
+  /** Exits the Worker 10 ms after it answers, as a crash of the panel. */
+  crash: rpc(v.undefined(), v.undefined()),
+});
+
 /** Reports which device serves each need of a device whose needs come from its configuration. */
 export const Picker = connector("test.picker/v1", {
   /** The name of the device behind each need, by need. */
