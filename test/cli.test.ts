@@ -5,8 +5,8 @@
  * @decision .agents/decisions/261115_222025-p0-api-details.md#command-line
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, symlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { lstat, rmdir, unlink } from "node:fs/promises";
+import { delimiter, dirname, join } from "node:path";
 import { Cli, FIXTURES, ROOT, type TempApp, tempApp, WINDOWS } from "./fixtures/app.ts";
 
 const MANIFEST = `import { rack, slot } from "rack42u";
@@ -125,30 +125,64 @@ export default rack("broken", { slots: { 1: slot("./devices/missing.ts") } });
   });
 });
 
+/** The name of the PATH variable, which Windows spells `Path`. */
+const PATH = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+
+/** Removes a link to a directory, and never what it points to. */
+async function removeLink(path: string): Promise<void> {
+  try {
+    await lstat(path);
+  } catch {
+    // Never created: nothing links anywhere.
+    return;
+  }
+  try {
+    await unlink(path);
+  } catch {
+    // Windows removes a link to a directory as a directory, which rmdir does without recursing.
+    await rmdir(path);
+  }
+}
+
 describe("the rack bin", () => {
   // README.md: in an app that depends on rack42u, the package's `rack` command runs the CLI.
-  test("runs the CLI through node_modules/.bin/rack as a package install links it", async () => {
+  // @decision .agents/decisions/261118_015204-windows.md#changes-to-the-repository-and-the-tests
+  test("runs the CLI through what bun link writes to node_modules/.bin", async () => {
     const created = await app();
-    await mkdir(join(created.dir, "node_modules", ".bin"), { recursive: true });
-    const manifest = (await Bun.file(join(ROOT, "package.json")).json()) as {
-      bin: { rack: string };
-    };
-    const bin = join(created.dir, "node_modules", ".bin", "rack");
-    await symlink(join("..", "rack42u", manifest.bin.rack), bin);
-    const cli = new Cli(
-      [],
-      created.dir,
-      {
-        // The shebang runs `bun` from PATH; use the Bun that runs the tests.
-        PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ""}`,
-      },
-      [bin, "start"],
-    );
-    processes.push(cli);
-    const url = await cli.panelUrl();
-    expect(await greeting(url)).toBe("hello");
-    cli.kill("SIGINT");
-    expect(await cli.exited()).toBe(0);
+    // bun link records the package in Bun's global directory: one inside the app spares the
+    // user's own.
+    const bunInstall = join(created.dir, ".bun");
+    const env = { ...process.env, BUN_INSTALL: bunInstall };
+    // The links that bun link makes into this repository.
+    const links = [
+      join(bunInstall, "install", "global", "node_modules", "rack42u"),
+      join(created.dir, "node_modules", "rack42u"),
+    ];
+    try {
+      expect(Bun.spawnSync([process.execPath, "link"], { cwd: ROOT, env }).exitCode).toBe(0);
+      const linked = Bun.spawnSync([process.execPath, "link", "rack42u"], {
+        cwd: created.dir,
+        env,
+      });
+      expect(linked.exitCode).toBe(0);
+      // A symlink to src/cli.ts, or on Windows a shim that runs it with bun.
+      const bin = join(created.dir, "node_modules", ".bin", WINDOWS ? "rack.exe" : "rack");
+      const cli = new Cli(
+        [],
+        created.dir,
+        // The bin runs `bun` from PATH; use the Bun that runs the tests.
+        { [PATH]: `${dirname(process.execPath)}${delimiter}${process.env[PATH] ?? ""}` },
+        [bin, "start"],
+      );
+      processes.push(cli);
+      const url = await cli.panelUrl();
+      expect(await greeting(url)).toBe("hello");
+      cli.kill("SIGINT");
+      expect(await cli.exited()).toBe(0);
+    } finally {
+      // One by one, so that removing the app can never follow them into this repository.
+      for (const link of links) await removeLink(link);
+    }
   });
 });
 
