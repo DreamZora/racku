@@ -544,7 +544,7 @@ rack ctl stop                            # shut down in order, like Ctrl-C
   - The rack writes the address and the token to a control file in the same private directory. On Windows, that directory is `%LOCALAPPDATA%\rack42u\control\`.
   - The endpoint refuses requests that carry an `Origin` header or a `Host` other than its own, so a web page cannot drive it.
   - `rack ctl --url <url> --token <token>` reaches such a rack from anywhere on the machine.
-  - The Windows defaults are not tested yet. The tests cover the TCP endpoint through `--control-port` on Linux and macOS; CI also runs them on Windows, but only to report, since Windows isn't a supported platform yet.
+  - The tests cover the TCP endpoint through `--control-port` on Linux, macOS, and Windows, and the Windows defaults on Windows. CI's Windows job only reports its results, since Windows isn't a supported platform yet.
 
 **The protocol.** Each operation is `POST /v1/<operation>` with the body `{ "args": [...] }`, and runs the rack-handle method of the same name.
 - It answers `{ "ok": true, "value": ... }`, or `{ "ok": false, "error": { code, message } }`.

@@ -160,7 +160,7 @@ Measured on 2026-11-17 on Bun 1.4.4 and Linux, with probes outside the repositor
 - **Tests:**
   - `test/control.test.ts` covers both transports. Spawned `rack` processes and in-process racks keep their sockets in a temporary runtime directory, `CONTROL_DIR` in `test/fixtures/app.ts`.
   - Ten parts of the implementation were each taken out in turn, and each time at least one test failed.
-  - The Windows defaults are tested only as choices, through the platform parameter, not on Windows itself.
+  - The Windows defaults are tested as choices through the platform parameter on every system, and on Windows itself by a test that runs only in CI's Windows job.
 
 ## Confirmation
 
