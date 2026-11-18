@@ -69,7 +69,7 @@ The following is not in P0 and is left for later stages:
 - Type checking uses `tsc --noEmit` with `strict` enabled.
 - Formatting and static checks use Biome.
 - Runtime dependencies:
-  - `valibot`: writes schemas for the connectors the framework ships (`http/v1`, `kv/v1`, `sql/v1`).
+  - `valibot`: writes schemas for the connectors the framework ships (`http/v2`, `kv/v1`, `sql/v1`).
   - `@standard-schema/spec`: type definitions for Standard Schema.
 - Development dependencies:
   - `typescript`, `@types/bun`, `@biomejs/biome`.

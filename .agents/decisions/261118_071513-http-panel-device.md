@@ -374,6 +374,68 @@ The tests run on Linux, macOS, and Windows:
   - A benchmark of the panel device, with bodies as bytes and as streams, recorded in `## Implementation`.
   - `package.json` at 0.4.0, in a commit of its own, before the tag.
 
+## Implementation
+
+- **Modules.**
+  - `src/std/http.ts` holds `http/v2` and `httpHandler`, `src/std/http-panel.ts` is the device, and `src/std/index.ts` exports them with `httpPanel()`.
+  - Needs from configuration span several modules:
+    - `src/device.ts`: `needs` as a function, `patched()`, `isPatched()`, and `checkNeeds()`.
+    - `src/worker.ts`: computes the needs at boot and when it describes firmware.
+    - `src/protocol.ts`: `NeedInfo.patched`, `Fru.computedNeeds`, and `DescribeRequest.config`.
+    - `src/rack.ts`: describes firmware with its configuration, and treats the address of a need that `patched()` wires as that need's patch.
+    - `src/plan.ts`: wires such a need in the planner, after a `use` entry for the need and before one for its connector.
+  - The main-thread panel's code is gone from `src/rack.ts`, `src/manifest.ts`, `src/index.ts`, and `src/metrics.ts`, and `src/panel.ts` and `src/http.ts` are deleted.
+- **Names.** The decision's `handler.sockets()` is `handler.list()`, since `sockets` is also the name of the connector member that the same object implements.
+- **Details the decision left open.**
+  - Request bodies:
+    - A body of a declared length up to 64 KiB is read under one timer that each chunk restarts.
+    - A longer one goes through a wrapper stream, whose reads time out after `idleTimeout`.
+  - Who stalled: the stream to the device times out at both of its ends after the same `idleTimeout`, so the two timeouts would race. When the stream is cancelled with `RACK_TIMEOUT`, the panel looks at what it was waiting for:
+    - for the client's bytes, it answers 408;
+    - for the device to take them, it gives up the call and answers 504.
+  - Response bodies: `httpHandler` returns bytes when the body ends within one turn of the event loop, a `setImmediate`, and within 64 KiB. Otherwise it returns a stream that starts with the chunks read so far.
+  - Bun's timer, which the panel lifts for each exchange, is set back once the response ends. That also happens when the device's stream fails while Bun isn't reading, so Bun closes the connection of a client that stopped reading.
+  - Certificates:
+    - The panel checks that a changed pair loads with `X509Certificate.checkPrivateKey()` before it calls `setTls()`.
+    - It resolves paths with `resolve(baseDir, path)`, so absolute paths work too.
+  - Sockets lost after a panel crash:
+    - A panel's reset instance calls `sockets` only where it has WebSockets. So `httpHandler` checks for silent panel instances at every call it gets, of any member, and a device forgets the sockets of a crashed panel at its first call after 90 s.
+    - Any call that names a socket of a panel instance counts as a call from that instance.
+  - The FRU data says whether the needs come from the configuration, in `computedNeeds`. So the rack describes such firmware once per configuration, and any other firmware once.
+  - In a scanned rack, the plan describes a model with the configuration of its shared instance: the model's entry in `config`, or else its spec's. At boot, an own copy whose configuration gives other needs is wired by the rules of a rack placed by hand.
+  - The WebSocket defaults, 1 MiB and 10 000, live in the panel's configuration schema. The module exports the schema and `SYNC_MS` for the tests of the defaults.
+  - Test hook: `RACK42U_TEST_PANEL_SYNC_MS` shortens the 30 s between the panel's checks, and with them the 90 s of `httpHandler`, so that tests don't wait. A Worker copies it as it starts.
+- **Found on the way:** the `bytesSent` stream counter stayed 0. The sending end read a piece's size after the post that transferred, and so emptied, its buffer. The fix has a commit of its own.
+- **Benchmark.**
+  - Setup:
+    - Measured on 2026-11-18 on the local machine: Ubuntu 26.04.1 LTS, Linux 7.0.0-43-generic, x64, 32 cores, Bun 1.4.4, with probe scripts outside the repository.
+    - The load was the one [Evidence](#evidence) used: 3 client processes, each with 64 keep-alive clients, 3 s per scenario. The table gives the median of 3 runs.
+    - The device behind the panel answered with `httpHandler`. The main-thread panel ran at `f7e772c`, with the same device on `http/v1`, which copied bodies in full.
+
+  | Scenario | Panel device | Main-thread panel |
+  |---|---:|---:|
+  | `GET`, a 2-byte response | 45,760 requests/s, 3.89 ms | 54,244 requests/s, 3.22 ms |
+  | `POST` of 1 KiB, as bytes | 31,915 requests/s, 5.59 ms | 46,797 requests/s, 3.69 ms |
+  | `POST` of 64 KiB, as bytes | 810 MiB/s, 14.66 ms | 1,170 MiB/s, 9.61 ms |
+  | `POST` of 256 KiB, as a stream | 1,426 MiB/s, 32.67 ms | 1,772 MiB/s, 26.52 ms, copied |
+  | `GET` of a 1 MiB response, as a stream | 896 MiB/s, 215.76 ms | 1,867 MiB/s, 107.36 ms, copied |
+
+  - The latencies are medians.
+  - Where the time goes, from probes of one run each:
+    - `request.signal`, which Bun builds for each request that reads it: about 12% of the small `GET`s.
+    - Reading a small body with a reader and a timer instead of `request.bytes()`: 12% at 1 KiB and 30% at 64 KiB. `request.bytes()` can only bound the whole body, not the idle time that [Requests](#requests) bounds for a body sent as bytes, so the panel keeps the reader.
+    - The `setImmediate` before each handler, `listener.timeout()`, and reading a response with a reader instead of `arrayBuffer()`: nothing measurable.
+  - A stream copies each chunk once and waits for credit per window, and Bun writes a streamed response in chunked encoding. So a 1 MiB response that is complete at once moves at half the rate of a copy, since the decision streams any response body over 64 KiB.
+- **Tests.**
+  - `test/http-panel.test.ts`, and `test/needs.test.ts` with the fixture `devices/picker.ts`.
+  - New cases in `test/plan.test.ts`, and the cases that moved to the device in `test/backlogs.test.ts`, `test/changes.test.ts`, `test/cli.test.ts`, `test/manifest.test.ts`, `test/metrics.test.ts`, `test/rack.test.ts`, and `test/swap.test.ts`. The case of `test/changes.test.ts` in which a new panel port needed a restart went away, since such a change now replaces the panel, as `test/http-panel.test.ts` tests.
+  - The fixtures:
+    - `devices/web.ts`, now on `http/v2`;
+    - `devices/chat.ts`, for WebSockets;
+    - `devices/crashing-panel.ts`, which wraps the panel with a port that crashes it;
+    - `test/fixtures/net.ts`;
+    - a third test certificate, `certs/three.crt` and `certs/three.key`.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-18. The user asked for a listen address and port, loopback by default; a declared request body limit as a configuration item; WebSocket as part of the HTTP panel; and TLS certificates that load without a restart.

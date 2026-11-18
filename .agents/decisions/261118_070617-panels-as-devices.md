@@ -376,7 +376,7 @@ The tests run on Linux, macOS, and Windows, and exercise each failure path:
   - `maxBuffered` shadows `send`, `sendText`, and `sendBinary` on each WebSocket. `backpressureLimit` is `maxBuffered` plus `maxPayloadLength`.
   - A `Response` in `routes` is served by a handler that clones it, so that the `Host` check and the wait for the install apply to it too.
   - Without an `error` handler, a handler that throws gets 500, and the log has `a request handler failed`.
-- **Not done yet:** the main-thread panel still runs. It goes with the change that adds [the standard HTTP panel](261118_071513-http-panel-device.md), together with the changes to `AGENTS.md` and the README's Panel entry.
+- **The main-thread panel** went with the change that added [the standard HTTP panel](261118_071513-http-panel-device.md): `src/panel.ts` and `src/http.ts` are gone, and so is the panel's code in `src/rack.ts`, `src/manifest.ts`, and `src/index.ts`. `AGENTS.md` and the README's Panel entry changed in the same change, as [Impact](#impact) says.
 - **Tests:** `test/listeners.test.ts`, with the fixtures `test/fixtures/listener-device.ts`, `devices/listener.ts`, `devices/listener-state.ts`, `devices/listener-cold.ts`, and the test certificates in `test/fixtures/certs`.
 
 ## Confirmation
