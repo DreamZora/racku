@@ -121,6 +121,7 @@ Measured on 2026-11-18 on the local machine: Ubuntu 26.04.1 LTS, Linux 7.0.0-43-
   - Single pairs of the first three rows ranged from 0.97 to 1.05: the panel device serves small requests at the main-thread panel's rate, within the machine's noise.
   - A forwarding device that did only what a panel must, as [Evidence](#evidence) describes, served small `GET`s at 1.06 times the main-thread panel's rate. The rest of the panel's work, its limits, cancellation, WebSocket, and checks of hosts, costs about that.
 - **Tests:** in `test/http-panel.test.ts`, the cases of [Tests](#tests).
+- [Content-Length for every response body of known size, without Bun's slow path](261118_215039-content-length-for-known-sizes.md) replaced the stream of one chunk for bodies of 14 KiB and more: the panel answers with `wholeResponse()`, which keeps `Content-Length` at every size, and the test of [Tests](#tests) for chunked bodies changed with it.
 
 ## Confirmation
 

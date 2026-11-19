@@ -16,6 +16,7 @@ import {
   type NoPorts,
   RackError,
   type ServeOptions,
+  wholeResponse,
 } from "rack42u";
 import * as v from "valibot";
 import { ListenerControl, PairPaths } from "./connectors.ts";
@@ -126,6 +127,12 @@ function handlers(): ListenerHandlers<Data> {
         }
         case "/body":
           return new Response(String((await request.arrayBuffer()).byteLength));
+        case "/whole": {
+          // A body in memory, answered after an await, as most devices answer.
+          await Bun.sleep(1);
+          const size = Number(url.searchParams.get("size") ?? 20_000);
+          return wholeResponse(request, new Uint8Array(size).fill(7));
+        }
         case "/ws": {
           const id = nextSocket++;
           if (listener.upgrade(request, { data: { id } })) return undefined;

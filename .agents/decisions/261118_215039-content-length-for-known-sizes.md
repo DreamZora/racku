@@ -110,6 +110,24 @@ Measured on 2026-11-18 on the local machine, with the setup of [the earlier evid
   - The tests of [Tests](#tests), in `test/listeners.test.ts` and `test/http-panel.test.ts`.
   - With the user's approval, a report of the slow path to Bun.
 
+## Implementation
+
+- `src/listeners.ts`: `wholeResponse()`, exported from `src/index.ts`, with `DIRECT_FROM`, 15 360 bytes, and the default types. The direct stream's `pull` writes the body and ends it, and catches the promise that `end()` returns when the client reads slowly.
+- `src/std/http-panel.ts` answers with `wholeResponse()` for every body sent whole, in place of the stream of one chunk and its `ONE_CHUNK_FROM`.
+- The README: the HTTP panel section's note on bodies, and "Bodies in memory" under "Listeners".
+- Benchmark through the panel, with the setup of [Evidence](#evidence): a device answering through `httpHandler` from a buffer in memory, against the panel of `70f58f1`, which sent bodies of 14 KiB and more as a stream of one chunk; the medians of three alternating pairs:
+
+  | Body | Panel with `wholeResponse()` | Panel with the stream of one chunk | Ratio |
+  |---|---:|---:|---:|
+  | 4 KiB, which neither changed | 55 061 requests/s | 53 839 requests/s | 0.98 |
+  | 16 KiB | 37 171 requests/s | 36 214 requests/s | 0.96 |
+  | 64 KiB | 21 489 requests/s | 19 464 requests/s | 1.12 |
+  | 256 KiB | 7 404 requests/s | 7 395 requests/s | 1.00 |
+  | 1 MiB | 2 207 requests/s | 2 186 requests/s | 1.01 |
+
+  The panel keeps its rate within the machine's noise, which the first row shows, and its bodies regain `Content-Length`.
+- Tests: in `test/listeners.test.ts`, `wholeResponse` with a `Bun.serve` that answers after an `await`, and through `/whole` of the listener fixture; in `test/http-panel.test.ts`, the panel's bodies of 14 KiB, 15 KiB, and 16 MiB, `HEAD`, and a stream that doesn't end at once.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-18, after reviewing it: "Approved."

@@ -58,16 +58,17 @@ export {
   type WireError,
 } from "./errors.ts";
 export type { ListenerState, WatchdogStatus } from "./instance.ts";
-export type {
-  Listener,
-  ListenerHandler,
-  ListenerHandlers,
-  ListenerMethod,
-  ListenerRoute,
-  ListenerRouteHandler,
-  ListenerTls,
-  ListenerWebSocket,
-  ServeOptions,
+export {
+  type Listener,
+  type ListenerHandler,
+  type ListenerHandlers,
+  type ListenerMethod,
+  type ListenerRoute,
+  type ListenerRouteHandler,
+  type ListenerTls,
+  type ListenerWebSocket,
+  type ServeOptions,
+  wholeResponse,
 } from "./listeners.ts";
 export type { LogEntry, Logger } from "./log.ts";
 export {

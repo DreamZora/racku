@@ -172,6 +172,80 @@ export interface Listener<T = unknown> {
   setTls(tls: ListenerTls | ListenerTls[]): Promise<void>;
 }
 
+/**
+ * The smallest body that {@link wholeResponse} hands to Bun as a direct stream. For a smaller
+ * one answered after an `await`, Bun 1.4.4 corks the socket and writes the response in one
+ * piece; from this size on it writes the head uncorked, each piece a write of its own.
+ *
+ * @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#bodies-in-memory
+ */
+const DIRECT_FROM = 16 * 1024 - 1024;
+
+/**
+ * The `Content-Type` that Bun gives a body of bytes or of text, which a direct stream doesn't get.
+ *
+ * @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#bodies-in-memory
+ */
+const BYTES_TYPE = "application/octet-stream";
+const TEXT_TYPE = "text/plain;charset=utf-8";
+
+/**
+ * Builds a `Response` whose body is in memory, in the form Bun sends fastest from a handler that
+ * answers after an `await`, with the body's `Content-Length` at every size:
+ *
+ * - below 15 KiB, the body itself, which Bun writes in one piece with the head;
+ * - from 15 KiB on, a direct stream whose high-water mark exceeds the body and that ends at once,
+ *   which Bun also writes in one piece, with the length, where it would write the head of a body
+ *   of bytes in pieces;
+ * - for a `HEAD` request, the body itself, so that the answer has the `Content-Length` a `GET`
+ *   would have.
+ *
+ * A response without a `Content-Type` gets the one Bun gives the same body, at every size:
+ * `application/octet-stream` for bytes, and `text/plain;charset=utf-8` for text.
+ *
+ * @param request The request the response answers, for its method.
+ * @param body The body: bytes, text, or `null` for none.
+ * @param init The status and headers, as `new Response()` takes them.
+ * @returns The response; `new Response(body, init)` works too, only slower from 15 KiB on.
+ * @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#wholeresponse
+ */
+export function wholeResponse(
+  request: Request,
+  body: Uint8Array | ArrayBuffer | string | null,
+  init?: ResponseInit,
+): Response {
+  if (body === null || request.method === "HEAD") return new Response(body, init);
+  const text = typeof body === "string";
+  const size = text ? Buffer.byteLength(body, "utf8") : body.byteLength;
+  if (size < DIRECT_FROM) return new Response(body, init);
+  const bytes = text
+    ? new TextEncoder().encode(body)
+    : body instanceof Uint8Array
+      ? body
+      : new Uint8Array(body);
+  const stream = new ReadableStream(
+    {
+      type: "direct",
+      pull(controller) {
+        controller.write(bytes);
+        const ended = controller.end();
+        if (ended instanceof Promise) {
+          ended.catch(() => {
+            // The client left while the body was still going out; Bun ends the response.
+          });
+        }
+      },
+    },
+    // Bun's sink holds writes below this mark, and sends a stream that ends before anything
+    // went out with its length, in one write with its head.
+    { highWaterMark: size + 1 },
+  );
+  // Bun's ResponseInit types its headers apart from the Headers constructor's.
+  const headers = new Headers(init?.headers as ConstructorParameters<typeof Headers>[0]);
+  if (!headers.has("content-type")) headers.set("content-type", text ? TEXT_TYPE : BYTES_TYPE);
+  return new Response(stream, { ...init, headers });
+}
+
 /** A pair as it goes to Bun: PEM text. */
 interface Pair {
   cert: string;

@@ -12,7 +12,7 @@
  * @decision .agents/decisions/261118_071513-http-panel-device.md#certificates-that-change
  * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
  * @decision .agents/decisions/261118_165318-stream-threshold.md#the-threshold
- * @decision .agents/decisions/261118_195832-faster-panel-responses.md#bodies-of-14-kib-and-more
+ * @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#wholeresponse
  */
 import { createPrivateKey, X509Certificate } from "node:crypto";
 import { resolve } from "node:path";
@@ -24,6 +24,7 @@ import {
   type ListenerTls,
   patched,
   RackError,
+  wholeResponse,
 } from "rack42u";
 import { Http } from "rack42u/std";
 import * as v from "valibot";
@@ -43,15 +44,6 @@ const STREAM_THRESHOLD = 256 * 1024;
 const MOVE_FROM = 1024;
 /** The message of the 408 for a body sent whole that didn't arrive within `idleTimeout`. */
 const LATE_BODY = "the client didn't send its body within idleTimeout";
-/**
- * The smallest response body that the panel hands to Bun as a stream of one chunk instead of as
- * bytes. Bun 1.4.4 writes a body of bytes over about 15 KiB slowly when the handler answers
- * after waiting for something, as the panel always does: 16 KiB responses ran at 11 000 per
- * second against 62 000 as a stream, in a probe on Linux. Below this size, bytes are faster.
- *
- * @decision .agents/decisions/261118_195832-faster-panel-responses.md#bodies-of-14-kib-and-more
- */
-const ONE_CHUNK_FROM = 14 * 1024;
 /** The most message calls a socket has unfinished. */
 const MESSAGES_IN_FLIGHT = 16;
 /**
@@ -591,27 +583,20 @@ async function handle(
   }
   const streamed = output.body instanceof ReadableStream;
   try {
-    const bytes = streamed ? null : (output.body as Uint8Array | null);
-    // A HEAD response sends no body, so it keeps bytes, and with them its Content-Length.
-    if (bytes !== null && bytes.byteLength >= ONE_CHUNK_FROM && request.method !== "HEAD") {
-      // Bun sends a stream chunked, and drops a Content-Length the device named.
-      const headers = new Headers(output.headers);
-      headers.delete("content-length");
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(bytes);
-          controller.close();
-        },
-      });
-      const response = new Response(body, { status: output.status, headers });
-      server.timeout(request, idle);
-      return response;
+    if (streamed) {
+      // Bun sends a stream chunked, so its Content-Length can't go with it.
+      const body = watched(output.body as ReadableStream<Uint8Array>, () =>
+        server.timeout(request, idle),
+      );
+      return new Response(body, { status: output.status, headers: output.headers });
     }
-    const responseBody = streamed
-      ? watched(output.body as ReadableStream<Uint8Array>, () => server.timeout(request, idle))
-      : bytes;
-    const response = new Response(responseBody, { status: output.status, headers: output.headers });
-    if (!streamed) server.timeout(request, idle);
+    // A body sent whole keeps its Content-Length, in the form Bun sends fastest at its size.
+    // @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#bodies-in-memory
+    const response = wholeResponse(request, output.body as Uint8Array | null, {
+      status: output.status,
+      headers: output.headers,
+    });
+    server.timeout(request, idle);
     return response;
   } catch (error) {
     // The device returned headers that `Response` rejects, such as an invalid header name.

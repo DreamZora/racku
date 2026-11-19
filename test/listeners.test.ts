@@ -23,8 +23,9 @@ import { connect as netConnect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect as tlsConnect } from "node:tls";
-import { type RackHandle, rack, type SlotStatus, slot, start } from "rack42u";
+import { type RackHandle, rack, type SlotStatus, slot, start, wholeResponse } from "rack42u";
 import { errorOf, FIXTURES, useRacks, waitFor } from "./fixtures/app.ts";
+import { rawHead } from "./fixtures/net.ts";
 import { blockingPipe } from "./fixtures/pipe.ts";
 
 const startRack = useRacks();
@@ -726,5 +727,92 @@ describe("listener observation", () => {
         data: { url: url.href },
       }),
     );
+  });
+});
+
+// @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#tests
+describe("wholeResponse", () => {
+  /** The head of a response, in lowercase, as a client gets it. */
+  const headOf = async (port: number, method: string, path: string) =>
+    (
+      await rawHead(port, [
+        `${method} ${path} HTTP/1.1`,
+        `Host: 127.0.0.1:${port}`,
+        "Connection: close",
+      ])
+    ).toLowerCase();
+
+  test("README.md: a body in memory keeps its Content-Length at every size, from a handler that answers after an await", async () => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        await Bun.sleep(1);
+        const url = new URL(request.url);
+        const size = Number(url.searchParams.get("size") ?? 0);
+        const kind = url.searchParams.get("kind");
+        const bytes = new TextEncoder().encode("a".repeat(size));
+        const body =
+          kind === "text"
+            ? "a".repeat(size)
+            : kind === "buffer"
+              ? bytes.buffer
+              : kind === "none"
+                ? null
+                : bytes;
+        const init = url.searchParams.has("init")
+          ? { status: 201, headers: { "content-type": "application/x-test", "x-test": "yes" } }
+          : undefined;
+        return wholeResponse(request, body, init);
+      },
+    });
+    try {
+      // A server on a TCP port always has one.
+      const port = server.port as number;
+      for (const size of [15_359, 15_360]) {
+        for (const [kind, type] of [
+          ["bytes", "application/octet-stream"],
+          ["text", "text/plain;charset=utf-8"],
+        ]) {
+          const head = await headOf(port, "GET", `/?size=${size}&kind=${kind}`);
+          expect(head).toContain(`content-length: ${size}`);
+          expect(head).toContain(`content-type: ${type}`);
+          expect(head).not.toContain("transfer-encoding");
+          const body = await (
+            await fetch(`http://127.0.0.1:${port}/?size=${size}&kind=${kind}`)
+          ).text();
+          expect(body === "a".repeat(size)).toBe(true);
+        }
+      }
+      expect(await headOf(port, "GET", "/?size=20000&kind=buffer")).toContain(
+        "content-length: 20000",
+      );
+      const head = await headOf(port, "HEAD", "/?size=20000");
+      expect(head).toContain("content-length: 20000");
+      expect(head).not.toContain("transfer-encoding");
+      for (const size of [100, 20_000]) {
+        const named = await headOf(port, "GET", `/?size=${size}&init`);
+        expect(named.startsWith("http/1.1 201")).toBe(true);
+        expect(named).toContain("content-type: application/x-test");
+        expect(named).toContain("x-test: yes");
+        expect(named).toContain(`content-length: ${size}`);
+      }
+      const none = await fetch(`http://127.0.0.1:${port}/?kind=none`);
+      expect([none.status, await none.text()]).toEqual([200, ""]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("README.md: a device that answers with ctx.serve after an await keeps its Content-Length", async () => {
+    const { running } = await startRack(listenerRack());
+    const url = await urlOf(running);
+    const head = await headOf(Number(url.port), "GET", "/whole?size=20000");
+    expect(head).toContain("content-length: 20000");
+    expect(head).not.toContain("transfer-encoding");
+    const body = new Uint8Array(
+      await (await fetch(new URL("/whole?size=20000", url))).arrayBuffer(),
+    );
+    expect([body.byteLength, body.every((byte) => byte === 7)]).toEqual([20_000, true]);
   });
 });

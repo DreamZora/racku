@@ -324,27 +324,34 @@ describe("http-panel requests", () => {
     expect(errors).toEqual({ RACK_CANCELLED: 1 });
   });
 
-  test("README.md: a response body of 14 KiB or more goes out chunked, apart from the answer to HEAD", async () => {
+  // @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#tests
+  test("README.md: a response body sent whole keeps its Content-Length at every size, and a stream goes out chunked", async () => {
     const { port } = await panelRack();
-    const head = async (method: string, size: number) =>
+    const head = async (method: string, path: string) =>
       (
         await rawHead(port, [
-          `${method} /web/download?size=${size}&chunk=${size} HTTP/1.1`,
+          `${method} ${path} HTTP/1.1`,
           `Host: 127.0.0.1:${port}`,
           "Connection: close",
         ])
       ).toLowerCase();
-    const small = await head("GET", 14 * 1024 - 1);
-    expect(small).toContain(`content-length: ${14 * 1024 - 1}`);
-    expect(small).not.toContain("transfer-encoding");
-    const large = await head("GET", 14 * 1024);
-    expect(large).toContain("transfer-encoding: chunked");
-    expect(large).not.toContain("content-length");
-    expect(await head("HEAD", 20_000)).toContain("content-length: 20000");
-    // The chunked body arrives whole.
-    const url = new URL(`http://127.0.0.1:${port}/web/download?size=20000&chunk=20000`);
-    const body = new Uint8Array(await (await fetch(url)).arrayBuffer());
-    expect([body.byteLength, body.every((byte) => byte === 7)]).toEqual([20_000, true]);
+    const download = (size: number) => `/web/download?size=${size}&chunk=${size}`;
+    for (const size of [14 * 1024, 15 * 1024, 16 * 1024 * 1024]) {
+      const lines = await head("GET", download(size));
+      expect(lines).toContain(`content-length: ${size}`);
+      expect(lines).toContain("content-type: application/octet-stream");
+      expect(lines).not.toContain("transfer-encoding");
+    }
+    expect(await head("HEAD", download(20_000))).toContain("content-length: 20000");
+    const events = await head("GET", "/web/events?n=2&gap=50");
+    expect(events).toContain("transfer-encoding: chunked");
+    expect(events).not.toContain("content-length");
+    // A body sent whole arrives whole.
+    for (const size of [15 * 1024, 16 * 1024 * 1024]) {
+      const url = new URL(download(size), `http://127.0.0.1:${port}`);
+      const body = new Uint8Array(await (await fetch(url)).arrayBuffer());
+      expect([body.byteLength, body.every((byte) => byte === 7)]).toEqual([size, true]);
+    }
   });
 
   test("README.md: streamThreshold decides which request bodies go to the device as bytes and which stream", async () => {
