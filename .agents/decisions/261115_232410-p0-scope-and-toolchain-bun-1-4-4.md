@@ -134,6 +134,10 @@ Measured on 2026-11-15 on the local machine, with probe scripts outside the repo
 - Decision gate: `scripts/check-decisions.ts`, run by `bun run check:decisions`.
 - Entry points: `src/index.ts` (`rack42u`), `src/std/index.ts` (`rack42u/std`), and `src/cli.ts` (the `rack` command).
 - Firmware build: `buildFirmware` in `src/firmware.ts`, tested in `test/firmware.test.ts`.
+- Firmware import: the Worker host imports a bundle with `importFirmware` in `src/firmware.ts`, which imports it again, up to four attempts in all and 10 ms apart, while Bun reports the bundle itself missing and the file is on disk.
+  - Bun 1.4.4's module resolver keeps one cache of directory entries for the whole process. When an import of a file written after its directory was cached misses, Bun clears the directory and looks once more, and while other Workers resolve modules, that second lookup can miss too.
+  - On 2026-11-19, a probe in CI on Windows found each missed bundle on disk and listed in its directory, and the next `import()` loaded it. Eight Workers that import new files of one directory reproduce the misses on Linux; one Worker, or files all written before the first import, don't. Bun 1.4.5 keeps the same resolver code.
+  - Tested in `test/firmware.test.ts`, eight Workers included.
 - Example and documentation: `examples/shop-api`, tested in `test/example.test.ts`; `README.md`, whose app is run by `test/readme.test.ts`.
 - Tests: `test/*.test.ts`, with fixtures in `test/fixtures/`.
 

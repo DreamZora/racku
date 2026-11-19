@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { basename, dirname, join } from "node:path";
-import { buildFirmware } from "../src/firmware.ts";
+import { buildFirmware, importFirmware } from "../src/firmware.ts";
 import { FIXTURES, ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
 
 const apps: TempApp[] = [];
@@ -95,4 +95,99 @@ describe("buildFirmware", () => {
       `firmware build failed for ${source}`,
     );
   });
+});
+
+describe("importFirmware", () => {
+  test("imports a bundle again that Bun reports missing while it is on disk", async () => {
+    const { dir } = await app();
+    const path = join(dir, "late.js");
+    const url = Bun.pathToFileURL(path).href;
+    const attempts: string[] = [];
+    const module = (await importFirmware(url, async (target) => {
+      attempts.push(target);
+      if (attempts.length > 1) return import(target);
+      try {
+        return await import(target);
+      } finally {
+        // The bundle is on disk once Bun's first lookup has missed it, as when Workers race.
+        await Bun.write(path, "export default 42;\n");
+      }
+    })) as { default?: unknown };
+    expect(module.default).toBe(42);
+    expect(attempts).toEqual([url, url]);
+  });
+
+  test("gives up after four attempts", async () => {
+    const { dir } = await app();
+    const path = join(dir, "present.js");
+    await Bun.write(path, "export default 1;\n");
+    const missing = Object.assign(new Error(`Cannot find module '${path}'`), {
+      code: "ERR_MODULE_NOT_FOUND",
+      specifier: path,
+    });
+    let attempts = 0;
+    const error = await importFirmware(Bun.pathToFileURL(path).href, async () => {
+      attempts++;
+      throw missing;
+    }).catch((caught: unknown) => caught);
+    expect(error).toBe(missing);
+    expect(attempts).toBe(4);
+  });
+
+  test("fails at once for a bundle not on disk, one that throws, and one missing a module", async () => {
+    const { dir } = await app();
+    await Bun.write(join(dir, "throws.js"), 'throw new Error("broken at load");\n');
+    await Bun.write(join(dir, "needs-absent.js"), 'import "rack42u-absent";\nexport default 1;\n');
+    const cases = [
+      ["absent.js", "Cannot find module"],
+      ["throws.js", "broken at load"],
+      ["needs-absent.js", "Cannot find package 'rack42u-absent'"],
+    ] as const;
+    for (const [file, message] of cases) {
+      let attempts = 0;
+      const error = await importFirmware(Bun.pathToFileURL(join(dir, file)).href, (target) => {
+        attempts++;
+        return import(target);
+      }).catch((caught: unknown) => caught);
+      expect(String((error as Error).message)).toContain(message);
+      expect(attempts).toBe(1);
+    }
+  });
+
+  test("imports the bundles that Workers write and import at the same time", async () => {
+    // Bun 1.4.4 misses 10 to 20 of these imports on Linux, so without the further attempts this
+    // test failed in every run. On Windows, it missed bundles of test racks in CI.
+    const { dir } = await app();
+    type Answer = { ok: boolean; value?: unknown; error?: string; attempts: number };
+    const workers = Array.from({ length: 8 }, () => new Worker(join(FIXTURES, "import-worker.ts")));
+    const ask = (worker: Worker, url: string) =>
+      new Promise<Answer>((resolve) => {
+        worker.addEventListener(
+          "message",
+          (event) => resolve((event as MessageEvent<Answer>).data),
+          { once: true },
+        );
+        worker.postMessage(url);
+      });
+    try {
+      const until = Date.now() + 2_000;
+      for (let round = 0; Date.now() < until; round++) {
+        const answers = await Promise.all(
+          workers.map(async (worker, index) => {
+            const path = join(dir, ".rack", "firmware", `w${index}-${round}.js`);
+            await Bun.write(
+              path,
+              `import { device } from "rack42u";\nexport default typeof device === "function" ? ${round} : -1;\n`,
+            );
+            return ask(worker, Bun.pathToFileURL(path).href);
+          }),
+        );
+        for (const answer of answers) {
+          expect(answer).toEqual({ ok: true, value: round, attempts: answer.attempts });
+        }
+      }
+    } finally {
+      for (const worker of workers) worker.terminate();
+    }
+  }, 30_000);
 });

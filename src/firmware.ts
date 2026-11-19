@@ -1,5 +1,6 @@
 /**
- * Firmware builds: each device file becomes one hashed bundle, and the hash is its version.
+ * Firmware builds: each device file becomes one hashed bundle, and the hash is its version. The
+ * Worker host loads a bundle with {@link importFirmware}.
  *
  * @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
  * @decision .agents/decisions/261112_035943-hot-swap.md#firmware
@@ -63,6 +64,51 @@ export async function buildFirmware(source: string, baseDir: string): Promise<Fi
   const name = basename(entry.path).replace(/\.[^.]+$/, "");
   const hash = name.slice(name.lastIndexOf("-") + 1);
   return { path: entry.path, url: Bun.pathToFileURL(entry.path).href, hash, source };
+}
+
+/** Attempts in all at importing a bundle that Bun reports missing while it is on disk. */
+const IMPORT_ATTEMPTS = 4;
+/** Milliseconds between two of those attempts. */
+const IMPORT_PAUSE = 10;
+
+/**
+ * Imports a firmware bundle in the Worker that runs or describes its device.
+ *
+ * Bun 1.4.4 can report a bundle missing while it is on disk. Its module resolver keeps the
+ * entries of each directory in one cache for the whole process, and when a lookup misses, it
+ * clears the directory from the cache and looks once more. When the file was written after its
+ * directory was cached, and other Workers resolve modules at the same time, the second lookup
+ * can miss too, and another `import()` finds the file. A rack writes every bundle into a directory
+ * that earlier Workers have cached, and starts several Workers together, so a bundle that Bun
+ * reports missing while it is on disk is imported again, up to {@link IMPORT_ATTEMPTS} times in all.
+ *
+ * @param url `file:` URL of the bundle.
+ * @param load Imports a URL; `import()` unless a test replaces it.
+ * @returns The bundle's module namespace object.
+ * @throws The import's error, unchanged: when the bundle throws while it loads, when a module it
+ *   imports can't be found, when the bundle isn't on disk, or when every attempt misses it.
+ */
+export async function importFirmware(
+  url: string,
+  load: (url: string) => Promise<unknown> = (target) => import(target),
+): Promise<unknown> {
+  const path = Bun.fileURLToPath(url);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await load(url);
+    } catch (error) {
+      if (attempt >= IMPORT_ATTEMPTS || !reportsMissing(error, url, path)) throw error;
+      if (!(await Bun.file(path).exists())) throw error;
+    }
+    await Bun.sleep(IMPORT_PAUSE);
+  }
+}
+
+/** Whether `error` is Bun's report that the module at `url`, whose path is `path`, is missing. */
+function reportsMissing(error: unknown, url: string, path: string): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { code, specifier } = error as { code?: unknown; specifier?: unknown };
+  return code === "ERR_MODULE_NOT_FOUND" && (specifier === path || specifier === url);
 }
 
 /** Lists the dependencies of the `package.json` closest to `dir`, or none when there is none. */

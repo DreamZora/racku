@@ -51,6 +51,7 @@ import {
   type Watchdog,
 } from "./device.ts";
 import { fromWireError, isCloneable, RackError, toWireError, type WireError } from "./errors.ts";
+import { importFirmware } from "./firmware.ts";
 import { ListenerHost } from "./listeners.ts";
 import type {
   CalledRpcMetrics,
@@ -449,7 +450,7 @@ function handle(request: ControlRequest): unknown {
 
 async function boot(request: BootRequest): Promise<Fru> {
   if (booted !== undefined) throw new RackError("RACK_MANIFEST", "the instance is already booted");
-  const module = (await import(request.firmware)) as { default?: unknown };
+  const module = (await importFirmware(request.firmware)) as { default?: unknown };
   const def = module.default;
   if (!isDevice(def)) {
     throw new RackError("RACK_MANIFEST", `${request.source} does not default-export a device()`);
@@ -495,7 +496,7 @@ async function boot(request: BootRequest): Promise<Fru> {
 }
 
 async function describe(request: DescribeRequest): Promise<Fru> {
-  const module = (await import(request.firmware)) as { default?: unknown };
+  const module = (await importFirmware(request.firmware)) as { default?: unknown };
   const def = module.default;
   if (!isDevice(def)) {
     throw new RackError("RACK_MANIFEST", `${request.source} does not default-export a device()`);
