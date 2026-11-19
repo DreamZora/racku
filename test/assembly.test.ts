@@ -10,9 +10,18 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { rack, slot } from "rack42u";
 import { memkv } from "rack42u/std";
 import { planRack } from "../src/rack.ts";
-import { Cli, codeOf, errorOf, type TempApp, tempApp, useRacks } from "./fixtures/app.ts";
+import {
+  Cli,
+  codeOf,
+  errorOf,
+  type TempApp,
+  tempApp,
+  useControlDir,
+  useRacks,
+} from "./fixtures/app.ts";
 
 const startRack = useRacks();
+useControlDir();
 
 const apps: TempApp[] = [];
 afterEach(async () => {

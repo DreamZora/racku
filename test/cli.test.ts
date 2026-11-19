@@ -7,7 +7,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { lstat, rmdir, unlink } from "node:fs/promises";
 import { delimiter, dirname, join } from "node:path";
-import { Cli, FIXTURES, ROOT, type TempApp, tempApp, WINDOWS } from "./fixtures/app.ts";
+import {
+  Cli,
+  FIXTURES,
+  ROOT,
+  type TempApp,
+  tempApp,
+  useControlDir,
+  WINDOWS,
+} from "./fixtures/app.ts";
 
 const MANIFEST = `import { rack, slot } from "rack42u";
 import { httpPanel } from "rack42u/std";
@@ -23,6 +31,8 @@ export default rack("cli", {
 
 const apps: TempApp[] = [];
 const processes: Cli[] = [];
+useControlDir();
+
 afterEach(async () => {
   await Promise.all(processes.splice(0).map((cli) => cli.stop()));
   await Promise.all(apps.splice(0).map((app) => app.remove()));

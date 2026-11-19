@@ -6,10 +6,12 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { Cli, ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
+import { Cli, ROOT, type TempApp, tempApp, useControlDir } from "./fixtures/app.ts";
 
 const apps: TempApp[] = [];
 const processes: Cli[] = [];
+useControlDir();
+
 afterEach(async () => {
   await Promise.all(processes.splice(0).map((cli) => cli.stop()));
   await Promise.all(apps.splice(0).map((app) => app.remove()));

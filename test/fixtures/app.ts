@@ -3,7 +3,8 @@
  *
  * @decision .agents/decisions/261115_222025-p0-api-details.md#test-fixtures
  */
-import { afterEach } from "bun:test";
+import { afterAll, afterEach, beforeAll } from "bun:test";
+import { readdirSync, rmSync } from "node:fs";
 import { cp, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +25,16 @@ export const ROOT = join(import.meta.dir, "..", "..");
 /** This directory; use it as the base directory of racks that mount fixture devices. */
 export const FIXTURES = import.meta.dir;
 
+/**
+ * Removes `.rack/` under {@link FIXTURES}, where racks on the fixture devices write their
+ * firmware, after the tests of the file that calls it. Every build writes its bundle again, so
+ * nothing there outlives its use. Call it at the top level of every test file that builds
+ * firmware with {@link FIXTURES} as the base directory; {@link useRacks} calls it.
+ */
+export function useFixtureRackDir(): void {
+  afterAll(() => rm(join(FIXTURES, ".rack"), { recursive: true, force: true }));
+}
+
 /** Whether the tests run on Windows, which lacks POSIX signals, FIFOs, and Unix sockets. */
 export const WINDOWS = process.platform === "win32";
 
@@ -35,15 +46,69 @@ export const WINDOWS = process.platform === "win32";
 const CONSOLE_HOST = join(import.meta.dir, "console-host.ts");
 
 /**
- * The runtime directory of the `rack` processes that tests start, so their management sockets
- * and control files stay out of the user's own. Outside Windows it sits in `/tmp`: the
- * temporary directory of macOS is long enough to push a socket path past the 104-byte limit of
- * its Unix sockets.
+ * Where {@link CONTROL_DIR} sits. Outside Windows it is `/tmp`: the temporary directory of macOS
+ * is long enough to push a socket path past the 104-byte limit of its Unix sockets.
  */
-export const CONTROL_DIR = join(
-  process.platform === "win32" ? tmpdir() : "/tmp",
-  `rack42u-test-control-${process.pid}`,
-);
+const CONTROL_PARENT = WINDOWS ? tmpdir() : "/tmp";
+
+/** The name of a test run's runtime directory, before the id of the run's process. */
+const CONTROL_PREFIX = "rack42u-test-control-";
+
+/**
+ * The runtime directory of the `rack` processes that tests start, so their management sockets
+ * and control files stay out of the user's own. {@link useControlDir} removes it.
+ */
+export const CONTROL_DIR = join(CONTROL_PARENT, `${CONTROL_PREFIX}${process.pid}`);
+
+/** Whether the running test file called {@link useControlDir}. */
+let controlDirInUse = false;
+
+/**
+ * Removes {@link CONTROL_DIR} after the tests of the file that calls it, so that the directory
+ * doesn't outlive the file; the racks of a later file create it again. Call it at the top level of
+ * every test file that runs `rack` processes or gives a rack a control endpoint: {@link Cli}
+ * refuses to start a process in a file that didn't.
+ */
+export function useControlDir(): void {
+  beforeAll(() => {
+    controlDirInUse = true;
+  });
+  afterAll(async () => {
+    controlDirInUse = false;
+    await rm(CONTROL_DIR, { recursive: true, force: true });
+  });
+}
+
+/**
+ * Removes the runtime directories of earlier test runs whose process has ended, such as a run
+ * stopped with Ctrl+C, which couldn't remove its own. A directory whose process still runs, or
+ * belongs to another user, stays.
+ */
+function removeEndedRunsControlDirs(): void {
+  let names: string[];
+  try {
+    names = readdirSync(CONTROL_PARENT);
+  } catch {
+    // A temporary directory that can't be read holds nothing this suite could remove either.
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(CONTROL_PREFIX)) continue;
+    const pid = Number(name.slice(CONTROL_PREFIX.length));
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) continue;
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") continue;
+      try {
+        rmSync(join(CONTROL_PARENT, name), { recursive: true, force: true });
+      } catch {
+        // Another user's run left it, and only that user may remove it.
+      }
+    }
+  }
+}
+removeEndedRunsControlDirs();
 
 /** A temporary app directory whose `node_modules` links to this repository. */
 export interface TempApp {
@@ -138,6 +203,7 @@ export function useRacks(): (spec: RackSpec, options?: StartOptions) => Promise<
   afterEach(async () => {
     await Promise.all(started.splice(0).map((running) => running.stop()));
   });
+  useFixtureRackDir();
   return async (spec, options = {}) => {
     const rec = new Recorder();
     const running = await start(rack("test", spec), {
@@ -175,6 +241,9 @@ export class Cli {
     env: Record<string, string> = {},
     command = [process.execPath, join(ROOT, "src", "cli.ts"), ...args],
   ) {
+    if (!controlDirInUse) {
+      throw new Error("call useControlDir() at the top level of this test file");
+    }
     this.#hosted = WINDOWS && (command.includes("start") || command.includes("dev"));
     this.process = Bun.spawn(
       this.#hosted ? [process.execPath, CONSOLE_HOST, ...command] : command,

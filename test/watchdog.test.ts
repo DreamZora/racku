@@ -10,10 +10,19 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { type RackHandle, slot } from "rack42u";
 import { crashWindow } from "../src/rack.ts";
-import { Cli, errorOf, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
+import {
+  Cli,
+  errorOf,
+  type TempApp,
+  tempApp,
+  useControlDir,
+  useRacks,
+  waitFor,
+} from "./fixtures/app.ts";
 import { type BlockingPipe, blockingPipe } from "./fixtures/pipe.ts";
 
 const startRack = useRacks();
+useControlDir();
 
 const apps: TempApp[] = [];
 const processes: Cli[] = [];

@@ -22,10 +22,12 @@ import {
   FIXTURES,
   type TempApp,
   tempApp,
+  useControlDir,
   useRacks,
 } from "./fixtures/app.ts";
 
 const startRack = useRacks();
+useControlDir();
 
 /** Windows has no Unix sockets and no file modes; tests that need them skip it. */
 const WINDOWS = process.platform === "win32";
