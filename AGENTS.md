@@ -23,14 +23,14 @@ This file defines the project background, architectural constraints, and working
   - [Counters for calls from outside the rack](.agents/decisions/261117_185225-outside-call-metrics.md): `metrics().outside` counts the calls through `call()` and the panel by port and member, including the ones the rack answers itself.
 - Windows is a supported platform, as [Windows as a supported platform](.agents/decisions/261118_015204-windows.md) decides: what the README describes works and is tested there, apart from the differences its "Windows" section states.
 - [Continuous integration with Windows checked](.agents/decisions/261118_015210-ci-with-windows.md), which replaces the earlier CI decisions, runs the checks on Linux and the tests on macOS and Windows, for pushes to `main` and manual runs. A failure on any of the three fails the run.
-- P3 is under way on `feat/p3`. Its first five accepted decisions are implemented:
+- P3 is under way on `feat/p3`. Its first six accepted decisions are implemented:
   - [Byte streams in calls between devices](.agents/decisions/261118_071155-backplane-streams.md): calls carry `ReadableStream`s of bytes, with flow control by credit.
   - [Panels as devices, with listeners that survive swaps](.agents/decisions/261118_070617-panels-as-devices.md): devices open HTTP and WebSocket listeners with `ctx.serve`, which the rack hands over across swaps, and the rack's main thread holds no panel.
   - [The standard HTTP panel device, with WebSocket and TLS](.agents/decisions/261118_071513-http-panel-device.md): `httpPanel()` in `rack42u/std`, the `http/v2` connector, needs that a device computes from its configuration with `patched()`, and certificates that load without a restart, in place of the manifest's `panel` section.
   - [A configurable stream threshold, with bodies sent whole read by Bun](.agents/decisions/261118_165318-stream-threshold.md): `streamThreshold` in the panel and in `httpHandler`, 256 KiB by default, decides which bodies go whole and which stream, and a request body sent whole must arrive within `idleTimeout`.
   - [Panel responses no slower than the main-thread panel](.agents/decisions/261118_195832-faster-panel-responses.md): `httpHandler`'s default `streamThreshold` of 16 MiB, and response bodies of 14 KiB or more handed to Bun as streams, chunked.
-- P3's next three accepted decisions are not implemented yet, and go in this order:
   - [A test bench for one device](.agents/decisions/261118_173457-device-test-bench.md): `rack42u/bench`, which runs one device in a rack of its own, with stubs for its needs that the test implements.
+- P3's next two accepted decisions are not implemented yet, and go in this order:
   - [Running a rack under another program](.agents/decisions/261118_173838-running-under-another-program.md): `--stop-on-stdin-close` and `--log json` for `rack start` and `rack dev`.
   - [examples/net-tool, a TCP and UDP tool on Tauri 2 and Quasar](.agents/decisions/261118_173845-net-tool-example.md): the first project on rack42u, run from source.
 - The minimum Bun version is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
@@ -223,6 +223,7 @@ src/                 framework source
   streams.ts         both ends of the byte streams in calls, on a link or the data channel
   listeners.ts       the listeners that devices open with ctx.serve, in the Worker host
   firmware.ts        per-device Bun.build with content hashes
+  bench.ts           entry point of rack42u/bench: one device in a rack of its own, with stubs
   std/               entry point of rack42u/std and the standard devices
     http.ts          the http/v2 connector and httpHandler
     http-panel.ts    the standard HTTP panel device

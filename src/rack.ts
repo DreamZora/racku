@@ -50,6 +50,7 @@ import {
   slot as mountSpec,
   parseAddress,
   type RackManifest,
+  rack as rackManifest,
   type ScanSpec,
   type SlotSpec,
 } from "./manifest.ts";
@@ -880,6 +881,26 @@ class Rack implements InstanceHost {
         file.differences = [];
       }
       return { text, unused: [...scanned.unused], file };
+    } finally {
+      await this.#abortStart();
+    }
+  }
+
+  /**
+   * Builds a device file and reads what it declares, as planning does, without starting a rack.
+   *
+   * @param source The device file: a path relative to the base directory, or a `file:` URL.
+   * @param config The configuration that needs computed from the configuration come from.
+   * @throws RackError `RACK_MANIFEST` when the file doesn't build or load as a device.
+   */
+  async describeFile(source: string | URL, config: unknown): Promise<Fru> {
+    try {
+      const firmware = await this.#build(resolveSource(source, this.#baseDir)).catch(
+        (error: unknown) => {
+          throw new RackError("RACK_MANIFEST", messageOf(error));
+        },
+      );
+      return await this.#describe(firmware, config);
     } finally {
       await this.#abortStart();
     }
@@ -3486,6 +3507,27 @@ export async function planRack(
     throw new RackError("RACK_MANIFEST", "planRack() requires a manifest created by rack()");
   }
   return new Rack(manifest, { ...options, plan: false }).dryRun(write);
+}
+
+/**
+ * Builds a device file and reads what it declares, its model, height, needs, and ports, without
+ * starting a rack: the firmware loads once in a Worker that ends after. Not exported from
+ * `rack42u`; the bench uses it.
+ *
+ * @param source The device file: a path relative to `options.baseDir`, or a `file:` URL.
+ * @param config The configuration that needs computed from the configuration come from.
+ * @param options Start options; the base directory, logger, and `hookTimeout` apply.
+ * @returns The device's FRU data.
+ * @throws RackError `RACK_MANIFEST` when the file doesn't build or load as a device.
+ * @decision .agents/decisions/261118_173457-device-test-bench.md#stubs
+ */
+export async function describeDevice(
+  source: string | URL,
+  config: unknown,
+  options: StartOptions = {},
+): Promise<Fru> {
+  const empty = rackManifest("describe", { slots: {} });
+  return new Rack(empty, { ...options, plan: false }).describeFile(source, config);
 }
 
 /** The wiring of a plan, as patches. */

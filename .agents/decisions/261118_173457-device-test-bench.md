@@ -152,6 +152,22 @@ Measured on 2026-11-18 on the local machine, Ubuntu 26.04.1 LTS, Linux 7.0.0-43-
   - A test file, `test/bench.test.ts`, for the tests above, with a fixture device that needs two connectors.
   - The README section, with the example above.
 
+## Implementation
+
+- `src/bench.ts`, the entry point of `rack42u/bench` in `package.json`'s `exports`:
+  - `bench()` and `stub()`, with their records in lists that keep the last 10 000 entries.
+  - `stubDevice()` and `probeDevice()`, which the device files that the bench writes call. The module imports the rack runtime only inside `bench()`, so that those devices' Workers don't load it.
+- `describeDevice()` in `src/rack.ts`, which `rack42u` doesn't export, reads a device file's FRU data with the rack's own build and describe steps, as planning does, without starting a rack.
+- Details the decision left open:
+  - A stub's implementation may leave out RPC members, as the decision's example does. A call to one of them fails at the device with `RACK_DEVICE_FAULT`, and the stub records it.
+  - `bench.call()` takes the type of its result as a type parameter, since a bench doesn't know its device's connectors.
+  - The stub devices are named `stub-<need>`, or `stub-<n>` for a need whose name isn't a valid device name, and the probe is named `probe`; a number is added on a clash with the device's name. Each stub's port has its need's name.
+  - The probe needs only the device's ports that have events, and of them only the events, so that a swap that changes a port's RPC members doesn't depend on the probe.
+  - When a device's call to a stub times out, the rack aborts the provider's signal with `RACK_CANCELLED`, and the implementation's signal aborts with the same error.
+  - `stub.emit` waits for the stub device to emit, up to the bench's `callTimeout`.
+  - At a cold start, the device is installed when its `powerOn` runs, and an event it emits there reaches no subscriber, since the probe powers on later. The rack drops one emitted from `powerOn` during a swap, which is the case the tests show.
+- Tests: `test/bench.test.ts`, with the fixture device `test/fixtures/devices/orders.ts` and the connectors `Orders` and `Blobs` in `test/fixtures/connectors.ts`. `test/readme.test.ts` runs the README's example with `bun test` in an app of its own.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-18, after reviewing it: "I've reviewed it and I agree. Commit it."

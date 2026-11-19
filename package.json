@@ -13,7 +13,8 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./std": "./src/std/index.ts"
+    "./std": "./src/std/index.ts",
+    "./bench": "./src/bench.ts"
   },
   "bin": {
     "rack": "./src/cli.ts"

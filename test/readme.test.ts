@@ -5,6 +5,7 @@
  * @decision .agents/decisions/261112_043034-device-api.md
  */
 import { afterEach, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
 
@@ -47,6 +48,7 @@ test("README.md: the hello app runs as written", async () => {
   const sources = files();
   expect([...sources.keys()].sort()).toEqual([
     "connectors.ts",
+    "devices/greeter.test.ts",
     "devices/greeter.ts",
     "devices/web.ts",
     "rack.ts",
@@ -81,4 +83,24 @@ test("README.md: the hello app runs as written", async () => {
   expect({ code, stderr: stderr.includes("error") ? stderr : "" }).toEqual({ code: 0, stderr: "" });
   const printed = stdout.split("\n").filter((line) => line.startsWith('"'));
   expect(printed).toEqual(expected);
+});
+
+// @decision .agents/decisions/261118_173457-device-test-bench.md#tests
+test("README.md: the bench example tests the greeter as written", async () => {
+  const app = await tempApp();
+  apps.push(app);
+  for (const [path, code] of files()) await app.write(path, code);
+  const run = Bun.spawn([process.execPath, "test", "./devices/greeter.test.ts"], {
+    cwd: app.dir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [code, stdout, stderr] = await Promise.all([
+    run.exited,
+    new Response(run.stdout).text(),
+    new Response(run.stderr).text(),
+  ]);
+  expect({ code, output: code === 0 ? "" : stdout + stderr }).toEqual({ code: 0, output: "" });
+  expect(stderr).toContain("1 pass");
+  expect(existsSync(join(app.dir, ".rack", "bench"))).toBe(false);
 });

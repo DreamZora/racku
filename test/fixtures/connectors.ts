@@ -388,3 +388,35 @@ export const Picker = connector("test.picker/v1", {
   /** The name of the device behind each need, by need. */
   names: rpc(v.undefined(), v.record(v.string(), v.string())),
 });
+
+/**
+ * The device that the bench's tests run: orders kept in a key-value store, and files in a blob
+ * store, both of which the tests stub.
+ *
+ * @decision .agents/decisions/261118_173457-device-test-bench.md#tests
+ */
+export const Orders = connector("test.orders/v1", {
+  /** Stores an order under `order:<id>` and emits `created`. */
+  create: rpc(v.object({ item: v.string(), quantity: v.number() }), v.object({ id: v.string() })),
+  /** The orders this instance and the ones it restored from created. */
+  count: rpc(v.undefined(), v.number()),
+  /** An order as the store has it, or `null`. */
+  find: rpc(v.string(), v.nullable(v.string())),
+  /** Passes any value to the store's `set`, so that a test can send it invalid input. */
+  put: rpc(v.object({ key: v.string(), value: v.unknown() }), v.undefined()),
+  /** The keys that the store's `changed` events named, oldest first. */
+  seen: rpc(v.undefined(), v.array(v.string())),
+  /** Stores a file in the blob store; resolves with its size. */
+  upload: rpc(v.object({ name: v.string(), bytes: stream() }), v.number()),
+  /** Reads a file from the blob store. */
+  download: rpc(v.string(), v.object({ size: v.number(), bytes: stream() })),
+  /** Throws from a timer, which crashes the device. */
+  crash: rpc(v.undefined(), v.undefined()),
+  created: event(v.object({ id: v.string() })),
+});
+
+/** A store of files, which the bench's tests stub. */
+export const Blobs = connector("test.blobs/v1", {
+  put: rpc(v.object({ name: v.string(), bytes: stream() }), v.number()),
+  get: rpc(v.string(), v.object({ size: v.number(), bytes: stream() })),
+});
