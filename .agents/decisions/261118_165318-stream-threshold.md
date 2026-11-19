@@ -122,6 +122,42 @@ Measured on 2026-11-18 on the local machine: Ubuntu 26.04.1 LTS, Linux 7.0.0-43-
 - The README: the panel's configuration table, its Requests, and `httpHandler`'s option.
 - `src/std/http-panel.ts`, `src/std/http.ts`, and `src/std/index.ts`, with the tests in `test/http-panel.test.ts` and a helper in `test/fixtures/net.ts`.
 
+## Implementation
+
+- **Modules.**
+  - `src/std/http-panel.ts`: `streamThreshold` in the configuration schema, and `readWhole()` in place of the reader of bodies sent as bytes.
+  - `src/std/http.ts`: `streamThreshold` in `HttpHandlers`, checked when `httpHandler()` is called.
+  - `src/std/index.ts`: `streamThreshold` in `HttpPanelConfig`.
+- **Changes that keep every stated behavior.**
+  - The panel's calls take a signal of their own controller. The panel keeps the calls that wait for a head in two sets, and a timer of 100 ms, which runs only while calls wait, attaches the client's signal to those that were already waiting at its last tick.
+  - The listener host no longer copies its counters into shared memory at the start and end of each request; its ticker of 100 ms already does, so `status()` lags by at most that.
+  - `httpHandler` reads a response body without a timer when each read settles within four microtask turns, as a body in memory does. Only a read that is still pending then races a `setImmediate`, as before.
+  - The panel lists request headers with `forEach` instead of spreading them.
+- **Benchmark.**
+  - Measured on 2026-11-18 with the setup of the [panel decision's benchmark](261118_071513-http-panel-device.md#implementation): the same machine, 3 client processes of 64 keep-alive clients each, 3 s per scenario, and the median of 3 runs. The device behind the panel answered with `httpHandler` and its default `streamThreshold`, unless the table says otherwise. The main-thread panel ran at `f7e772c` and copied every body in full.
+  - "Before" is the panel decision's benchmark, where it measured the scenario.
+
+  | Scenario | Before | Panel device now | Main-thread panel |
+  |---|---:|---:|---:|
+  | `GET`, a 2-byte response | 45,760 requests/s | 49,197 requests/s, 3.60 ms | 54,639 requests/s, 3.18 ms |
+  | `POST` of 1 KiB, whole | 31,915 requests/s | 40,190 requests/s, 4.42 ms | 45,279 requests/s, 3.83 ms |
+  | `POST` of 64 KiB, whole | 810 MiB/s | 1,309 MiB/s, 8.90 ms | 1,208 MiB/s, 9.39 ms |
+  | `POST` of 256 KiB, whole now, streamed before | 1,426 MiB/s | 2,058 MiB/s, 23.17 ms | 1,680 MiB/s, 28.14 ms |
+  | `POST` of 1 MiB, streamed | | 1,656 MiB/s, 111.92 ms | 1,326 MiB/s, 145.65 ms |
+  | `GET` of a 64 KiB response, whole | | 504 MiB/s, 23.75 ms | 537 MiB/s, 22.36 ms |
+  | `GET` of a 256 KiB response, whole | | 1,060 MiB/s, 46.17 ms | 1,168 MiB/s, 41.79 ms |
+  | `GET` of a 1 MiB response, streamed | 896 MiB/s | 973 MiB/s, 178.32 ms | 1,940 MiB/s, 101.40 ms |
+  | `GET` of a 1 MiB response, whole, with `streamThreshold` of 2 MiB in `httpHandler` | | 1,928 MiB/s, 100.58 ms | |
+
+  - The latencies are medians.
+  - Small requests remain 10% to 11% behind the main-thread panel. The largest cost left in the panel's Worker is the call's `postMessage`, as [Alternatives](#alternatives) notes.
+  - A streamed response remains at half the rate of one sent whole. Bun itself sent streamed responses about 25% slower than buffered ones in the evidence; the rest is the stream's copies and its wait for credit.
+
+- **Tests.**
+  - `test/http-panel.test.ts`: the defaults; the panel's threshold; `httpHandler`'s threshold, its check, and the moved buffer; a body sent whole that drips past `idleTimeout`, against a chunked body that drips longer and succeeds.
+  - The tests that pinned 64 KiB set `streamThreshold`, or send a body over 256 KiB: the test of `callTimeout`, the test of the counters, and the test of response bodies.
+  - `test/fixtures/net.ts`: `dripResponse()`, which sends a body piece by piece.
+
 ## Confirmation
 
 - On 2026-11-18 the user asked for the threshold to be configurable, with a default that isn't fixed at 64 KiB, and for the panel to be optimized before `feat/p3` is pushed.

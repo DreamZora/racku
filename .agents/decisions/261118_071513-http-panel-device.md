@@ -388,12 +388,12 @@ The tests run on Linux, macOS, and Windows:
 - **Names.** The decision's `handler.sockets()` is `handler.list()`, since `sockets` is also the name of the connector member that the same object implements.
 - **Details the decision left open.**
   - Request bodies:
-    - A body of a declared length up to 64 KiB is read under one timer that each chunk restarts.
+    - A body of a declared length up to `streamThreshold` is read with `request.bytes()`, under one timer for the whole body, as [A configurable stream threshold](261118_165318-stream-threshold.md#bodies-sent-whole) decides.
     - A longer one goes through a wrapper stream, whose reads time out after `idleTimeout`.
   - Who stalled: the stream to the device times out at both of its ends after the same `idleTimeout`, so the two timeouts would race. When the stream is cancelled with `RACK_TIMEOUT`, the panel looks at what it was waiting for:
     - for the client's bytes, it answers 408;
     - for the device to take them, it gives up the call and answers 504.
-  - Response bodies: `httpHandler` returns bytes when the body ends within one turn of the event loop, a `setImmediate`, and within 64 KiB. Otherwise it returns a stream that starts with the chunks read so far.
+  - Response bodies: `httpHandler` returns bytes when the body ends within its `streamThreshold`, and each read settles within four microtask turns or before a `setImmediate`, which ends the event loop's turn. Otherwise it returns a stream that starts with the chunks read so far.
   - Bun's timer, which the panel lifts for each exchange, is set back once the response ends. That also happens when the device's stream fails while Bun isn't reading, so Bun closes the connection of a client that stopped reading.
   - Certificates:
     - The panel checks that a changed pair loads with `X509Certificate.checkPrivateKey()` before it calls `setTls()`.
@@ -426,6 +426,7 @@ The tests run on Linux, macOS, and Windows:
     - Reading a small body with a reader and a timer instead of `request.bytes()`: 12% at 1 KiB and 30% at 64 KiB. `request.bytes()` can only bound the whole body, not the idle time that [Requests](#requests) bounds for a body sent as bytes, so the panel keeps the reader.
     - The `setImmediate` before each handler, `listener.timeout()`, and reading a response with a reader instead of `arrayBuffer()`: nothing measurable.
   - A stream copies each chunk once and waits for credit per window, and Bun writes a streamed response in chunked encoding. So a 1 MiB response that is complete at once moves at half the rate of a copy, since the decision streams any response body over 64 KiB.
+  - [A configurable stream threshold](261118_165318-stream-threshold.md#implementation) records the benchmark after its changes, which made the threshold an option and the panel faster.
 - **Tests.**
   - `test/http-panel.test.ts`, and `test/needs.test.ts` with the fixture `devices/picker.ts`.
   - New cases in `test/plan.test.ts`, and the cases that moved to the device in `test/backlogs.test.ts`, `test/changes.test.ts`, `test/cli.test.ts`, `test/manifest.test.ts`, `test/metrics.test.ts`, `test/rack.test.ts`, and `test/swap.test.ts`. The case of `test/changes.test.ts` in which a new panel port needed a restart went away, since such a change now replaces the panel, as `test/http-panel.test.ts` tests.
