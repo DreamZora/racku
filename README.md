@@ -905,9 +905,9 @@ rack42u runs on Windows as it does on Linux and macOS, with these differences:
 
 ## Not supported yet
 
-- Devices run only as `sled` (one Worker each); the `inline` and `chassis` forms are planned.
+- Devices run only in Workers, one each. Running a device in a child process is planned; no device ever runs on the rack's main thread.
 - A management dashboard.
-- Connecting several racks, and packaging a rack with `bun build --compile`.
+- Connecting several racks, and packaging a rack into one executable with `bun build --compile`.
 
 ## Development
 

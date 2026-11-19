@@ -35,7 +35,7 @@ This file defines the project background, architectural constraints, and working
   - [Content-Length for every response body of known size, without Bun's slow path](.agents/decisions/261118_215039-content-length-for-known-sizes.md): `wholeResponse()` in `rack42u`, with which the panel answers, so a body of bytes or text keeps its `Content-Length` at every size, sent from 15 KiB on as a direct stream that Bun writes in one piece.
 - rack42u has no formal release yet, and it follows Bun by a minimum version; [Versions](#versions) holds the rules for both.
 - rack42u works around two bugs of Bun 1.4.4, which aren't reported to Bun yet: [Watching two Bun bugs before reporting them](.agents/decisions/261119_031624-watching-bun-bugs.md) holds the reports, and the watch lasts until 2027-01-19.
-- Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list, such as the `inline` and `chassis` forms, still needs its own decision before work starts.
+- Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list still needs its own decision before work starts, except the `inline` form, which [The main thread runs no devices, and what child processes, connected racks, and single executables must meet](.agents/decisions/261119_054850-main-thread-runs-no-devices.md) drops. That decision also sets what the decisions for the `chassis` form, connected racks, and `bun build --compile` packaging must meet: transports, one authentication method for sockets and TCP, and devices outside an executable with a fallback to the ones inside it.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
 
 ## Project positioning
@@ -86,12 +86,12 @@ See [Automatic assembly from scanned device files](.agents/decisions/261116_2339
 
 ```text
 rack (one process)
-├── main thread: backplane · slot state machine · power sequencing · management bus
-│     never imports device code; devices are mounted by path
+├── main thread: backplane · slot state machine · power sequencing · supervision · management bus
+│     runs no devices and never imports device code; devices are mounted by path
 ├── U12 http-panel form=sled  -> a panel: listens with ctx.serve, calls the devices below it
 ├── U10 orders  form=sled     -> one Worker per device (default)
-├── U5  memkv   form=inline   -> main thread, still called through the backplane
-└── U3  sqlite  form=chassis  -> child process
+├── U5  memkv   form=sled     -> another Worker
+└── U3  sqlite  form=chassis  -> child process (not built yet)
 ```
 
 - **Basic composition**: the rack is one process, devices are hot-swappable modules, the backplane is the only communication channel between devices, and panels are devices that hold the external ports, as [Panels as devices, with listeners that survive swaps](.agents/decisions/261118_070617-panels-as-devices.md) decides.
@@ -118,7 +118,7 @@ Use the English identifiers in the table below consistently in code. Do not call
 | Listener | `listener` | An HTTP server, WebSocket included, that a device opens with `ctx.serve`, and that the rack hands over across swaps |
 | Firmware | `firmware` | The hashed bundle a device is packaged into |
 | FRU data | `fru` | The model, height, and `needs`/`provides` that a loaded device reports |
-| Form | `form` | `sled` (Worker), `inline` (main thread), `chassis` (child process) |
+| Form | `form` | `sled` (Worker), `chassis` (child process, not built yet) |
 | Swap | `swap` | The process shared by insertion, removal, replacement, and hot reload |
 
 ### Hard constraints
@@ -128,7 +128,7 @@ These constraints come from the two architecture decisions above. Breaking any o
 1. Devices interact only through backplane addresses; they never import each other's code and never hold each other's instances.
 2. The rack main thread never imports device code; devices are mounted by path.
 3. Ports carry only structured-cloneable data, errors must be serializable, and timeouts and cancellation must cross the backplane.
-4. Background tasks start only after `activate` and stop in `deactivate`; an `inline` device binds its resources to `ctx.signal`.
+4. Background tasks start only after `activate` and stop in `deactivate`.
 5. Panels are devices. The rack's main thread holds no external connections except the management endpoint; devices open listeners with `ctx.serve`, which the rack hands over across swaps.
 6. A device may depend only on devices in lower slots.
 7. Hot reload goes through the swap process only; `bun --hot` or reloading modules in-process is not a substitute.

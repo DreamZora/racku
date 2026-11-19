@@ -71,6 +71,12 @@ The decision for packaging a rack with `bun build --compile` meets these require
 - The README's "Not supported yet" drops the `inline` form, and lists running devices in child processes, connecting racks, and single executables.
 - Follow-up: the decisions for the `chassis` form, connected racks, and single executables, when the user decides.
 
+## Implementation
+
+- `AGENTS.md`: hard constraint 4 without its clause on `inline` devices, the architecture overview without an `inline` device, the glossary's Form entry, and the requirements in "Current state".
+- The README's "Not supported yet" says that devices run only in Workers, and lists child processes, connected racks, and single executables.
+- The implementation notes of [Every device supports hot swap and hot reload](261112_035943-hot-swap.md#implementation) say that this decision drops the `inline` form.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-19, together with the two other decisions drafted that day, after reviewing them: "Approved, all of them. Get to work."
