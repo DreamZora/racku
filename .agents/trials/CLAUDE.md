@@ -18,7 +18,7 @@ This folder holds trial apps built on rack42u by agents that know rack42u only f
 ## Adding rack42u
 
 - rack42u is the git repository two levels above this folder: `pwd` shows this folder's path, and the repository's path is that without `/.agents/trials`.
-- Add it as the skill and the documentation say, from that repository at its current commit, in your app's folder once its `package.json` exists: `bun add git+file://<repository>#HEAD`. Bun reports an install in a folder without a `package.json` as done, and installs nothing. Bun reports the commit it installed, as `rack42u@git+file://…#<commit>`: pin that commit in `package.json` in place of `HEAD`, and write it at the top of `TRIAL.md`.
+- Add it as the skill and the documentation say, from that repository at its current commit, in your app's folder once its `package.json` exists: `bun add git+file://<repository>#HEAD`. Run in a folder without a `package.json`, `bun add` changes the nearest one above it instead: this folder's `package.json` is there only to stop that search, so never add packages to it. Bun reports the commit it installed, as `rack42u@git+file://…#<commit>`: pin that commit in `package.json` in place of `HEAD`, and write it at the top of `TRIAL.md`.
 
 ## Commands
 
