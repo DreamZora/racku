@@ -201,6 +201,24 @@ curl --proto '=https' --tlsv1.2 https://sh.rustup.rs -sSf | sh
 - CI: no new job; the suite gains the tests of the rack's side.
 - The order of the work: [A test bench for one device](261118_173457-device-test-bench.md) and [Running a rack under another program](261118_173838-running-under-another-program.md) first, since the tool's tests and shell use them; then the rack's side with its tests; then the window and the shell, once Rust and the libraries are installed.
 
+## Implementation
+
+- The layout is as [Layout](#layout) shows, with `app/tsconfig.json`, `app/src/main.ts`, `app/src/connection.ts`, and `app/src/App.vue` in the window, and `build.rs`, `capabilities/default.json`, `icons/`, and `Cargo.lock` in the shell. The root's `tsconfig.json` and `biome.json` exclude `examples/net-tool/app`, and `.gitignore` adds the shell's `target/` and its generated `gen/`.
+- Versions, on 2026-11-18: Vue 3.5.45, Quasar 2.35.5, `@quasar/vite-plugin` 2.0.2, Vite 8.3.8, `@vitejs/plugin-vue` 6.0.11, `vue-tsc` 3.3.14, `@tauri-apps/api` 2.12.5, and `@tauri-apps/cli` 2.12.6; in Rust, `tauri` 2.12.7. `vue-tsc` needs TypeScript as a peer, Apache-2.0, and drives its JavaScript API, which TypeScript 7 no longer ships as before, so the window pins TypeScript 6.0.3.
+- Details the decision left open:
+  - A command is `{ id, op, input }`, whose `input` is the RPC's input, so that the command's `id` and a socket's `id` don't collide. An answer has `ok` and an event has `event`, and both carry an `id`.
+  - `net/v1`'s sockets are of the kinds `tcp-client`, `tcp-server`, `tcp-connection` for one a server accepted, and `udp`. `list` gives each one's bytes `sent` and `received`, and the `events` emitted for it. `net`'s own errors are `NET_CONNECT_FAILED`, `NET_LISTEN_FAILED`, and `NET_UNKNOWN_SOCKET`.
+  - A TCP socket holds at most 1 MiB that its peer hasn't taken yet; a send beyond it fails with `RACK_OVERLOADED`.
+  - For the events dropped on the way to the window, `ui` adds `delivered` to each socket in its answer to `list`, the `data` events it passed on, and the window shows the difference from `events`.
+  - The window uses no Quasar component that draws an icon, since Quasar's icon font isn't among the example's packages. During development it also runs in a browser, with `?url=` and `&token=`.
+  - The shell's `endpoint()` waits up to 60 s for the panel to listen. When the rack's output ends before that, the app exits with code 1. It stops the rack on `RunEvent::ExitRequested`, and on `RunEvent::Exit` when no request came first.
+  - The shell runs `rack start`, so an edit of `devices/ui.ts` takes effect with `rack ctl reload`, as the example's README says.
+- Checked by hand on 2026-11-18, on the local machine:
+  - The shell built with Rust 1.99.0. Run under Xvfb against Vite's development server, its WebKitGTK window got the endpoint from `endpoint()` and opened its WebSocket, which `status()` showed. Killing the shell with `SIGKILL` stopped the rack in order, which removed its control socket.
+  - In a browser, the window opened a TCP client to an echo server and a UDP socket, sent text and hex, showed the bytes both ways as text and as hex, and closed a socket.
+  - A rack whose reader of standard output was killed still finished its shutdown in order.
+- Tests: `test/net-tool.test.ts`, with the tests of [Tests](#tests); and the README's claims, a reload of `ui` that keeps the window's WebSocket and its TCP connection, a reload of `net` that closes its sockets, and the limit of a TCP socket's waiting bytes.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-18, after reviewing it: "I've reviewed it and I agree. Commit it."

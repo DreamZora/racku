@@ -23,7 +23,7 @@ This file defines the project background, architectural constraints, and working
   - [Counters for calls from outside the rack](.agents/decisions/261117_185225-outside-call-metrics.md): `metrics().outside` counts the calls through `call()` and the panel by port and member, including the ones the rack answers itself.
 - Windows is a supported platform, as [Windows as a supported platform](.agents/decisions/261118_015204-windows.md) decides: what the README describes works and is tested there, apart from the differences its "Windows" section states.
 - [Continuous integration with Windows checked](.agents/decisions/261118_015210-ci-with-windows.md), which replaces the earlier CI decisions, runs the checks on Linux and the tests on macOS and Windows, for pushes to `main` and manual runs. A failure on any of the three fails the run.
-- P3 is under way on `feat/p3`. Its first seven accepted decisions are implemented:
+- P3 is under way on `feat/p3`. Its eight accepted decisions are implemented:
   - [Byte streams in calls between devices](.agents/decisions/261118_071155-backplane-streams.md): calls carry `ReadableStream`s of bytes, with flow control by credit.
   - [Panels as devices, with listeners that survive swaps](.agents/decisions/261118_070617-panels-as-devices.md): devices open HTTP and WebSocket listeners with `ctx.serve`, which the rack hands over across swaps, and the rack's main thread holds no panel.
   - [The standard HTTP panel device, with WebSocket and TLS](.agents/decisions/261118_071513-http-panel-device.md): `httpPanel()` in `rack42u/std`, the `http/v2` connector, needs that a device computes from its configuration with `patched()`, and certificates that load without a restart, in place of the manifest's `panel` section.
@@ -31,7 +31,6 @@ This file defines the project background, architectural constraints, and working
   - [Panel responses no slower than the main-thread panel](.agents/decisions/261118_195832-faster-panel-responses.md): `httpHandler`'s default `streamThreshold` of 16 MiB, and response bodies of 14 KiB or more handed to Bun as streams, chunked.
   - [A test bench for one device](.agents/decisions/261118_173457-device-test-bench.md): `rack42u/bench`, which runs one device in a rack of its own, with stubs for its needs that the test implements.
   - [Running a rack under another program](.agents/decisions/261118_173838-running-under-another-program.md): `--stop-on-stdin-close` and `--log json` for `rack start` and `rack dev`.
-- P3's last accepted decision is not implemented yet:
   - [examples/net-tool, a TCP and UDP tool on Tauri 2 and Quasar](.agents/decisions/261118_173845-net-tool-example.md): the first project on rack42u, run from source.
 - The minimum Bun version is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list, such as the `inline` and `chassis` forms, still needs its own decision before work starts.
@@ -230,6 +229,9 @@ src/                 framework source
 test/                bun:test tests, named *.test.ts
   fixtures/          test devices, connectors, and helpers; no tests
 examples/shop-api/   the example app
+examples/net-tool/   a TCP and UDP tool: its rack, devices, and connector, which the suite checks
+  app/               the window, Vue 3 and Quasar with its own package.json, and src-tauri/,
+                     the Tauri shell; the root's type check and lint skip it
 scripts/             project scripts; check-decisions.ts is the decision gate
 .github/workflows/   check.yml, the CI jobs on Linux, macOS, and Windows
 .agents/decisions/   decision records, stored flat as <YYMMDD>_<hhmmss>-<topic>.md

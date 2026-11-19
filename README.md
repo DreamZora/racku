@@ -41,6 +41,8 @@ bun src/cli.ts dev examples/shop-api/rack.ts
 
 In an app that depends on `rack42u`, the package's `rack` command runs the same CLI: `rack start` and `rack dev`.
 
+A second example, [`examples/net-tool`](examples/net-tool), is a desktop app: a TCP and UDP tool whose window, on Tauri 2 and Quasar, talks to a rack that holds the sockets. Its Tauri shell runs the rack as [another program](#running-a-rack) would, and its devices are tested on the [bench](#testing-a-device). Its README lists what it needs, such as Rust, and how to run it.
+
 The sections below build a second small app, file by file. The test suite extracts these files from this README and runs them.
 
 ## Concepts

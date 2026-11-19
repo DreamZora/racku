@@ -114,3 +114,7 @@ dist
 
 # rack42u runtime output (firmware bundles)
 .rack/
+
+# The net tool's Tauri shell: build output and generated schemas
+examples/net-tool/app/src-tauri/target/
+examples/net-tool/app/src-tauri/gen/

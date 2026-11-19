@@ -17,5 +17,5 @@
     "skipLibCheck": true
   },
   "include": ["src", "test", "examples", "scripts"],
-  "exclude": ["**/.rack"]
+  "exclude": ["**/.rack", "examples/net-tool/app"]
 }
