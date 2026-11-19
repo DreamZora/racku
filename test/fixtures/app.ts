@@ -235,6 +235,11 @@ export class Cli {
   output = "";
   /** Standard output alone. */
   stdout = "";
+  /**
+   * Resolves when standard output and standard error have ended, once every process that writes
+   * to them has exited, such as a child that inherited them from the command.
+   */
+  readonly ended: Promise<void>;
   readonly #hosted: boolean;
 
   /**
@@ -269,8 +274,10 @@ export class Cli {
         stderr: "pipe",
       },
     );
-    void this.#pump(this.process.stdout, true);
-    void this.#pump(this.process.stderr, false);
+    this.ended = Promise.all([
+      this.#pump(this.process.stdout, true),
+      this.#pump(this.process.stderr, false),
+    ]).then(() => undefined);
   }
 
   async #pump(stream: ReadableStream<Uint8Array>, stdout: boolean): Promise<void> {

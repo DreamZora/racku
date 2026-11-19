@@ -15,7 +15,6 @@ import {
   tempApp,
   useControlDir,
   WINDOWS,
-  waitFor,
 } from "./fixtures/app.ts";
 
 const MANIFEST = `import { rack, slot } from "rack42u";
@@ -176,17 +175,6 @@ export default device({
 });
 `;
 
-/** Whether a process is still there. */
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    // ESRCH: the process has ended.
-    return false;
-  }
-}
-
 // @decision .agents/decisions/261118_173838-running-under-another-program.md#tests
 describe("running under another program", () => {
   test("README.md: with --stop-on-stdin-close, rack start and rack dev stop in order with code 0 when their input closes", async () => {
@@ -203,6 +191,7 @@ describe("running under another program", () => {
     }
   });
 
+  // Starting a program that starts a rack takes longer than Bun's default 5 s on Windows.
   test("README.md: a rack with --stop-on-stdin-close stops in order when the program that runs it is killed", async () => {
     const { dir } = await app();
     const cli = join(ROOT, "src", "cli.ts");
@@ -218,14 +207,19 @@ describe("running under another program", () => {
     try {
       await host.panelUrl();
       host.process.kill("SIGKILL");
-      await waitFor(() => !alive(pid), 15_000);
-      await waitFor(() => host.output.includes("[rack] info rack cli stopped"));
+      await host.waitFor(/\[rack\] info rack cli stopped/, 20_000);
+      // The rack shares the program's output, which ends once the rack has exited too.
+      await host.ended;
       expect(host.output).toContain("[rack] info standard input closed");
       expect(host.output).toContain("[rack] info http-panel powered off");
     } finally {
-      if (alive(pid)) process.kill(pid, "SIGKILL");
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // The rack has exited, as it should.
+      }
     }
-  });
+  }, 30_000);
 
   test("without --stop-on-stdin-close, closing standard input changes nothing", async () => {
     const { dir } = await app();
