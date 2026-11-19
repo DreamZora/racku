@@ -205,6 +205,14 @@ curl localhost:3000/notes
 # [{"id":2,"text":"Call Ada"},{"id":1,"text":"Buy milk"}]
 ```
 
+## Working with an agent
+
+rack42u comes with a skill for coding agents, such as Claude Code: the workflow of an app, the rules that keep devices swappable, the pitfalls, and which document answers what. It is in the package; copy it into the app, where an agent that works in the app finds it:
+
+```sh
+mkdir -p .claude/skills && cp -r node_modules/rack42u/skills/rack42u .claude/skills/
+```
+
 ## Where to go next
 
 - [Concepts](concepts.md) explains how a rack works: slots, devices, connectors, the backplane, firmware, swaps, and faults.

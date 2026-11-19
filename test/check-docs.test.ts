@@ -153,6 +153,20 @@ describe("the documentation gate", () => {
     ]);
   });
 
+  // @decision .agents/decisions/261119_074252-trial-apps.md#the-skill
+  test("checks the links of the skills under skills/, which the map doesn't list", async () => {
+    const problems = await problemsOf({
+      "docs/README.md": MAP,
+      "docs/guides/devices.md": GUIDE,
+      "skills/rack42u/SKILL.md":
+        "# rack42u\n\n[ok](../../docs/guides/devices.md#hooks) [gone](../../docs/nothing.md)\n",
+      "test/a.test.ts": tests("docs/guides/devices.md#hooks", "docs/guides/devices.md#errors"),
+    });
+    expect(problems).toEqual([
+      "skills/rack42u/SKILL.md:3: ../../docs/nothing.md leads to nothing: docs/nothing.md doesn't exist",
+    ]);
+  });
+
   test("fails when the map of docs/ doesn't link to a document", async () => {
     const problems = await problemsOf({
       "docs/README.md": MAP,

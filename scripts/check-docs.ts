@@ -1,18 +1,20 @@
 /**
  * Documentation gate: checks that tests hold the documentation in `README.md` and `docs/`, and
- * that its links lead somewhere.
+ * that its links, and those of the skills under `skills/`, lead somewhere.
  *
  * - Every `@doc <document>#<anchor>` reference in a test under `test/` names a document and a
  *   heading that exist.
  * - Every section of a document under `docs/guides/` or `docs/reference/`, each heading from `##`
  *   down, is named by a test, unless the section begins with `<!-- no claims: <reason> -->`.
- * - Every relative link and anchor in `README.md` and `docs/` leads to a file, a directory, or a
- *   heading that exists, and `docs/README.md` links to every other document under `docs/`.
+ * - Every relative link and anchor in `README.md`, `docs/`, and `skills/` leads to a file, a
+ *   directory, or a heading that exists, and `docs/README.md` links to every other document under
+ *   `docs/`.
  *
  * Run it from the repository root with `bun run check:docs`. It prints one
  * `<file>:<line>: <problem>` line per problem and exits with code 1 when it finds any.
  *
  * @decision .agents/decisions/261119_055008-documentation.md#tests-that-hold-the-documentation
+ * @decision .agents/decisions/261119_074252-trial-apps.md#the-skill
  */
 import type { Dirent } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
@@ -45,6 +47,7 @@ interface Document {
 
 const README = "README.md";
 const DOCS_DIR = "docs";
+const SKILLS_DIR = "skills";
 const MAP = "docs/README.md";
 const TESTS_DIR = "test";
 /** Documents whose every section a test must name. */
@@ -139,6 +142,7 @@ async function readDocuments(root: string): Promise<Map<string, Document>> {
   const paths: string[] = [];
   if (await Bun.file(join(root, README)).exists()) paths.push(join(root, README));
   for await (const path of filesBelow(join(root, DOCS_DIR), /\.md$/)) paths.push(path);
+  for await (const path of filesBelow(join(root, SKILLS_DIR), /\.md$/)) paths.push(path);
   const documents = new Map<string, Document>();
   for (const path of paths) {
     const file = toPosix(relative(root, path));

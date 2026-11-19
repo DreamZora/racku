@@ -21,6 +21,8 @@
   },
   "files": [
     "src",
+    "docs",
+    "skills",
     "LICENSE",
     "README.md"
   ],

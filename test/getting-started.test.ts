@@ -175,6 +175,13 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
     output: "",
   });
 
+  // The skill that the guide copies into the app comes with the package.
+  expect(command("mkdir -p .claude/skills")).toBe(
+    "mkdir -p .claude/skills && cp -r node_modules/rack42u/skills/rack42u .claude/skills/",
+  );
+  const skill = join(app, "node_modules", "rack42u", "skills", "rack42u", "SKILL.md");
+  expect(await Bun.file(skill).text()).toStartWith("---\nname: rack42u\n");
+
   const port = await freePort();
   const files = blocks("ts").filter((code) => /^\/\/ [\w./-]+\.ts\n/.test(code));
   expect(files.map((code) => code.split("\n")[0])).toEqual([
