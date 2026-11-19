@@ -206,6 +206,8 @@ interface State {
   readonly url: URL;
   readonly limits: Limits;
   readonly allowed: ReadonlySet<string> | undefined;
+  /** The last `Host` header that passed the check; most requests repeat it. */
+  lastHost: string | undefined;
   handlers: Normalized;
   pairs: Pair[] | undefined;
   certificates: CertificateInfo[];
@@ -463,6 +465,8 @@ export class ListenerHost {
   /** The server that took each request, for the methods of the listener. */
   readonly #taken = new WeakMap<Request, Bun.Server<unknown>>();
   #ticker: ReturnType<typeof setInterval> | undefined;
+  /** The promise that the handlers of this turn of the event loop wait for, if any. */
+  #outsideTurn: Promise<void> | undefined;
 
   constructor(options: ListenerHostOptions) {
     this.#options = options;
@@ -603,6 +607,7 @@ export class ListenerHost {
         url: new URL(`${protocol}://${host}:${port}/`),
         limits,
         allowed,
+        lastHost: undefined,
         handlers,
         pairs,
         certificates: describePairs(pairs),
@@ -800,9 +805,13 @@ export class ListenerHost {
     // origin; only the Host header gives it away.
     // @decision .agents/decisions/261118_070617-panels-as-devices.md#defaults-and-bounds
     if (state.allowed !== undefined) {
-      const host = hostOf(request.headers.get("host"));
-      if (host === undefined || !state.allowed.has(host)) {
-        return new Response("Forbidden: unknown host", { status: 403 });
+      const raw = request.headers.get("host") ?? undefined;
+      if (raw === undefined || raw !== state.lastHost) {
+        const host = hostOf(raw ?? null);
+        if (host === undefined || !state.allowed.has(host)) {
+          return new Response("Forbidden: unknown host", { status: 403 });
+        }
+        state.lastHost = raw;
       }
     }
     if (!this.#installed) {
@@ -818,7 +827,7 @@ export class ListenerHost {
     }
     // A handler that is still running when the Worker ends gets Bun's placeholder answer, a 200
     // "Welcome to Bun!", instead of a failure. Run outside Bun's callback, the request fails.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await this.#outside();
     // The counters that status() shows catch up on the ticker, not per request, which saves a
     // copy of every listener's counters twice per request.
     this.#handling++;
@@ -829,6 +838,21 @@ export class ListenerHost {
       this.#handling--;
       this.#options.wake();
     }
+  }
+
+  /**
+   * Resolves after a `setImmediate`, outside Bun's callback. The handlers that arrive in one turn
+   * of the event loop share one `setImmediate` and one promise, which they would otherwise each
+   * create.
+   */
+  #outside(): Promise<void> {
+    this.#outsideTurn ??= new Promise<void>((resolve) => {
+      setImmediate(() => {
+        this.#outsideTurn = undefined;
+        resolve();
+      });
+    });
+    return this.#outsideTurn;
   }
 
   #websocket(state: State, taken: () => Bun.Server<unknown>): Record<string, unknown> {

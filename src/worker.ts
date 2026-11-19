@@ -99,6 +99,7 @@ import { validate } from "./schema.ts";
 import {
   armTimer,
   cancelStreams,
+  LONGEST_TIMER,
   putStream,
   StreamChannel,
   type StreamReceiver,
@@ -139,8 +140,17 @@ interface Outgoing {
    * leave with the input; any still attached when the call settles are detached.
    */
   transfer: ArrayBuffer[] | undefined;
-  timer: ReturnType<typeof setTimeout> | undefined;
-  cleanup: (() => void) | undefined;
+  /** The queue of calls with the same timeout that times it out, while its timeout runs. */
+  timed: TimerQueue | undefined;
+  /** When it times out, on `performance.now()`'s clock. */
+  expires: number;
+  /** Its neighbors in `timed`. */
+  older: Outgoing | undefined;
+  newer: Outgoing | undefined;
+  /** The caller's signal, which the call listens to as an `EventListenerObject` until it ends. */
+  signal: AbortSignal | undefined;
+  /** Shared by every call, so that listening to a signal creates no function per call. */
+  readonly handleEvent: (this: Outgoing) => void;
   /** The link the call went out on, and its id there; unset while the call waits. */
   link: NeedLink | undefined;
   id: number;
@@ -157,6 +167,18 @@ interface Outgoing {
   streams: number;
   /** Counted as finished: it settled, and its streams ended. */
   finished: boolean;
+}
+
+/**
+ * The calls whose timeouts run, one queue per timeout value. Calls with the same timeout expire
+ * in the order their timeouts started, so a queue needs one timer, for its oldest call, where
+ * each call would otherwise arm and clear one of its own.
+ */
+interface TimerQueue {
+  readonly ms: number;
+  oldest: Outgoing | undefined;
+  newest: Outgoing | undefined;
+  timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 /** The consumer end of a link. */
@@ -689,8 +711,12 @@ function callOut(
       reject,
       input,
       transfer: undefined,
-      timer: undefined,
-      cleanup: undefined,
+      timed: undefined,
+      expires: 0,
+      older: undefined,
+      newer: undefined,
+      signal: undefined,
+      handleEvent: onCallAborted,
       link: undefined,
       id: 0,
       queued: false,
@@ -751,20 +777,24 @@ function callOut(
     // A call with an input stream times out from the end of that stream.
     if (call.sender === undefined) startTimer(call);
     if (signal !== undefined) {
-      const onAbort = () => {
-        const error = new RackError("RACK_CANCELLED", `${where}: call cancelled`);
-        // The provider's call.signal aborts too, also when the result came and streams still run.
-        cancelAtProvider(call, true);
-        call.sender?.cancel(error);
-        call.receiver?.cancel(error);
-        settle(call, { ok: false, error });
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      call.cleanup = () => signal.removeEventListener("abort", onAbort);
+      // A signal aborts once, and the end of the call removes the listener: `once` would only
+      // cost.
+      call.signal = signal;
+      signal.addEventListener("abort", call);
     }
     if (state.held) enqueue(state, call);
     else send(state, call);
   });
+}
+
+/** The caller's signal aborted: the call fails, and so do its streams. */
+function onCallAborted(this: Outgoing): void {
+  const error = new RackError("RACK_CANCELLED", `${this.need.name}.${this.member}: call cancelled`);
+  // The provider's call.signal aborts too, also when the result came and streams still run.
+  cancelAtProvider(this, true);
+  this.sender?.cancel(error);
+  this.receiver?.cancel(error);
+  settle(this, { ok: false, error });
 }
 
 /**
@@ -773,12 +803,62 @@ function callOut(
  * @decision .agents/decisions/261116_024226-backplane-links.md#rpc
  */
 function startTimer(call: Outgoing): void {
-  if (call.settled || call.timer !== undefined) return;
-  call.timer = armTimer(call.ms, () => {
+  if (call.settled || call.timed !== undefined || !Number.isFinite(call.ms)) return;
+  const ms = Math.min(Math.max(0, call.ms), LONGEST_TIMER);
+  let queue = timerQueues.get(ms);
+  if (queue === undefined) {
+    queue = { ms, oldest: undefined, newest: undefined, timer: undefined };
+    timerQueues.set(ms, queue);
+  }
+  call.timed = queue;
+  call.expires = performance.now() + ms;
+  call.older = queue.newest;
+  if (queue.newest === undefined) queue.oldest = call;
+  else queue.newest.newer = call;
+  queue.newest = call;
+  if (queue.timer === undefined) armQueue(queue);
+}
+
+/** Calls with timeouts that run, by their timeout in ms. */
+const timerQueues = new Map<number, TimerQueue>();
+
+function armQueue(queue: TimerQueue): void {
+  const oldest = queue.oldest;
+  if (oldest === undefined) return;
+  queue.timer = setTimeout(() => expire(queue), Math.max(0, oldest.expires - performance.now()));
+}
+
+/** Times out the calls of a queue whose time has come, and waits for the next one. */
+function expire(queue: TimerQueue): void {
+  queue.timer = undefined;
+  // A timer can fire a little early on its clock; a millisecond is within its precision.
+  const now = performance.now() + 1;
+  for (let call = queue.oldest; call !== undefined && call.expires <= now; call = queue.oldest) {
+    stopTimer(call);
     const target = call.link?.provider ?? call.need.name;
     cancelAtProvider(call);
     settle(call, failure("RACK_TIMEOUT", `${target}.${call.member} timed out after ${call.ms} ms`));
-  });
+  }
+  if (queue.oldest === undefined) timerQueues.delete(queue.ms);
+  else armQueue(queue);
+}
+
+/** Takes a call out of its timer queue; the queue's timer, set for an older call, may stay. */
+function stopTimer(call: Outgoing): void {
+  const queue = call.timed;
+  if (queue === undefined) return;
+  call.timed = undefined;
+  if (call.older === undefined) queue.oldest = call.newer;
+  else call.older.newer = call.newer;
+  if (call.newer === undefined) queue.newest = call.older;
+  else call.newer.older = call.older;
+  call.older = undefined;
+  call.newer = undefined;
+  if (queue.oldest === undefined && queue.timer !== undefined) {
+    clearTimeout(queue.timer);
+    queue.timer = undefined;
+    timerQueues.delete(queue.ms);
+  }
 }
 
 /**
@@ -874,7 +954,7 @@ function cancelAtProvider(call: Outgoing, afterResult = false): void {
 function settle(call: Outgoing, outcome: Outcome): void {
   if (call.settled) return;
   call.settled = true;
-  clearTimeout(call.timer);
+  stopTimer(call);
   if (call.transfer !== undefined) detach(call.transfer);
   call.link?.pending.delete(call.id);
   const { stats } = call;
@@ -902,7 +982,7 @@ function settle(call: Outgoing, outcome: Outcome): void {
 function finishIfDone(call: Outgoing): void {
   if (call.finished || !call.settled || call.streams > 0) return;
   call.finished = true;
-  call.cleanup?.();
+  call.signal?.removeEventListener("abort", call);
   call.stats.pending--;
   call.need.unfinished--;
 }

@@ -307,6 +307,8 @@ describe("http-panel requests", () => {
 
   test("README.md: a client that goes away cancels the call, with RACK_CANCELLED at the device", async () => {
     const { running, get } = await panelRack();
+    // A call that ends leaves its controller to the next one, which the client then cancels.
+    expect(await (await get("/web/greeting")).text()).toBe("hello");
     const controller = new AbortController();
     const pending = get("/web/slow", { signal: controller.signal }).catch(() => "gone");
     await waitFor(() => statusOf(running, "web").inFlight === 1);
@@ -1103,8 +1105,10 @@ describe("http/v2 and httpHandler", () => {
       const output = await handler.handle({ ...request, body: null }, call);
       return "status" in output ? output.body : undefined;
     };
-    // The default is 256 KiB.
+    // The default is 256 KiB; a body of 1 KiB or more is moved, and a smaller one copied.
     const plain = httpHandler(fetch);
+    expect(await bodyOf(plain, 1000)).toBeInstanceOf(Uint8Array);
+    expect(moved).toEqual([]);
     const whole = await bodyOf(plain, 256 * 1024);
     expect(whole).toBeInstanceOf(Uint8Array);
     expect(moved).toEqual([(whole as Uint8Array).buffer as ArrayBuffer]);

@@ -35,7 +35,11 @@ type Bytes = Uint8Array<ArrayBuffer>;
  * stream's window, which a stream of a body that size would fill at once anyway.
  */
 const STREAM_THRESHOLD = 256 * 1024;
-const LATE = Symbol("late");
+/**
+ * The smallest request body that the call moves instead of copying; below it, the copy costs the
+ * receiving thread less, as `httpHandler` notes for response bodies.
+ */
+const MOVE_FROM = 1024;
 /** The message of the 408 for a body sent whole that didn't arrive within `idleTimeout`. */
 const LATE_BODY = "the client didn't send its body within idleTimeout";
 /** The most message calls a socket has unfinished. */
@@ -78,6 +82,7 @@ export const PanelConfig = v.object({
 });
 
 type Config = v.InferOutput<typeof PanelConfig>;
+type HttpInput = v.InferInput<(typeof Http.members.handle)["input"]>;
 type PanelNeeds = Record<string, ReturnType<typeof patched<typeof Http>>>;
 type Ctx = DeviceContext<PanelNeeds, Record<never, never>, Config>;
 
@@ -153,10 +158,19 @@ let loaded: Loaded[] = [];
  */
 const SIGNAL_TICK_MS = 100;
 
-/** A call that waits for its response head, and the controller that cancels it. */
+/**
+ * A request in the panel: its call's controller, and who stalled its body, all in one object, so
+ * that a request allocates as little as it can.
+ */
 interface Waiting {
   request: Request;
   aborter: AbortController;
+  /** The client's signal can abort `aborter`: the controller can't serve another call. */
+  attached: boolean;
+  /** The client stopped sending the body. */
+  client: boolean;
+  /** The device stopped taking the body. */
+  device: boolean;
 }
 
 /**
@@ -187,7 +201,9 @@ function attachSignals(): void {
   const due = aged;
   aged = fresh;
   fresh = due;
-  for (const { request, aborter } of due) {
+  for (const waiting of due) {
+    const { request, aborter } = waiting;
+    waiting.attached = true;
     const signal = request.signal;
     if (signal.aborted) aborter.abort(signal.reason);
     else signal.addEventListener("abort", () => aborter.abort(signal.reason), { once: true });
@@ -198,6 +214,14 @@ function attachSignals(): void {
     signalTicker = undefined;
   }
 }
+
+/**
+ * Controllers of calls that ended without being aborted, while nothing but the ended call
+ * listened to them, kept for later calls: creating one cost about 3% of a small request's time
+ * in the panel's Worker. At most 1 024 are kept.
+ */
+const spareAborters: AbortController[] = [];
+const SPARE_ABORTERS = 1024;
 
 function json(status: number, code: string, message: string): Response {
   return Response.json({ code, message }, { status });
@@ -264,31 +288,100 @@ function bodyError(error: unknown): RackError {
  *
  * @decision .agents/decisions/261118_165318-stream-threshold.md#bodies-sent-whole
  */
-async function readWhole(
-  request: Request,
-  idle: number,
-  stalled: { client: boolean },
-): Promise<Bytes> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<typeof LATE>((resolve) => {
-    timer = setTimeout(() => resolve(LATE), idle * 1000);
-  });
+function readWhole(request: Request, idle: number, stalled: { client: boolean }): Promise<Bytes> {
   const reading = request.bytes() as Promise<Bytes>;
-  try {
-    const bytes = await Promise.race([reading, late]);
-    if (bytes === LATE) {
-      stalled.client = true;
-      // Bun fails the read once the panel answers; nothing waits for it any more.
-      reading.catch(() => undefined);
-      throw new RackError("RACK_TIMEOUT", LATE_BODY);
-    }
-    return bytes;
-  } catch (error) {
-    throw error instanceof RackError ? error : bodyError(error);
-  } finally {
-    clearTimeout(timer);
-  }
+  return new Promise<Bytes>((resolve, reject) => {
+    const deadline: Deadline = {
+      expires: performance.now() + idle * 1000,
+      queued: false,
+      older: undefined,
+      newer: undefined,
+      expire() {
+        stalled.client = true;
+        // Bun fails the read once the panel answers; nothing waits for it any more.
+        reading.catch(() => undefined);
+        reject(new RackError("RACK_TIMEOUT", LATE_BODY));
+      },
+    };
+    bodyDeadlines.add(deadline);
+    reading.then(
+      (bytes) => {
+        if (bodyDeadlines.remove(deadline)) resolve(bytes);
+      },
+      (error: unknown) => {
+        if (bodyDeadlines.remove(deadline)) {
+          reject(error instanceof RackError ? error : bodyError(error));
+        }
+      },
+    );
+  });
 }
+
+/** A body read's deadline in {@link bodyDeadlines}. */
+interface Deadline {
+  /** On `performance.now()`'s clock. */
+  readonly expires: number;
+  /** It is in the queue: added, and neither removed nor expired. */
+  queued: boolean;
+  older: Deadline | undefined;
+  newer: Deadline | undefined;
+  expire(): void;
+}
+
+/**
+ * The deadlines of the bodies being read whole, oldest first. Every body of an instance has the
+ * same `idleTimeout`, so they expire in the order they started, and one timer, for the oldest,
+ * serves them all, where each body would otherwise arm, race, and clear one of its own.
+ */
+const bodyDeadlines = new (class {
+  #oldest: Deadline | undefined;
+  #newest: Deadline | undefined;
+  #timer: ReturnType<typeof setTimeout> | undefined;
+
+  add(deadline: Deadline): void {
+    deadline.queued = true;
+    deadline.older = this.#newest;
+    if (this.#newest === undefined) this.#oldest = deadline;
+    else this.#newest.newer = deadline;
+    this.#newest = deadline;
+    if (this.#timer === undefined) this.#arm();
+  }
+
+  /** Takes a deadline out; `false` when it had expired already. */
+  remove(deadline: Deadline): boolean {
+    if (!deadline.queued) return false;
+    deadline.queued = false;
+    if (deadline.older === undefined) this.#oldest = deadline.newer;
+    else deadline.older.newer = deadline.newer;
+    if (deadline.newer === undefined) this.#newest = deadline.older;
+    else deadline.newer.older = deadline.older;
+    deadline.older = undefined;
+    deadline.newer = undefined;
+    if (this.#oldest === undefined && this.#timer !== undefined) {
+      clearTimeout(this.#timer);
+      this.#timer = undefined;
+    }
+    return true;
+  }
+
+  #arm(): void {
+    const oldest = this.#oldest;
+    if (oldest === undefined) return;
+    this.#timer = setTimeout(() => this.#expire(), Math.max(0, oldest.expires - performance.now()));
+  }
+
+  #expire(): void {
+    this.#timer = undefined;
+    // A timer can fire a little early on its clock; a millisecond is within its precision.
+    const now = performance.now() + 1;
+    for (let oldest = this.#oldest; oldest !== undefined && oldest.expires <= now; ) {
+      this.remove(oldest);
+      oldest.expire();
+      oldest = this.#oldest;
+    }
+    if (this.#timer === undefined) this.#arm();
+  }
+})();
 
 /**
  * The request body as the panel streams it on: a stream that fails with `RACK_TIMEOUT` when the
@@ -393,7 +486,9 @@ async function handle(
   need: string,
 ): Promise<Response | undefined> {
   const { config } = ctx;
-  const upgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+  // A WebSocket upgrade is always a GET, as RFC 6455 says, so other methods skip the lookup.
+  const upgrade =
+    request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket";
   const limit = config.webSocket.maxConnections;
   if (upgrade && sockets.size >= limit) {
     if (!refusing) {
@@ -404,58 +499,76 @@ async function handle(
   }
   // Bun's timer bounds a whole exchange; the panel bounds idle time with its streams instead.
   // @decision .agents/decisions/261118_071513-http-panel-device.md#requests
+  const idle = config.idleTimeout;
   server.timeout(request, 0);
-  const restore = () => server.timeout(request, config.idleTimeout);
-  const stalled = { client: false, device: false };
   // The client that goes away and a device that stops reading the body both cancel the call.
-  const aborter = new AbortController();
-  const waiting: Waiting = { request, aborter };
+  const aborter = spareAborters.pop() ?? new AbortController();
+  const waiting: Waiting = { request, aborter, attached: false, client: false, device: false };
+  const stalled = waiting;
   watchClient(waiting);
   const options: CallOptions = { signal: aborter.signal, streamTimeout: config.idleTimeout * 1000 };
   let body: Bytes | ReadableStream<Uint8Array> | null = null;
-  if (request.method !== "GET" && request.method !== "HEAD" && request.body !== null) {
-    const length = request.headers.get("content-length");
-    if (length !== null && Number(length) <= config.streamThreshold) {
+  // A body sent whole is told by its declared length, without `request.body`, for which Bun
+  // would build a stream that `bytes()` doesn't use; a declared length of 0 has no body.
+  const length =
+    request.method === "GET" || request.method === "HEAD"
+      ? null
+      : request.headers.get("content-length");
+  if (length !== null && Number(length) <= config.streamThreshold) {
+    if (Number(length) > 0) {
       try {
         body = await readWhole(request, config.idleTimeout, stalled);
       } catch (error) {
         unwatchClient(waiting);
-        restore();
+        server.timeout(request, idle);
         return statusFor(error, stalled);
       }
       // Bun's bytes() gives a buffer of its own, as measured on Linux; the call moves it.
-      if (body.byteOffset === 0 && body.byteLength === body.buffer.byteLength) {
+      if (
+        body.byteLength >= MOVE_FROM &&
+        body.byteOffset === 0 &&
+        body.byteLength === body.buffer.byteLength
+      ) {
         options.transfer = [body.buffer];
       }
-    } else body = guard(request.body, config.idleTimeout, stalled, () => aborter.abort());
+    }
+  } else if (request.method !== "GET" && request.method !== "HEAD" && request.body !== null) {
+    body = guard(request.body, config.idleTimeout, stalled, () => aborter.abort());
   }
   const socket = upgrade ? `${ctx.slot.name}:${instance}:${++socketCount}` : undefined;
-  const headers: [string, string][] = [];
-  request.headers.forEach((value, name) => {
-    headers.push([name, value]);
-  });
-  const input = {
+  // Bun's params need no copy: the call clones its input as it sends it.
+  const input: HttpInput = {
     method: request.method,
     url: request.url,
-    headers,
-    params: { ...request.params } as Record<string, string>,
+    headers: [...request.headers] as [string, string][],
+    params: request.params as Record<string, string>,
     body,
-    ...(socket === undefined ? {} : { socket }),
   };
+  if (socket !== undefined) input.socket = socket;
   let output: Awaited<ReturnType<Ctx["ports"][string]["handle"]>>;
   try {
     output = await (ctx.ports[need] as Ctx["ports"][string]).handle(input, options);
   } catch (error) {
-    restore();
+    server.timeout(request, idle);
     return statusFor(error, stalled);
   } finally {
     // From the head on, a client that goes away cancels the response's stream, and with it the
     // call; Bun cancels the stream itself.
     unwatchClient(waiting);
   }
+  // The call has ended, and with it its listener on the controller, unless its response streams.
+  if (
+    !waiting.attached &&
+    !aborter.signal.aborted &&
+    !(body instanceof ReadableStream) &&
+    !("body" in output && output.body instanceof ReadableStream) &&
+    spareAborters.length < SPARE_ABORTERS
+  ) {
+    spareAborters.push(aborter);
+  }
   if ("upgrade" in output) {
     if (socket === undefined) {
-      restore();
+      server.timeout(request, idle);
       return json(502, "RACK_INVALID_OUTPUT", "the device upgraded a request that is no upgrade");
     }
     const headers = new Headers(output.upgrade.headers ?? []);
@@ -463,20 +576,20 @@ async function handle(
       headers.set("Sec-WebSocket-Protocol", output.upgrade.protocol);
     }
     if (server.upgrade(request, { headers, data: { socket, need } })) return undefined;
-    restore();
+    server.timeout(request, idle);
     return json(400, "RACK_INVALID_INPUT", "the request can't be upgraded");
   }
   const streamed = output.body instanceof ReadableStream;
   try {
     const responseBody = streamed
-      ? watched(output.body as ReadableStream<Uint8Array>, restore)
+      ? watched(output.body as ReadableStream<Uint8Array>, () => server.timeout(request, idle))
       : (output.body as Uint8Array | null);
     const response = new Response(responseBody, { status: output.status, headers: output.headers });
-    if (!streamed) restore();
+    if (!streamed) server.timeout(request, idle);
     return response;
   } catch (error) {
     // The device returned headers that `Response` rejects, such as an invalid header name.
-    restore();
+    server.timeout(request, idle);
     return json(502, "RACK_INVALID_OUTPUT", messageOf(error));
   }
 }

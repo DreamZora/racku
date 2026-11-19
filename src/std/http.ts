@@ -141,6 +141,14 @@ const STREAM_THRESHOLD = 256 * 1024;
 /** Microtask turns that a read of a body may take and still count as at once. */
 const HOPS = 4;
 /**
+ * The smallest body that a call or a result moves instead of copying. Below it, the copy costs
+ * the receiving thread less than the move does, as measured on Linux: 1.3 µs against 1.7 µs for
+ * a body of 2 bytes, at the panel's thread, which every response reaches.
+ *
+ * @decision .agents/decisions/261118_195832-faster-panel-responses.md#evidence
+ */
+const MOVE_FROM = 1024;
+/**
  * How long a panel instance may stay silent before its sockets count as gone: three of the
  * panel's checks, 90 s. Tests shorten the checks through the environment, as the panel does.
  */
@@ -258,8 +266,8 @@ function rest(
  * `fetch` receives a standard `Request`, whose `signal` aborts when the client goes away or the
  * call times out, and whose body streams when the panel streams it. A `Response` whose body
  * ends at once within `streamThreshold`, 256 KiB by default, goes back in one message, which
- * moves its bytes instead of copying them; any other body streams, so server-sent events and
- * large downloads work. With `websocket`, `fetch` accepts an upgrade with
+ * moves its bytes instead of copying them from 1 KiB on; any other body streams, so server-sent
+ * events and large downloads work. With `websocket`, `fetch` accepts an upgrade with
  * `server.upgrade(request, options)`; the sockets' `send()` and `close()` travel as the events
  * of `emit`, the port's emitter.
  *
@@ -423,7 +431,7 @@ export function httpHandler<T = unknown>(
         throw new RackError("RACK_INVALID_OUTPUT", "fetch returned no response");
       }
       const body = await bodyOf(response, threshold);
-      if (body instanceof Uint8Array) call.transfer(body.buffer);
+      if (body instanceof Uint8Array && body.byteLength >= MOVE_FROM) call.transfer(body.buffer);
       return { status: response.status, headers: pairsOf(response.headers), body };
     },
     async opened({ socket }) {

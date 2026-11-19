@@ -24,7 +24,7 @@ export const STREAM_WINDOW = 256 * 1024;
 export const STREAM_PIECE = 1024 * 1024;
 
 /** The longest delay a timer can wait; Bun runs a timer with a longer one after 1 ms. */
-const LONGEST_TIMER = 2 ** 31 - 1;
+export const LONGEST_TIMER = 2 ** 31 - 1;
 
 /**
  * Where a call's input or result carries its stream: the key of the top-level property, or
