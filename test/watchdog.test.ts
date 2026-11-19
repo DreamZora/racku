@@ -257,9 +257,12 @@ describe("biting", () => {
     await created.write("devices/probe.ts", probe({ activate: hangs, version: "v2" }));
     const [result] = await running.reload();
     expect(result?.error).toBeUndefined();
-    await waitFor(() => probeStatus(running).firmware === good, 5_000);
+    // status() shows the fallback's instance as the rack installs it, and the history records
+    // the fallback once the install is done, so the test waits for the record.
+    await waitFor(() => running.history("probe")[0]?.cause === "fallback", 5_000);
     expect(probeStatus(running)).toMatchObject({
       state: "degraded",
+      firmware: good,
       knownGood: good,
       error: { data: { watchdog: "event loop", timeout: 1000 } },
     });
