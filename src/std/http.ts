@@ -127,6 +127,8 @@ export interface HttpHandler<T = unknown> extends PortImpl<HttpMembers> {
 
 /** Bodies up to this size go in one message; larger or slower ones stream. */
 const SMALL = 64 * 1024;
+/** Microtask turns that a read of a body may take and still count as at once. */
+const HOPS = 4;
 /**
  * How long a panel instance may stay silent before its sockets count as gone: three of the
  * panel's checks, 90 s. Tests shorten the checks through the environment, as the panel does.
@@ -162,8 +164,19 @@ function pairsOf(headers: Headers): [string, string][] {
 }
 
 /**
+ * A read that settles within {@link HOPS} microtask turns, as a read of a body in memory does,
+ * or `LATER`. It saves a timer for every response whose body is complete at once.
+ */
+async function soon(next: Promise<Read>): Promise<Read | typeof LATER> {
+  for (let hop = 0; hop < HOPS && Bun.peek.status(next) === "pending"; hop++) await null;
+  return Bun.peek.status(next) === "pending" ? LATER : await next;
+}
+
+/**
  * The body of a response: `null`, its bytes when it ends within 64 KiB without waiting, or a
  * stream otherwise, so that a large or slow body, such as server-sent events, starts at once.
+ * A read counts as at once when it settles within a few microtask turns, or else before a
+ * `setImmediate`, which ends the event loop's turn.
  */
 async function bodyOf(response: Response): Promise<Bytes | ReadableStream<Uint8Array> | null> {
   const body = response.body;
@@ -171,14 +184,17 @@ async function bodyOf(response: Response): Promise<Bytes | ReadableStream<Uint8A
   const reader: Reader = body.getReader();
   const taken: Uint8Array[] = [];
   let size = 0;
-  // One turn of the event loop: the chunks that arrive before it are the body's at once.
-  const later = new Promise<typeof LATER>((resolve) => setImmediate(() => resolve(LATER)));
+  let later: Promise<typeof LATER> | undefined;
   for (;;) {
     const next: Promise<Read> = reader.read();
-    const first = await Promise.race([next, later]);
-    if (first === LATER) return rest(taken, reader, next);
-    if (first.done) break;
-    const chunk = first.value as unknown;
+    let read = await soon(next);
+    if (read === LATER) {
+      later ??= new Promise<typeof LATER>((resolve) => setImmediate(() => resolve(LATER)));
+      read = await Promise.race([next, later]);
+      if (read === LATER) return rest(taken, reader, next);
+    }
+    if (read.done) break;
+    const chunk = read.value as unknown;
     if (!(chunk instanceof Uint8Array)) {
       throw new RackError("RACK_INVALID_OUTPUT", "a response body chunk must be a Uint8Array");
     }
@@ -186,6 +202,7 @@ async function bodyOf(response: Response): Promise<Bytes | ReadableStream<Uint8A
     size += chunk.byteLength;
     if (size > SMALL) return rest(taken, reader, undefined);
   }
+  // A buffer of its own, which the result moves to the panel instead of copying it.
   const bytes = new Uint8Array(size);
   let offset = 0;
   for (const chunk of taken) {
@@ -226,8 +243,9 @@ function rest(
  *
  * `fetch` receives a standard `Request`, whose `signal` aborts when the client goes away or the
  * call times out, and whose body streams when the panel streams it. A `Response` whose body
- * ends at once within 64 KiB goes back in one message; any other body streams, so server-sent
- * events and large downloads work. With `websocket`, `fetch` accepts an upgrade with
+ * ends at once within 64 KiB goes back in one message, which moves its bytes instead of copying
+ * them; any other body streams, so server-sent events and large downloads work. With
+ * `websocket`, `fetch` accepts an upgrade with
  * `server.upgrade(request, options)`; the sockets' `send()` and `close()` travel as the events
  * of `emit`, the port's emitter.
  *
@@ -381,6 +399,7 @@ export function httpHandler<T = unknown>(
         throw new RackError("RACK_INVALID_OUTPUT", "fetch returned no response");
       }
       const body = await bodyOf(response);
+      if (body instanceof Uint8Array) call.transfer(body.buffer);
       return { status: response.status, headers: pairsOf(response.headers), body };
     },
     async opened({ socket }) {

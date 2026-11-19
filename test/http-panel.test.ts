@@ -15,6 +15,7 @@
  * @decision .agents/decisions/261118_071513-http-panel-device.md#the-connector
  * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
  * @decision .agents/decisions/261118_071513-http-panel-device.md#observation
+ * @decision .agents/decisions/261118_165318-stream-threshold.md#cancellation
  */
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
@@ -283,6 +284,8 @@ describe("http-panel requests", () => {
     const controller = new AbortController();
     const pending = get("/web/slow", { signal: controller.signal }).catch(() => "gone");
     await waitFor(() => statusOf(running, "web").inFlight === 1);
+    // Mostly before the panel reads the client's signal, which it does 100 ms to 200 ms after a
+    // call starts: the signal it reads then reports the client gone.
     controller.abort();
     expect(await pending).toBe("gone");
     const errors = await waitFor(async () => {

@@ -819,14 +819,14 @@ export class ListenerHost {
     // A handler that is still running when the Worker ends gets Bun's placeholder answer, a 200
     // "Welcome to Bun!", instead of a failure. Run outside Bun's callback, the request fails.
     await new Promise<void>((resolve) => setImmediate(resolve));
+    // The counters that status() shows catch up on the ticker, not per request, which saves a
+    // copy of every listener's counters twice per request.
     this.#handling++;
-    this.#count();
     try {
       if (handler === undefined) return new Response("Not Found", { status: 404 });
       return await handler(request, state.listener);
     } finally {
       this.#handling--;
-      this.#count();
       this.#options.wake();
     }
   }

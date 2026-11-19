@@ -139,6 +139,58 @@ let refusing = false;
 let listener: Listener<SocketData> | undefined;
 let loaded: Loaded[] = [];
 
+/**
+ * How long a call waits for its response head before the panel reads its client's signal: one
+ * to two ticks of 100 ms.
+ */
+const SIGNAL_TICK_MS = 100;
+
+/** A call that waits for its response head, and the controller that cancels it. */
+interface Waiting {
+  request: Request;
+  aborter: AbortController;
+}
+
+/**
+ * The calls that wait for a response head, in two generations: a tick attaches the client's
+ * signal to the calls that were already waiting at the tick before.
+ *
+ * Reading `request.signal` makes Bun build a signal for the request, which cost about a tenth of
+ * a small request's time in the panel, and most calls answer before a tick. A signal that the
+ * panel reads after its client went away comes back aborted, as measured on Linux, so a call
+ * whose client went away is still cancelled, at most two ticks after it started.
+ *
+ * @decision .agents/decisions/261118_165318-stream-threshold.md#cancellation
+ */
+let fresh = new Set<Waiting>();
+let aged = new Set<Waiting>();
+let signalTicker: ReturnType<typeof setInterval> | undefined;
+
+function watchClient(waiting: Waiting): void {
+  fresh.add(waiting);
+  signalTicker ??= setInterval(attachSignals, SIGNAL_TICK_MS);
+}
+
+function unwatchClient(waiting: Waiting): void {
+  if (!fresh.delete(waiting)) aged.delete(waiting);
+}
+
+function attachSignals(): void {
+  const due = aged;
+  aged = fresh;
+  fresh = due;
+  for (const { request, aborter } of due) {
+    const signal = request.signal;
+    if (signal.aborted) aborter.abort(signal.reason);
+    else signal.addEventListener("abort", () => aborter.abort(signal.reason), { once: true });
+  }
+  due.clear();
+  if (aged.size === 0) {
+    clearInterval(signalTicker);
+    signalTicker = undefined;
+  }
+}
+
 function json(status: number, code: string, message: string): Response {
   return Response.json({ code, message }, { status });
 }
@@ -193,7 +245,7 @@ function bodyError(error: unknown): RackError {
 /**
  * Reads a body of a declared length up to 64 KiB, which goes to the device as bytes. It fails
  * with `RACK_TIMEOUT` when the client sends nothing for `idle` s, under one timer that each
- * chunk restarts.
+ * chunk restarts. The bytes are in a buffer of their own, which the call moves.
  */
 async function readSmall(
   source: ReadableStream<Uint8Array>,
@@ -352,8 +404,11 @@ async function handle(
   server.timeout(request, 0);
   const restore = () => server.timeout(request, config.idleTimeout);
   const stalled = { client: false, device: false };
+  // The client that goes away and a device that stops reading the body both cancel the call.
   const aborter = new AbortController();
-  const signal = AbortSignal.any([request.signal, aborter.signal]);
+  const waiting: Waiting = { request, aborter };
+  watchClient(waiting);
+  const options: CallOptions = { signal: aborter.signal, streamTimeout: config.idleTimeout * 1000 };
   let body: Bytes | ReadableStream<Uint8Array> | null = null;
   if (request.method !== "GET" && request.method !== "HEAD" && request.body !== null) {
     const length = request.headers.get("content-length");
@@ -361,27 +416,36 @@ async function handle(
       try {
         body = await readSmall(request.body, config.idleTimeout, stalled);
       } catch (error) {
+        unwatchClient(waiting);
         restore();
         return statusFor(error, stalled);
       }
+      options.transfer = [body.buffer];
     } else body = guard(request.body, config.idleTimeout, stalled, () => aborter.abort());
   }
   const socket = upgrade ? `${ctx.slot.name}:${instance}:${++socketCount}` : undefined;
+  const headers: [string, string][] = [];
+  request.headers.forEach((value, name) => {
+    headers.push([name, value]);
+  });
   const input = {
     method: request.method,
     url: request.url,
-    headers: [...request.headers] as [string, string][],
+    headers,
     params: { ...request.params } as Record<string, string>,
     body,
     ...(socket === undefined ? {} : { socket }),
   };
-  const options: CallOptions = { signal, streamTimeout: config.idleTimeout * 1000 };
   let output: Awaited<ReturnType<Ctx["ports"][string]["handle"]>>;
   try {
     output = await (ctx.ports[need] as Ctx["ports"][string]).handle(input, options);
   } catch (error) {
     restore();
     return statusFor(error, stalled);
+  } finally {
+    // From the head on, a client that goes away cancels the response's stream, and with it the
+    // call; Bun cancels the stream itself.
+    unwatchClient(waiting);
   }
   if ("upgrade" in output) {
     if (socket === undefined) {
