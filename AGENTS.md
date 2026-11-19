@@ -258,6 +258,7 @@ examples/net-tool/   a TCP and UDP tool: its rack, devices, and connector, which
 scripts/             project scripts: check-decisions.ts, the decision gate; check-docs.ts, the
                      documentation gate; and markdown.ts, the headings and anchors both read
 .github/workflows/   check.yml, the CI jobs on Linux, macOS, and Windows
+.github/ISSUE_TEMPLATE/  the issue forms: trial, bug, documentation, and feature
 .agents/decisions/   decision records, stored flat as <YYMMDD>_<hhmmss>-<topic>.md
 ```
 

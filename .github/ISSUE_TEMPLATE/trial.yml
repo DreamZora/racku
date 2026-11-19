@@ -1,0 +1,76 @@
+name: Problem in a trial app
+description: A problem that an agent met while it built a trial app on rack42u, knowing rack42u only from its skill and its documentation.
+title: "[trial] "
+labels: ["trial"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Trial apps live in `.agents/trials/`. One issue per distinct problem; name every app that met it.
+  - type: input
+    id: apps
+    attributes:
+      label: Trial apps
+      description: The apps that met the problem, such as `links` or `chat`.
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: rack42u commit
+      description: The commit that the trial installed, and the commit that recorded the trial.
+    validations:
+      required: true
+  - type: textarea
+    id: doing
+    attributes:
+      label: What the agent was doing
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: The command, and its output or the error.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What it expected
+    validations:
+      required: true
+  - type: dropdown
+    id: shortfall
+    attributes:
+      label: What fell short
+      options:
+        - The skill
+        - The documentation
+        - The API
+        - An error message
+        - The trial setup
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Where, and what was missing
+      description: The section of the skill or of the documentation, or the part of the API, and what it lacked.
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: How the agent worked around it
+      description: Say so when it had to read rack42u's source.
+  - type: dropdown
+    id: cost
+    attributes:
+      label: What it cost
+      options:
+        - "Blocked: the app couldn't do what its spec asks"
+        - "Slowed: extra attempts, or reading rack42u's source"
+        - "Minor"
+    validations:
+      required: true

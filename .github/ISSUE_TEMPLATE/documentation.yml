@@ -1,0 +1,21 @@
+name: Documentation
+description: The README, a document under docs/, or the skill is wrong, unclear, or missing something.
+labels: ["documentation"]
+body:
+  - type: input
+    id: where
+    attributes:
+      label: Document and section
+      description: Such as `docs/guides/devices.md#hooks`.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing
+    validations:
+      required: true
+  - type: textarea
+    id: help
+    attributes:
+      label: What would help

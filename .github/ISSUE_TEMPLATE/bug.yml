@@ -1,0 +1,50 @@
+name: Bug
+description: rack42u doesn't do what its documentation says.
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: rack42u version or commit
+    validations:
+      required: true
+  - type: input
+    id: bun
+    attributes:
+      label: Bun version
+      description: What `bun --version` prints.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Such as Ubuntu 26.04 on x64, macOS 26 on Apple silicon, or Windows 11 on x64.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: The smallest app or commands that show the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What was expected
+      description: And where the documentation says so, if it does.
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The rack's log around the problem, such as the output of `rack start --log json`.
+      render: text
