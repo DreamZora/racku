@@ -377,7 +377,28 @@ rack plan [manifest]    # print the plan without starting; --write or --check th
 rack ctl <operation>    # operate the rack running from this directory; see below
 ```
 
-On `SIGINT` (Ctrl-C) or `SIGTERM`, and on Windows on `SIGBREAK` (Ctrl-Break), both commands shut down in order and exit with code 0; a second signal exits at once with code 1. They exit with code 1 when the rack fails to start.
+On `SIGINT` (Ctrl-C) or `SIGTERM`, and on Windows on `SIGBREAK` (Ctrl-Break), both commands shut down in order. Their exit codes:
+
+| Code | When |
+|---|---|
+| 0 | The rack shut down in order. |
+| 1 | The rack failed to start, or a second stop came during the shutdown and ended it at once. |
+| 2 | The command line is wrong, such as an unknown command or flag. |
+
+`rack start` and `rack dev` also take:
+
+| Flag | Meaning |
+|---|---|
+| `--log text`, `--log json` | `text`, the default, prints one line per entry, with warnings and errors on stderr. `json` prints each entry as one line of JSON on stdout, warnings and errors included: `{ time, level, device?, message, data? }`. A `bigint` in `data` is written as a string ending in `n`, and details that JSON can't hold, such as circular ones, as their `String()`. |
+| `--stop-on-stdin-close` | Read standard input, drop what arrives, and shut down in order when it closes, as on `SIGTERM`. Signals and `rack ctl stop` work as before: whichever comes first starts the shutdown, and a second one ends it at once. |
+
+**Running a rack from another program.** A program in another language, such as the Rust shell of a desktop app, runs `rack start --stop-on-stdin-close --log json` as a child process, with its standard input a pipe that it keeps open.
+- **What it learns from the log:** the `listening` entry of each listener carries `device` and `data.url`, a panel on port 0 included; `rack <name> started` comes once every device is online; and `control listening` carries the endpoint's `address`.
+- **Stopping the rack:** the program closes the pipe, which works on every system. When the program ends for any reason, a crash or a kill included, the system closes the pipe, and the rack stops by itself.
+- **Waiting:** the shutdown takes as long as the rack's timeouts allow, such as `drainTimeout` and `hookTimeout`. A program that must not wait that long gives the rack a grace period of its own, then kills it.
+- The command line's own messages, such as a usage error, are text on stderr.
+
+A program written in Bun can instead run a rack inside itself with `start()`, with its own `logger`.
 
 `rack dev` watches the base directory, ignoring `node_modules` and dot directories. After a change it rebuilds every device and replaces the ones whose firmware hash changed, so editing a file that several devices bundle, such as a shared connector, replaces all of them. A device that fails to build keeps running its old firmware. Edits to the manifest itself take effect at once, as [Changed plans and edited manifests](#changed-plans-and-edited-manifests) describes.
 

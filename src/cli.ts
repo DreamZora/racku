@@ -6,27 +6,28 @@
  * `start`, `dev`, and `plan` load the manifest, which references devices only by path, and use
  * the manifest's directory as the base directory. `start` and `dev` run the rack with its
  * management endpoint, and shut down in order on `SIGINT`, `SIGTERM`, `SIGBREAK`, or
- * `rack ctl stop`; `plan` prints the plan without starting the rack. `ctl` sends one operation to
- * a running rack.
+ * `rack ctl stop`, and with `--stop-on-stdin-close` when their standard input closes; `plan`
+ * prints the plan without starting the rack. `ctl` sends one operation to a running rack.
  *
  * @decision .agents/decisions/261112_043034-device-api.md#command-line
  * @decision .agents/decisions/261115_222025-p0-api-details.md#command-line
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#commands-and-management
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#plan-file
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-command
+ * @decision .agents/decisions/261118_173838-running-under-another-program.md
  */
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { type Control, type ControlFile, controlPaths, openControl } from "./control.ts";
 import { watchAndReload } from "./dev.ts";
 import { RackError } from "./errors.ts";
-import { consoleLogger, type LogEntry } from "./log.ts";
+import { consoleLogger, jsonLogger, type LogEntry } from "./log.ts";
 import { isRackManifest, type RackManifest } from "./manifest.ts";
 import { planRack, type RackHandle, start } from "./rack.ts";
 
 const USAGE = [
   "usage: rack <start|dev> [manifest path, default rack.ts] [--no-plan] [--no-watchdog]",
-  "         [--control-port <port>]",
+  "         [--control-port <port>] [--log text|json] [--stop-on-stdin-close]",
   "       rack plan [manifest path, default rack.ts] [--write | --check]",
   "       rack ctl status | metrics | reload | stop",
   "       rack ctl swap <device> [source] | restart <device> [--no-cascade]",
@@ -35,14 +36,14 @@ const USAGE = [
 ].join("\n");
 
 const FLAGS: Record<string, readonly string[]> = {
-  start: ["--no-plan", "--no-watchdog", "--control-port"],
-  dev: ["--no-plan", "--no-watchdog", "--control-port"],
+  start: ["--no-plan", "--no-watchdog", "--control-port", "--log", "--stop-on-stdin-close"],
+  dev: ["--no-plan", "--no-watchdog", "--control-port", "--log", "--stop-on-stdin-close"],
   plan: ["--write", "--check"],
   ctl: ["--dir", "--url", "--token", "--no-cascade", "--to"],
 };
 
 /** Flags that take a value, as `--flag value` or `--flag=value`. */
-const VALUE_FLAGS = new Set(["--control-port", "--dir", "--url", "--token", "--to"]);
+const VALUE_FLAGS = new Set(["--control-port", "--dir", "--url", "--token", "--to", "--log"]);
 
 function usage(): never {
   console.error(USAGE);
@@ -234,6 +235,10 @@ async function main(args: string[]): Promise<void> {
   const portFlag = flags.get("--control-port");
   const port = portFlag === undefined ? undefined : Number(portFlag);
   if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port <= 65535)) usage();
+  const format = flags.get("--log") ?? "text";
+  if (format !== "text" && format !== "json") usage();
+  // @decision .agents/decisions/261118_173838-running-under-another-program.md#logs-as-json
+  const logger = format === "json" ? jsonLogger : consoleLogger;
 
   let running: RackHandle | undefined;
   let control: Control | undefined;
@@ -247,9 +252,10 @@ async function main(args: string[]): Promise<void> {
     );
   };
   // Installed before the rack starts, so a signal during start-up still shuts down in order.
-  const onSignal = (signal: NodeJS.Signals) => {
+  const onSignal = (signal: NodeJS.Signals | "stdin") => {
     if (stopping) {
-      console.error(`rack: ${signal} again, exiting without finishing the shutdown`);
+      const what = signal === "stdin" ? "standard input closed" : `${signal} again`;
+      console.error(`rack: ${what}, exiting without finishing the shutdown`);
       process.exit(1);
     }
     stopping = true;
@@ -261,6 +267,22 @@ async function main(args: string[]): Promise<void> {
   // Ctrl+Break on Windows, which has no SIGTERM. Other systems never send it.
   // @decision .agents/decisions/261118_015204-windows.md#changes-to-the-rack
   process.on("SIGBREAK", onSignal);
+  // A program that runs the rack stops it by closing the pipe, which the system also closes when
+  // the program ends for any reason.
+  // @decision .agents/decisions/261118_173838-running-under-another-program.md#stopping-when-standard-input-closes
+  if (flags.has("--stop-on-stdin-close")) {
+    void (async () => {
+      try {
+        for await (const _chunk of Bun.stdin.stream()) {
+          // What arrives is dropped: only the end of the input matters.
+        }
+      } catch {
+        // A read that fails ends the input as surely as a close does.
+      }
+      if (!stopping) logger({ time: Date.now(), level: "info", message: "standard input closed" });
+      onSignal("stdin");
+    })();
+  }
 
   const manifest = await load(manifestPath);
   const baseDir = dirname(manifestPath);
@@ -272,7 +294,7 @@ async function main(args: string[]): Promise<void> {
   try {
     running = await start(manifest, {
       baseDir,
-      logger: consoleLogger,
+      logger,
       plan: planMode,
       ...watchdog,
     });
@@ -295,14 +317,14 @@ async function main(args: string[]): Promise<void> {
     await running.stop().catch(() => undefined);
     fail(describe(error));
   }
-  consoleLogger({
+  logger({
     time: Date.now(),
     level: "info",
     message: "control listening",
     data: { address: control.address },
   });
   if (command === "dev") {
-    unwatch = watchAndReload(running, { baseDir, manifestPath, log: consoleLogger });
+    unwatch = watchAndReload(running, { baseDir, manifestPath, log: logger });
   }
 }
 

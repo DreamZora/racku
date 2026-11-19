@@ -98,6 +98,13 @@ Measured on 2026-11-18 on the local machine, Ubuntu 26.04.1 LTS, Linux 7.0.0-43-
   - The flags, with tests in `test/cli.test.ts` that run on every system.
   - `examples/net-tool`, whose Tauri shell uses both, as its own decision describes.
 
+## Implementation
+
+- `src/cli.ts`: `--stop-on-stdin-close` reads `Bun.stdin.stream()` and drops each chunk; when the stream ends, or a read fails, the rack logs `standard input closed` and stops as on `SIGTERM`. A close during a shutdown exits at once with code 1, and prints `rack: standard input closed, exiting without finishing the shutdown`.
+- `src/log.ts`: `formatLogJson()` and `jsonLogger()`, which `--log json` uses for every entry of `rack start` and `rack dev`, `control listening` and the entries of `rack dev`'s file watcher included.
+- The exit codes stayed as they were, as [Exit codes](#exit-codes) says. A shutdown whose hooks time out still ends, within the rack's timeouts, and exits with 0, since the rack's `stop()` doesn't fail for it; the row of [Failure modes](#failure-modes) that gives it code 1 doesn't hold, and changing that needs a decision of its own.
+- Tests: in `test/cli.test.ts`, with `test/fixtures/host-program.ts` as the program that runs a rack and is killed. The exit codes of a failed start and of a usage error had tests already; an unknown `--log` format is a usage error too.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-18, after reviewing it: "I've reviewed it and I agree. Commit it."

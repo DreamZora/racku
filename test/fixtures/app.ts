@@ -220,11 +220,16 @@ export function useRacks(): (spec: RackSpec, options?: StartOptions) => Promise<
 /**
  * A `rack` command-line process with its combined output. On Windows, `rack start` and `rack dev`
  * run through `console-host.ts`, which turns {@link Cli.kill} into Ctrl+C or Ctrl+Break. Other
- * commands end by themselves, and run directly, which spares a process.
+ * commands end by themselves, and run directly, which spares a process. A command with
+ * `--stop-on-stdin-close` runs directly on every system, with its standard input a pipe that
+ * {@link Cli.closeInput} closes.
  */
 export class Cli {
   readonly process: Bun.Subprocess<"ignore" | "pipe", "pipe", "pipe">;
+  /** Standard output and standard error together, in the order they arrived. */
   output = "";
+  /** Standard output alone. */
+  stdout = "";
   readonly #hosted: boolean;
 
   /**
@@ -234,34 +239,42 @@ export class Cli {
    * @param cwd Working directory.
    * @param env Extra environment variables.
    * @param command Replaces the whole command line, for running the CLI another way.
+   * @param input `"pipe"` runs the command directly with its standard input a pipe, as
+   *   `--stop-on-stdin-close` does.
    */
   constructor(
     args: string[],
     cwd: string,
     env: Record<string, string> = {},
     command = [process.execPath, join(ROOT, "src", "cli.ts"), ...args],
+    input?: "pipe",
   ) {
     if (!controlDirInUse) {
       throw new Error("call useControlDir() at the top level of this test file");
     }
-    this.#hosted = WINDOWS && (command.includes("start") || command.includes("dev"));
+    const piped = input === "pipe" || command.includes("--stop-on-stdin-close");
+    this.#hosted = WINDOWS && !piped && (command.includes("start") || command.includes("dev"));
     this.process = Bun.spawn(
       this.#hosted ? [process.execPath, CONSOLE_HOST, ...command] : command,
       {
         cwd,
         env: { ...process.env, XDG_RUNTIME_DIR: CONTROL_DIR, ...env },
-        stdin: this.#hosted ? "pipe" : "ignore",
+        stdin: this.#hosted || piped ? "pipe" : "ignore",
         stdout: "pipe",
         stderr: "pipe",
       },
     );
-    void this.#pump(this.process.stdout);
-    void this.#pump(this.process.stderr);
+    void this.#pump(this.process.stdout, true);
+    void this.#pump(this.process.stderr, false);
   }
 
-  async #pump(stream: ReadableStream<Uint8Array>): Promise<void> {
+  async #pump(stream: ReadableStream<Uint8Array>, stdout: boolean): Promise<void> {
     const decoder = new TextDecoder();
-    for await (const chunk of stream) this.output += decoder.decode(chunk, { stream: true });
+    for await (const chunk of stream) {
+      const text = decoder.decode(chunk, { stream: true });
+      this.output += text;
+      if (stdout) this.stdout += text;
+    }
   }
 
   /** Waits until the output matches `pattern`. */
@@ -301,6 +314,12 @@ export class Cli {
     } catch {
       // The console host has exited, and with it the command: there is nothing left to signal.
     }
+  }
+
+  /** Closes the standard input of a command run with `--stop-on-stdin-close`. */
+  async closeInput(): Promise<void> {
+    const stdin = this.process.stdin;
+    if (typeof stdin === "object" && stdin !== null) await stdin.end();
   }
 
   /** Ends the process at once and waits until it has exited, so that its directory can go. */

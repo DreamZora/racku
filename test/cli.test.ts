@@ -15,6 +15,7 @@ import {
   tempApp,
   useControlDir,
   WINDOWS,
+  waitFor,
 } from "./fixtures/app.ts";
 
 const MANIFEST = `import { rack, slot } from "rack42u";
@@ -156,6 +157,158 @@ async function removeLink(path: string): Promise<void> {
     await rmdir(path);
   }
 }
+
+/** A program that runs a rack and is killed in a test. */
+const HOST_PROGRAM = join(FIXTURES, "host-program.ts");
+
+/** A device that logs a `bigint`, a warning, and circular details. */
+const NOISY = `import { device } from "rack42u";
+
+export default device({
+  model: "noisy",
+  activate(ctx) {
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    ctx.log.info("big", { value: 2n ** 64n });
+    ctx.log.warn("a warning");
+    ctx.log.info("circular", loop);
+  },
+});
+`;
+
+/** Whether a process is still there. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    // ESRCH: the process has ended.
+    return false;
+  }
+}
+
+// @decision .agents/decisions/261118_173838-running-under-another-program.md#tests
+describe("running under another program", () => {
+  test("README.md: with --stop-on-stdin-close, rack start and rack dev stop in order with code 0 when their input closes", async () => {
+    const { dir } = await app();
+    for (const command of ["start", "dev"]) {
+      const cli = run([command, "--stop-on-stdin-close"], dir);
+      expect(await greeting(await cli.panelUrl())).toBe("hello");
+      await cli.closeInput();
+      expect(await cli.exited()).toBe(0);
+      expect(cli.output).toContain("[rack] info standard input closed");
+      const panel = cli.output.indexOf("[rack] info http-panel powered off");
+      expect(panel).toBeGreaterThan(-1);
+      expect(cli.output.indexOf("[rack] info rack cli stopped")).toBeGreaterThan(panel);
+    }
+  });
+
+  test("README.md: a rack with --stop-on-stdin-close stops in order when the program that runs it is killed", async () => {
+    const { dir } = await app();
+    const cli = join(ROOT, "src", "cli.ts");
+    const host = new Cli([], dir, {}, [
+      process.execPath,
+      HOST_PROGRAM,
+      cli,
+      "start",
+      "--stop-on-stdin-close",
+    ]);
+    processes.push(host);
+    const pid = Number((await host.waitFor(/child pid (\d+)/))[1]);
+    try {
+      await host.panelUrl();
+      host.process.kill("SIGKILL");
+      await waitFor(() => !alive(pid), 15_000);
+      await waitFor(() => host.output.includes("[rack] info rack cli stopped"));
+      expect(host.output).toContain("[rack] info standard input closed");
+      expect(host.output).toContain("[rack] info http-panel powered off");
+    } finally {
+      if (alive(pid)) process.kill(pid, "SIGKILL");
+    }
+  });
+
+  test("without --stop-on-stdin-close, closing standard input changes nothing", async () => {
+    const { dir } = await app();
+    const cli = new Cli(["start"], dir, {}, undefined, "pipe");
+    processes.push(cli);
+    const url = await cli.panelUrl();
+    await cli.closeInput();
+    await Bun.sleep(500);
+    expect(await greeting(url)).toBe("hello");
+    expect(cli.process.exitCode).toBeNull();
+  });
+
+  test("README.md: --log json writes each entry as one line of JSON on stdout, warnings included", async () => {
+    const created = await app(
+      MANIFEST.replace("4: httpPanel", '2: slot("./devices/noisy.ts"),\n    4: httpPanel'),
+    );
+    await created.write("devices/noisy.ts", NOISY);
+    const cli = run(["start", "--log", "json"], created.dir);
+    await cli.waitFor(/"message":"control listening"/);
+    cli.kill("SIGINT");
+    expect(await cli.exited()).toBe(0);
+    const entries = cli.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    // Bun's toMatchObject writes asymmetric matchers into the object it checks, so the types are
+    // checked one by one.
+    for (const entry of entries) {
+      expect([typeof entry.time, typeof entry.level, typeof entry.message]).toEqual([
+        "number",
+        "string",
+        "string",
+      ]);
+    }
+    const listening = entries.find(
+      (entry) => entry.message === "listening" && entry.device === "http-panel",
+    );
+    expect(listening).toBeDefined();
+    const url = new URL((listening?.data as { url: string } | undefined)?.url ?? "");
+    expect(url.port).not.toBe("0");
+    expect(entries).toContainEqual(
+      expect.objectContaining({ device: "noisy", data: { value: "18446744073709551616n" } }),
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({ device: "noisy", level: "warn", message: "a warning" }),
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({ device: "noisy", message: "circular", data: "[object Object]" }),
+    );
+    expect(entries).toContainEqual(expect.objectContaining({ message: "rack cli started" }));
+    const control = entries.find((entry) => entry.message === "control listening");
+    expect(typeof (control?.data as { address?: unknown } | undefined)?.address).toBe("string");
+    expect(entries).toContainEqual(expect.objectContaining({ message: "rack cli stopped" }));
+  });
+
+  test("an unknown --log format is a usage error, with code 2", async () => {
+    const { dir } = await app();
+    const cli = run(["start", "--log", "xml"], dir);
+    expect(await cli.exited()).toBe(2);
+    expect(cli.output).toContain("usage: rack");
+    expect(cli.stdout).toBe("");
+  });
+
+  test("README.md: a stop during a shutdown that rack ctl stop began ends it at once with code 1", async () => {
+    const created = await app(`import { rack, slot } from "rack42u";
+export default rack("slow", {
+  slots: { 1: slot("./devices/lifecycle.ts", { config: { slowDeactivateMs: 5000 } }) },
+});
+`);
+    const cli = run(["start", "--stop-on-stdin-close"], created.dir);
+    await cli.waitFor(/control listening/);
+    const startedAt = Date.now();
+    const ctl = run(["ctl", "stop"], created.dir);
+    expect(await ctl.exited()).toBe(0);
+    await cli.waitFor(/"hook":"deactivate"/);
+    await cli.closeInput();
+    expect(await cli.exited()).toBe(1);
+    expect(Date.now() - startedAt).toBeLessThan(4_000);
+    expect(cli.output).toContain(
+      "rack: standard input closed, exiting without finishing the shutdown",
+    );
+  });
+});
 
 describe("the rack bin", () => {
   // README.md: in an app that depends on rack42u, the package's `rack` command runs the CLI.
