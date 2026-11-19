@@ -1,6 +1,6 @@
 {
   "name": "rack42u",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A Bun framework of hot-swappable devices mounted in a 42U-style rack",
   "license": "MIT",
   "type": "module",
