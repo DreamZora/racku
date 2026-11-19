@@ -30,6 +30,7 @@ import { blockingPipe } from "./fixtures/pipe.ts";
 const startRack = useRacks();
 
 const LINUX = process.platform === "linux";
+const WINDOWS = process.platform === "win32";
 const ONE = { cert: "certs/one.crt", key: "certs/one.key" };
 const TWO = { cert: "certs/two.crt", key: "certs/two.key" };
 
@@ -141,18 +142,25 @@ async function loop(url: URL, fresh: boolean, done: Promise<unknown>) {
   });
   let ok = 0;
   let failed = 0;
+  /** Why requests failed: an HTTP status, or the error of a connection that failed. */
+  const statuses: number[] = [];
+  const errors: string[] = [];
   const seen = new Set<string>();
   while (!finished) {
     try {
       const response = await fetch(new URL("/who", url), fresh ? { keepalive: false } : {});
       seen.add((await response.text()).split(" ")[0] as string);
       if (response.status === 200) ok++;
-      else failed++;
-    } catch {
+      else {
+        failed++;
+        statuses.push(response.status);
+      }
+    } catch (error) {
       failed++;
+      errors.push(String(error));
     }
   }
-  return { ok, failed, seen };
+  return { ok, failed, statuses, errors, seen };
 }
 
 describe("listeners", () => {
@@ -228,8 +236,10 @@ describe("listeners", () => {
     const [kept, fresh] = await Promise.all([loop(url, false, swapped), loop(url, true, swapped)]);
     await swapped;
     expect(kept.failed).toBe(0);
-    // Linux can reset a connection queued for the old listener as it stops, as the README says.
-    expect(fresh.failed).toBeLessThanOrEqual(LINUX ? 2 : 0);
+    // Linux and Windows can reset a connection queued for the old listener as it stops, as the
+    // README says; no request fails with a status.
+    expect(fresh.statuses).toEqual([]);
+    expect(fresh.failed).toBeLessThanOrEqual(LINUX || WINDOWS ? 2 : 0);
     expect(await slow).toBe(`${before} slow`);
     expect(await socket.closed).toBe(1012);
     const after = (await text(new URL("/who", url))).split(" ")[0];

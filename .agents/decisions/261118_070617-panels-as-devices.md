@@ -378,6 +378,7 @@ The tests run on Linux, macOS, and Windows, and exercise each failure path:
   - Without an `error` handler, a handler that throws gets 500, and the log has `a request handler failed`.
 - **The main-thread panel** went with the change that added [the standard HTTP panel](261118_071513-http-panel-device.md): `src/panel.ts` and `src/http.ts` are gone, and so is the panel's code in `src/rack.ts`, `src/manifest.ts`, and `src/index.ts`. `AGENTS.md` and the README's Panel entry changed in the same change, as [Impact](#impact) says.
 - **Tests:** `test/listeners.test.ts`, with the fixtures `test/fixtures/listener-device.ts`, `devices/listener.ts`, `devices/listener-state.ts`, `devices/listener-cold.ts`, and the test certificates in `test/fixtures/certs`.
+- **Resets on Windows.** The first CI run of these tests, run 44435790874 on 2026-11-19, saw one request on a new connection fail during a hot swap on Windows, where [Evidence](#evidence) found that every new connection goes to the old listener until it stops. So the README states the limit of a handover for Windows as well as Linux, and the test allows up to 2 such failures on both, while no request may fail with a status.
 
 ## Confirmation
 
