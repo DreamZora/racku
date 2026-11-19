@@ -9,7 +9,7 @@ The framework provides the rack runtime and a few standard devices. What you mou
 ## Requirements
 
 - [Bun](https://bun.sh) 1.4.4 or later. rack42u runs only on Bun; it is published as TypeScript source.
-- Linux, macOS, or Windows on x64. [Windows](#windows) lists what differs there.
+- Linux or Windows on x64, or macOS on Apple silicon: the systems that CI tests. [Windows](#windows) lists what differs there.
 
 ## Try the example
 
