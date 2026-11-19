@@ -187,7 +187,7 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 - **Public API**: every exported symbol has JSDoc stating its parameters, return value, possible errors, and lifecycle constraints.
 - **Comments**: state only the constraints and reasons a reader needs, never restate the code. Link to the decision when the reason is long.
 - **Errors**: use structured errors with codes that survive the backplane; every empty `catch` explains why it is empty.
-- **Temporary files**: tests remove the temporary files and directories they create as soon as they're done with them. Removal may wait only while the files still have value, such as a directory the later tests of the same file share, or what a failing test leaves for examination, and happens once that value is used.
+- **Temporary files**: tests remove the temporary files and directories they create promptly. When the files still have value, removal can wait, such as for a directory that later tests of the same run share, or what a failing test leaves for examination.
 - **Dependencies**: a new runtime dependency needs a decision first; do not add a third-party package when Bun built-ins suffice.
 - **Naming**: use the words in the glossary; do not invent synonyms.
 

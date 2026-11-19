@@ -27,13 +27,19 @@ export const FIXTURES = import.meta.dir;
 
 /**
  * Removes `.rack/` under {@link FIXTURES}, where racks on the fixture devices write their
- * firmware, after the tests of the file that calls it. Every build writes its bundle again, so
- * nothing there outlives its use. Call it at the top level of every test file that builds
- * firmware with {@link FIXTURES} as the base directory; {@link useRacks} calls it.
+ * firmware, once per run, before any test builds there. Every build writes its bundle again, so
+ * what an earlier run left has no use. The removal waits for the next run, since a run can't lose
+ * the directory: on Windows, a rack that builds into it again, after it was removed while the
+ * run went on, can't load its firmware.
  */
-export function useFixtureRackDir(): void {
-  afterAll(() => rm(join(FIXTURES, ".rack"), { recursive: true, force: true }));
+function removeFixtureRackDir(): void {
+  try {
+    rmSync(join(FIXTURES, ".rack"), { recursive: true, force: true });
+  } catch {
+    // A file another process holds stays; builds write their bundles again over what is left.
+  }
 }
+removeFixtureRackDir();
 
 /** Whether the tests run on Windows, which lacks POSIX signals, FIFOs, and Unix sockets. */
 export const WINDOWS = process.platform === "win32";
@@ -203,7 +209,6 @@ export function useRacks(): (spec: RackSpec, options?: StartOptions) => Promise<
   afterEach(async () => {
     await Promise.all(started.splice(0).map((running) => running.stop()));
   });
-  useFixtureRackDir();
   return async (spec, options = {}) => {
     const rec = new Recorder();
     const running = await start(rack("test", spec), {

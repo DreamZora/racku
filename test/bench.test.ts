@@ -10,10 +10,8 @@ import { join } from "node:path";
 import { RackError, type RackHandle } from "rack42u";
 import { bench, stub } from "rack42u/bench";
 import { Kv } from "rack42u/std";
-import { codeOf, FIXTURES, useFixtureRackDir, waitFor } from "./fixtures/app.ts";
+import { codeOf, FIXTURES, waitFor } from "./fixtures/app.ts";
 import { Blobs } from "./fixtures/connectors.ts";
-
-useFixtureRackDir();
 
 const ORDERS = "./devices/orders.ts";
 const BENCHES = join(FIXTURES, ".rack", "bench");
