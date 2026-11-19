@@ -125,6 +125,14 @@ Each step is a change of its own.
   - Step 6 of the workflow names the documentation in `README.md` and `docs/`, and the `@doc` references of its tests.
 - Follow-up: the decision on the skill, the trial apps, and the issue templates, once the documentation is done.
 
+## Implementation
+
+- The documentation gate: `checkDocs` in `scripts/check-docs.ts`, run by `bun run check:docs` and by `bun run check`, and tested in `test/check-docs.test.ts`.
+  - It reads `@doc` references from the code files under `test/`, and counts a section as one heading from `##` down.
+  - It also checks that `docs/README.md` links to every other document under `docs/`, the map that [The documentation](#the-documentation) asks for.
+- `scripts/markdown.ts` holds the headings and anchors that the decision gate and the documentation gate both read.
+- `docs/README.md` is the map of `docs/`.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-19, together with the two other decisions drafted that day, after reviewing them: "Approved, all of them. Get to work."

@@ -11,6 +11,7 @@
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
+import { headingAnchors, headingsOf } from "./markdown.ts";
 
 /** A rule violation found by the gate. */
 export interface Problem {
@@ -39,12 +40,6 @@ interface DecisionRecord {
   anchors: Set<string>;
 }
 
-interface Heading {
-  level: number;
-  text: string;
-  line: number;
-}
-
 const DECISIONS_DIR = ".agents/decisions";
 // Topics may contain digits: the accepted record `p0-scope-and-toolchain` already does.
 const FILE_NAME = /^(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
@@ -53,8 +48,6 @@ const OPTIONAL_SECTIONS = ["Evidence", "Implementation", "Open questions", "Conf
 const SECTIONS = new Set([...REQUIRED_SECTIONS, ...OPTIONAL_SECTIONS]);
 const SUPERSEDED = /^superseded — replaced by \[[^\]]+\]\((?:\.\/)?([^)\s/]+)\)$/;
 const REJECTED = /^rejected — \S/;
-const FENCE = /^\s*(`{3,}|~{3,})(.*)$/;
-const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
 const CODE_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 // A tag is `@decision` followed by whitespace or the end of the line, so prose that quotes
 // the tag in backticks is not mistaken for a reference.
@@ -163,7 +156,7 @@ function checkRecord(
   if (openQuestions !== undefined && status !== undefined && status !== "proposed") {
     report(openQuestions, "`## Open questions` is allowed only in `proposed` decisions");
   }
-  return { status, anchors: anchorsOf(headings) };
+  return { status, anchors: new Set(headingAnchors(headings)) };
 }
 
 function readStatus(
@@ -206,46 +199,6 @@ function checkReference(
   }
   if (anchor !== undefined && !record.anchors.has(anchor)) return `${name} has no #${anchor}`;
   return undefined;
-}
-
-/** Collects ATX headings outside fenced code blocks. */
-function headingsOf(lines: readonly string[]): Heading[] {
-  const headings: Heading[] = [];
-  let fence: string | undefined;
-  for (const [index, text] of lines.entries()) {
-    const fenceMatch = FENCE.exec(text);
-    if (fenceMatch !== null) {
-      const [, marker = "", rest = ""] = fenceMatch;
-      if (fence === undefined) {
-        fence = marker;
-      } else if (marker[0] === fence[0] && marker.length >= fence.length && rest.trim() === "") {
-        fence = undefined;
-      }
-      continue;
-    }
-    if (fence !== undefined) continue;
-    const heading = HEADING.exec(text);
-    if (heading?.[1] !== undefined && heading[2] !== undefined) {
-      headings.push({ level: heading[1].length, text: heading[2], line: index + 1 });
-    }
-  }
-  return headings;
-}
-
-/** Derives heading anchors the way GitHub does, numbering repeated headings. */
-function anchorsOf(headings: readonly Heading[]): Set<string> {
-  const anchors = new Set<string>();
-  const seen = new Map<string, number>();
-  for (const { text } of headings) {
-    const base = text
-      .toLowerCase()
-      .replace(/[^\p{L}\p{M}\p{N}\p{Pc}\- ]/gu, "")
-      .replace(/ /g, "-");
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    anchors.add(count === 0 ? base : `${base}-${count}`);
-  }
-  return anchors;
 }
 
 function isRealTimestamp(match: RegExpExecArray): boolean {

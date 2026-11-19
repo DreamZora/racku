@@ -34,6 +34,7 @@ This file defines the project background, architectural constraints, and working
   - [examples/net-tool, a TCP and UDP tool on Tauri 2 and Quasar](.agents/decisions/261118_173845-net-tool-example.md): the first project on rack42u, run from source.
   - [Content-Length for every response body of known size, without Bun's slow path](.agents/decisions/261118_215039-content-length-for-known-sizes.md): `wholeResponse()` in `rack42u`, with which the panel answers, so a body of bytes or text keeps its `Content-Length` at every size, sent from 15 KiB on as a direct stream that Bun writes in one piece.
 - rack42u has no formal release yet, and it follows Bun by a minimum version; [Versions](#versions) holds the rules for both.
+- The documentation work that [A README that explains rack42u, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md) decides is under way: the documentation gate, `bun run check:docs`, is in place.
 - rack42u works around two bugs of Bun 1.4.4, which aren't reported to Bun yet: [Watching two Bun bugs before reporting them](.agents/decisions/261119_031624-watching-bun-bugs.md) holds the reports, and the watch lasts until 2027-01-19.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list still needs its own decision before work starts, except the `inline` form, which [The main thread runs no devices, and what child processes, connected racks, and single executables must meet](.agents/decisions/261119_054850-main-thread-runs-no-devices.md) drops. That decision also sets what the decisions for the `chassis` form, connected racks, and `bun build --compile` packaging must meet: transports, one authentication method for sockets and TCP, and devices outside an executable with a fallback to the ones inside it.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
@@ -163,7 +164,7 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 4. Put tests and implementation in the same change, using `bun:test`. See the global rules for how documented capabilities map to tests.
 5. Run the checks closest to the change first, then widen them with the scope; see [Commands](#commands). Report only commands that actually ran, with their results.
    - CI runs only for pushes to `main` and manual runs, so `bun run check` before each commit is what checks a branch. A change to platform behavior, such as paths, sockets, signals, or file modes, needs a manual run on its branch before it merges; ask the user to start one.
-6. Finish by updating `## Implementation` in the affected decisions and the documentation they affect. Commits follow the global rules and list the relevant decisions in `Context:`.
+6. Finish by updating `## Implementation` in the affected decisions and the documentation they affect, in `README.md` and `docs/`. A test that confirms what a section of the documentation says names it as `@doc <document>#<anchor>`, and every section of `docs/guides/` and `docs/reference/` needs such a test, as [A README that explains rack42u, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md#tests-that-hold-the-documentation) decides; `bun run check:docs` checks it. Commits follow the global rules and list the relevant decisions in `Context:`.
 
 ## Versions
 
@@ -188,7 +189,8 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 | Check formatting and lint rules | `bun run lint` |
 | Apply formatting and safe lint fixes | `bun run format` |
 | Check decision records and `@decision` references | `bun run check:decisions` |
-| Run the type check, lint, decision gate, and tests in order | `bun run check` |
+| Check the documentation, its links, and the `@doc` references of tests | `bun run check:docs` |
+| Run the type check, lint, decision gate, documentation gate, and tests in order | `bun run check` |
 | Run the example app | `bun src/cli.ts start examples/shop-api/rack.ts` |
 | Run the example app with hot reload | `bun src/cli.ts dev examples/shop-api/rack.ts` |
 
@@ -215,7 +217,8 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 
 ```text
 AGENTS.md            this file; CLAUDE.md is a symlink to it
-README.md            user-facing documentation; test/readme.test.ts runs its app
+README.md            the front page of the documentation; test/readme.test.ts runs its app
+docs/                user documentation; README.md is its map
 LICENSE              MIT
 package.json         manifest, exports, bin, and scripts
 tsconfig.json        TypeScript configuration
@@ -246,12 +249,13 @@ examples/shop-api/   the example app
 examples/net-tool/   a TCP and UDP tool: its rack, devices, and connector, which the suite checks
   app/               the window, Vue 3 and Quasar with its own package.json, and src-tauri/,
                      the Tauri shell; the root's type check and lint skip it
-scripts/             project scripts; check-decisions.ts is the decision gate
+scripts/             project scripts: check-decisions.ts, the decision gate; check-docs.ts, the
+                     documentation gate; and markdown.ts, the headings and anchors both read
 .github/workflows/   check.yml, the CI jobs on Linux, macOS, and Windows
 .agents/decisions/   decision records, stored flat as <YYMMDD>_<hhmmss>-<topic>.md
 ```
 
-- `docs/` does not exist yet; it will hold user-facing project documentation only.
+- `docs/` holds user documentation only, laid out as [A README that explains rack42u, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md#the-documentation) decides.
 - The code layout for P0 is fixed by [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md); `test/fixtures/` by [P0 standard connectors, rack handle shapes, and test fixtures](.agents/decisions/261115_222025-p0-api-details.md#test-fixtures).
 - Device files, including `src/std/memkv.ts`, `src/std/sqlite.ts`, and `src/std/http-panel.ts`, import the framework as `rack42u` and `rack42u/std`, never by relative path, so firmware keeps it external.
 

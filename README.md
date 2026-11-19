@@ -917,6 +917,7 @@ rack42u runs on Windows as it does on Linux and macOS, with these differences:
 | Type check | `bun run typecheck` |
 | Lint and format check | `bun run lint` |
 | Check decision records | `bun run check:decisions` |
+| Check the documentation and its links | `bun run check:docs` |
 | All of the above | `bun run check` |
 
 CI runs for every push to `main`, and on request: `bun run check` on Linux, `bun test` on macOS and Windows, and `bun test` on the latest Bun release on Linux. A failure of any of the four jobs fails the run. To check a branch before merging it, start the workflow by hand with "Run workflow" on the Actions tab, or with `gh workflow run check.yml --ref <branch>`.

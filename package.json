@@ -29,7 +29,8 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "check:decisions": "bun scripts/check-decisions.ts",
-    "check": "bun run typecheck && bun run lint && bun run check:decisions && bun test"
+    "check:docs": "bun scripts/check-docs.ts",
+    "check": "bun run typecheck && bun run lint && bun run check:decisions && bun run check:docs && bun test"
   },
   "dependencies": {
     "@standard-schema/spec": "1.1.0",
