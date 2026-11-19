@@ -416,7 +416,9 @@ describe("the rack command with scanned racks", () => {
     expect(await app.read("demo.plan")).toContain("U1 a-d d a\n");
     dev.kill("SIGINT");
     expect(await dev.exited()).toBe(0);
-  });
+    // Four rack processes, one after the other: on a Windows runner, more than Bun's default
+    // of 5 s.
+  }, 30_000);
 });
 
 describe("reloads of scanned racks", () => {
