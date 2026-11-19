@@ -323,7 +323,7 @@ export default rack("slow", {
 describe("the rack bin", () => {
   // In an app that depends on rack42u, the package's `rack` command runs the CLI.
   // @decision .agents/decisions/261118_015204-windows.md#changes-to-the-repository-and-the-tests
-  // @doc README.md#try-the-example
+  // @doc README.md#quick-start
   test("runs the CLI through what bun link writes to node_modules/.bin", async () => {
     const created = await app();
     // bun link records the package in Bun's global directory: one inside the app spares the

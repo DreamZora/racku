@@ -37,7 +37,7 @@ async function shop(command: "start" | "dev") {
   return { app, cli, api, post };
 }
 
-// @doc README.md#try-the-example
+// @doc README.md#quick-start
 describe("examples/shop-api", () => {
   // Mirrors the curl session under "Try the example" in README.md.
   test("the curl walkthrough returns what the README shows", async () => {

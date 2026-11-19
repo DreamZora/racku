@@ -141,6 +141,7 @@ Each step is a change of its own.
   - On 2026-11-19, on the local machine, the guide's `git+ssh://` URL installed rack42u from the private repository, over HTTPS with git's credentials, and a `git+https://github.com/` URL failed with 404, since Bun downloads such a URL from GitHub's API without credentials.
 - `test/fixtures/typecheck.ts` type-checks the app of the getting-started guide and the app of the guides, against the sources of rack42u.
 - `docs/concepts.md` holds the README's concepts, and the tests that confirmed them name its sections. `docs/design.md` gives the goals, the main choices, and the limits.
+- The README is the front page: what rack42u is, the problem, how rack42u solves it, why it is built this way, a quick start with the example of the repository, the status, the documentation, and the requirements. Its status no longer speaks in phases.
 
 ## Confirmation
 
