@@ -30,7 +30,8 @@ Each guide covers one part of rack42u. Together they build one small app, a gree
 
 ## Reference
 
-- [API](reference/api.md): the options of `start()`, and the rack handle.
-- [The rack command](reference/cli.md): its commands, exit codes, and flags.
-- [Error codes](reference/errors.md): `RackError`, and the codes it carries.
-- [Reports](reference/reports.md): what `metrics()` reports.
+- [API](reference/api.md): every export of `rack42u`, `rack42u/std`, and `rack42u/bench`.
+- [The rack command](reference/cli.md): its commands, exit codes, flags, operations, and environment variables.
+- [Error codes](reference/errors.md): `RackError`, and the codes of the rack and of the standard devices.
+- [Reports](reference/reports.md): what `status()`, `metrics()`, `history()`, and the log report.
+- [Limits](reference/limits.md): every bound, timeout, and default, and what happens beyond it.

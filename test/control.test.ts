@@ -284,8 +284,13 @@ describe("transports by platform", () => {
     expect(controlTransport(0, "linux")).toBe("tcp");
   });
 
+  // @doc docs/reference/cli.md#environment-variables
   test("the control file lives in the user's own state directory, never in the app", () => {
-    const saved = { local: process.env.LOCALAPPDATA, runtime: process.env.XDG_RUNTIME_DIR };
+    const saved = {
+      local: process.env.LOCALAPPDATA,
+      runtime: process.env.XDG_RUNTIME_DIR,
+      state: process.env.XDG_STATE_HOME,
+    };
     try {
       process.env.LOCALAPPDATA = "C:\\Users\\ada\\AppData\\Local";
       expect(controlPaths("/app", "win32").dir).toContain("rack42u");
@@ -293,11 +298,16 @@ describe("transports by platform", () => {
       process.env.XDG_RUNTIME_DIR = "/run/user/1000";
       expect(controlPaths("/app", "linux").dir).toBe("/run/user/1000/rack42u");
       delete process.env.XDG_RUNTIME_DIR;
+      process.env.XDG_STATE_HOME = "/var/state/ada";
+      expect(controlPaths("/app", "linux").dir).toBe("/var/state/ada/rack42u/control");
+      delete process.env.XDG_STATE_HOME;
       expect(controlPaths("/app", "linux").dir).toContain(".local/state/rack42u/control");
       expect(controlPaths("/app", "linux").socket).not.toContain("/app/");
     } finally {
       if (saved.local === undefined) delete process.env.LOCALAPPDATA;
       else process.env.LOCALAPPDATA = saved.local;
+      if (saved.state === undefined) delete process.env.XDG_STATE_HOME;
+      else process.env.XDG_STATE_HOME = saved.state;
       process.env.XDG_RUNTIME_DIR = saved.runtime ?? CONTROL_DIR;
     }
   });

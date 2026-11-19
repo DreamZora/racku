@@ -189,6 +189,7 @@ describe("sqlite", () => {
     ]);
   });
 
+  // @doc docs/reference/errors.md#codes-of-the-standard-devices
   test("database errors fail with SQL_ERROR and the driver code", async () => {
     const { sql } = await sqlRack(":memory:");
     await sql("run", { sql: "INSERT INTO t (name) VALUES ('dup')" });

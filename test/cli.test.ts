@@ -245,6 +245,7 @@ describe("running under another program", () => {
 
   // @doc docs/guides/running.md#running-a-rack-from-another-program
   // @doc docs/reference/cli.md#flags-of-rack-start-and-rack-dev
+  // @doc docs/reference/reports.md#the-log
   test("--log json writes each entry as one line of JSON on stdout, warnings included", async () => {
     const created = await app(
       MANIFEST.replace("4: httpPanel", '2: slot("./devices/noisy.ts"),\n    4: httpPanel'),

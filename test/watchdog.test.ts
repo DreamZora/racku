@@ -200,6 +200,7 @@ describe("device watchdogs", () => {
     expect(probeStatus(running)).toMatchObject({ state: "online", crashes: 1 });
   }, 15_000);
 
+  // @doc docs/reference/limits.md#supervision-and-history
   test("scope.watchdog takes at least 1 000 ms, arms at most 16, and numbers the unnamed ones", async () => {
     const activate = `    for (const ms of [999, Number.NaN]) {
       try {
@@ -359,6 +360,7 @@ describe("biting", () => {
 // @doc docs/guides/faults.md#hangs-and-watchdogs
 describe("configuration and observation", () => {
   // README.md, "Hangs and watchdogs".
+  // @doc docs/reference/reports.md#status
   test("status() lists each device's watchdogs, and metrics() its event-loop delay", async () => {
     const activate = `    const dog = scope.watchdog(5_000, "poller");
     scope.every(100, () => dog.feed());`;

@@ -38,6 +38,7 @@ describe("start and stop", () => {
 
   // @decision .agents/decisions/261115_222025-p0-api-details.md#rack-handle
   // @doc docs/reference/api.md#the-rack-handle
+  // @doc docs/reference/reports.md#status
   test("status reports each device by slot", async () => {
     const { running } = await startRack({
       slots: { 5: slot("./devices/tall.ts"), 1: slot("./devices/probe.ts", { name: "p" }) },

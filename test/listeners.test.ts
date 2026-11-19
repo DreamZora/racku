@@ -565,6 +565,7 @@ describe("listener defaults and limits", () => {
     ).toStartWith("HTTP/1.1 200");
   });
 
+  // @doc docs/reference/limits.md#listeners
   test("a body over 1 MiB gets 413", async () => {
     const { running } = await startRack(listenerRack());
     const { port } = await urlOf(running);
@@ -581,6 +582,7 @@ describe("listener defaults and limits", () => {
     ).toBe(String(512 * 1024));
   });
 
+  // @doc docs/reference/limits.md#listeners
   test("a WebSocket message over 1 MiB closes the WebSocket with 1009", async () => {
     const { running } = await startRack(listenerRack());
     const socket = await socketTo(await urlOf(running));
@@ -588,6 +590,7 @@ describe("listener defaults and limits", () => {
     expect(await socket.closed).toBe(1009);
   });
 
+  // @doc docs/reference/limits.md#listeners
   test("a client that doesn't read is closed with 1013 once 1 MiB is unsent", async () => {
     const { running } = await startRack(listenerRack());
     const { port } = await urlOf(running);
@@ -628,6 +631,7 @@ describe("listener defaults and limits", () => {
     }
   });
 
+  // @doc docs/reference/limits.md#timeouts
   test("an idle keep-alive connection closes after idleTimeout, within Bun's steps of 4 s", async () => {
     const { running } = await startRack(listenerRack({ idleTimeout: 1 }));
     const { port } = await urlOf(running);
@@ -706,6 +710,7 @@ describe("listener certificates", () => {
   });
 
   // @doc docs/guides/listeners.md#swaps-and-faults
+  // @doc docs/reference/limits.md#listeners
   test("an instance has at most 16 listeners", async () => {
     const more = Array.from({ length: 16 }, () => ({ port: 0 }));
     const error = await errorOf(startRack(listenerRack({ more })));
@@ -725,6 +730,7 @@ describe("listener certificates", () => {
 
 // @doc docs/guides/listeners.md#observation
 describe("listener observation", () => {
+  // @doc docs/reference/reports.md#status
   test("status() reports the requests in flight and the open WebSockets", async () => {
     const { running } = await startRack(listenerRack());
     const url = await urlOf(running);
@@ -737,6 +743,7 @@ describe("listener observation", () => {
     await waitFor(() => statusOf(running).listeners[0]?.webSockets === 0);
   });
 
+  // @doc docs/reference/reports.md#the-log
   test("the log reports listener closed when a listener stops for good", async () => {
     const { running, rec } = await startRack({
       slots: { 1: slot("./devices/listener.ts"), 3: slot("./devices/listener-state.ts") },

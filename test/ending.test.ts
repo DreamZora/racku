@@ -287,6 +287,7 @@ describe("a thread stuck in native code", () => {
     expect(await running.call("jam.jam", "inc", undefined)).toBe(1);
   }, 15_000);
 
+  // @doc docs/reference/reports.md#status
   test("a hot swap of a device stuck in native code faults the slot while the thread is stuck, and a swap brings it back after", async () => {
     const created = await app();
     const pipe = await pipeIn(created);

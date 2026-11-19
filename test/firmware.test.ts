@@ -117,6 +117,7 @@ describe("importFirmware", () => {
     expect(attempts).toEqual([url, url]);
   });
 
+  // @doc docs/reference/limits.md#supervision-and-history
   test("gives up after four attempts", async () => {
     const { dir } = await app();
     const path = join(dir, "present.js");

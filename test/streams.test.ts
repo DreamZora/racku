@@ -194,6 +194,7 @@ describe("streams in calls", () => {
     });
   });
 
+  // @doc docs/reference/limits.md#streams
   test("a slow reader slows the source, with at most the window in flight", async () => {
     const { running } = await startRack(RACK);
     const chunk = 64 * KiB;
@@ -220,6 +221,7 @@ describe("streams in calls", () => {
     expect([read.code, read.total]).toEqual([null, 16 * MiB]);
   });
 
+  // @doc docs/reference/limits.md#streams
   test("a chunk over 1 MiB arrives in pieces of at most 1 MiB, and sources keep their buffers", async () => {
     const { running } = await startRack(RACK);
     const big = await produce(running, { size: 3.5 * MiB, chunk: 3.5 * MiB });
@@ -315,6 +317,7 @@ describe("streams in calls", () => {
     expect(junk.seen.cancelled).toBe("RACK_INVALID_INPUT");
   });
 
+  // @doc docs/reference/limits.md#timeouts
   test("a stream that moves nothing for streamTimeout fails with RACK_TIMEOUT at both ends", async () => {
     const { running } = await startRack(RACK);
     const stalled = await produce(

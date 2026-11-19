@@ -340,6 +340,7 @@ describe("active rollback", () => {
 
 // @doc docs/guides/updates.md#history
 describe("update history", () => {
+  // @doc docs/reference/reports.md#history
   test("history lists every update newest first, for the rack or one device, within historyLimit", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir, historyLimit: 3 });
@@ -361,6 +362,7 @@ describe("update history", () => {
     expect(running.history("base")).toHaveLength(1);
   });
 
+  // @doc docs/reference/limits.md#supervision-and-history
   test("the rack deletes the firmware bundles it built once nothing needs them", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const firmwareDir = join(created.dir, ".rack", "firmware");

@@ -578,6 +578,7 @@ describe("http-panel WebSocket", () => {
     }
   });
 
+  // @doc docs/reference/limits.md#the-http-panel
   test("upgrades beyond maxConnections get 503, and the log says when refusing starts and ends", async () => {
     const { url, port, rec } = await panelRack({ webSocket: { maxConnections: 2 } });
     const first = await socketTo(url, "/chat");
@@ -594,6 +595,7 @@ describe("http-panel WebSocket", () => {
     await socketTo(url, "/chat");
   });
 
+  // @doc docs/reference/limits.md#queues-and-backlogs
   test("a socket under a slow device has at most 16 messages in calls, which start in order", async () => {
     const { url } = await panelRack();
     const socket = await socketTo(url, "/chat");
@@ -867,6 +869,7 @@ describe("http-panel certificates", () => {
 
 describe("http-panel configuration", () => {
   // @doc docs/guides/http.md#configuration
+  // @doc docs/reference/limits.md#the-http-panel
   test("the defaults of the panel's configuration", () => {
     expect(v.parse(PanelConfig, { port: 0, routes: {} })).toEqual({
       hostname: "127.0.0.1",
@@ -1255,6 +1258,7 @@ describe("http/v2 and httpHandler", () => {
   });
 
   // @doc docs/guides/http.md#websocket
+  // @doc docs/reference/limits.md#the-http-panel
   test("a device forgets the sockets of a panel instance that made no call for 90 s", async () => {
     const { handler, open, closes } = chatHandler();
     const now = Date.now();

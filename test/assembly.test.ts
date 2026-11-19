@@ -384,6 +384,7 @@ describe("the plan file", () => {
     expect((await app.read("test.plan")).split("\n")[2]).toBe("U1 c-f f c");
   });
 
+  // @doc docs/reference/cli.md#flags-of-rack-plan
   test("rack plan prints the plan, --write writes the file, and --check fails until it fits", async () => {
     const app = await exampleApp();
     const printed = new Cli(["plan"], app.dir);
@@ -401,6 +402,21 @@ describe("the plan file", () => {
     const stale = new Cli(["plan", "--check"], app.dir);
     expect(await stale.exited()).toBe(1);
     expect(stale.output).toContain("#   d is new");
+  });
+
+  // @doc docs/reference/cli.md#flags-of-rack-plan
+  test("rack plan takes --write or --check, not both, and neither for a rack placed by hand", async () => {
+    const app = await exampleApp();
+    const both = new Cli(["plan", "--write", "--check"], app.dir);
+    expect(await both.exited()).toBe(1);
+    expect(both.output).toContain("--write and --check exclude each other");
+    await app.write(
+      "placed.ts",
+      `import { rack, slot } from "rack42u";\n\nexport default rack("placed", { slots: { 1: slot("./devices/d.ts") } });\n`,
+    );
+    const placed = new Cli(["plan", "placed.ts", "--write"], app.dir);
+    expect(await placed.exited()).toBe(1);
+    expect(placed.output).toContain("places devices by hand, so it has no plan file");
   });
 });
 

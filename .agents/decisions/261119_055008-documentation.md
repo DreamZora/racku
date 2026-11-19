@@ -142,6 +142,10 @@ Each step is a change of its own.
 - `test/fixtures/typecheck.ts` type-checks the app of the getting-started guide and the app of the guides, against the sources of rack42u.
 - `docs/concepts.md` holds the README's concepts, and the tests that confirmed them name its sections. `docs/design.md` gives the goals, the main choices, and the limits.
 - The README is the front page: what rack42u is, the problem, how rack42u solves it, why it is built this way, a quick start with the example of the repository, the status, the documentation, and the requirements. Its status no longer speaks in phases.
+- The reference is complete:
+  - `api.md` lists every export of the three entry points, types included, in a table per topic; `cli.md` every command, flag, operation of `rack ctl`, and environment variable; `errors.md` the codes of the rack and of the standard devices; `reports.md` `status()`, `metrics()`, `history()`, and the entries of the log that programs may look for; and `limits.md` every bound, timeout, and default.
+  - `test/reference.test.ts` holds them to the code, in both directions: the exports of the entry points, the codes in `src/`, the commands, flags, and operations of `src/cli.ts`, the defaults of `start()`, and the messages of the log entries.
+  - Writing it found three claims without a test, which now have one: `rack plan` refuses `--write` with `--check`, and both for a rack placed by hand, in `test/assembly.test.ts`; and `XDG_STATE_HOME` moves the management endpoint's directory, in `test/control.test.ts`, whose check of the default directory no longer depends on the environment it runs in.
 
 ## Confirmation
 

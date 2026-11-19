@@ -112,6 +112,7 @@ describe("the bench", () => {
   });
 
   // @doc docs/guides/testing.md#members-of-a-bench
+  // @doc docs/reference/limits.md#the-bench
   test("records keep the last 10 000 entries, and count the older ones they dropped", async () => {
     const { kv } = memoryKv();
     await using orders = await bench(ORDERS, {
@@ -288,6 +289,7 @@ describe("the bench", () => {
   });
 
   // @doc docs/guides/testing.md#stubs
+  // @doc docs/reference/limits.md#the-bench
   test("streams cross a stub read whole, up to 16 MiB", async () => {
     const { files, blobs } = memoryBlobs();
     await using orders = await bench(ORDERS, {

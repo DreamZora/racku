@@ -1,5 +1,28 @@
 # Reports
 
+A running rack reports what it does in four ways: `status()`, `metrics()`, `history()`, and the log. `rack ctl` prints the first three as JSON. [Managing a running rack](../guides/managing.md) shows how to reach them.
+
+## status()
+
+`status()` returns one entry per device, bottom slot first, of the type `SlotStatus`:
+
+| Field | What it holds |
+|---|---|
+| `name`, `model` | The device's name and model. |
+| `u`, `height` | Its lowest slot, and how many U it takes. |
+| `state` | `"online"`, `"swapping"`, `"degraded"`, `"resetting"`, or `"faulted"`. |
+| `firmware` | The firmware hash of the installed instance, or `null` while none is installed. |
+| `knownGood` | The hash of the firmware the device falls back to, as [Fallback](../guides/updates.md#fallback) describes. |
+| `probationUntil` | While the installed instance is on probation, when probation ends, a millisecond timestamp. |
+| `source` | The absolute path of the device file. |
+| `inFlight` | The calls the installed instance is serving, from other devices and from outside the rack. |
+| `crashes` | The crashes within the last 60 seconds. |
+| `error` | The last failed swap or crash, as `{ code, message, data? }`. |
+| `watchdogs` | The installed instance's watchdogs, the event loop's first, each with its `name`, `timeout`, and `lastFed`. |
+| `stuck` | The threads of earlier instances that are stuck in native code, each with its `firmware`, `since`, and the `listeners` it kept. |
+| `listeners` | The installed instance's listeners, each with its `url`, `certificates`, `requests` in flight, and open `webSockets`. |
+| `owner` | For a copy that serves an `own` need, the instance whose need it serves. |
+
 ## metrics()
 
 `metrics()` resolves with `{ devices, outside }`. `devices` has one entry per device whose installed instance answered, bottom slot first. Each entry has the device name, the `firmware` hash of the instance that counted, `since` (when that instance booted), its event-loop delay `loop`, and counters per member:
@@ -41,3 +64,51 @@
   - The HTTP panel's calls are calls between devices, so they count under the panel's needs instead, as [HTTP panel](../guides/http.md) describes.
   - The main thread keeps these counters, so they last across swaps and resets. A port's counters start at its first call, and go away when its device is unplugged; a member's go away when a swap removes the member.
 - After `stop()`, `metrics()` resolves with no devices and empty `outside` counters.
+
+## history()
+
+`history(name?)` lists the updates of the rack, or of one device, newest first, as `UpdateRecord`s:
+
+```js
+{ seq: 12, time: 1763300000000, device: "orders", mode: "restart", cause: "fallback",
+  from: "9c1e…", to: "7f3a…", ok: true, error: { code: "RACK_DEVICE_FAULT", message: "…" } }
+```
+
+| Field | What it holds |
+|---|---|
+| `seq` | The number of the record, which increases by one per record while the rack runs. |
+| `time` | When the operation that made the update started, a millisecond timestamp. |
+| `device` | The device the update replaced, plugged, or unplugged. |
+| `mode` | How: `"hot"`, `"cold"`, `"restart"`, `"plug"`, or `"unplug"`. |
+| `cause` | What asked for it: `"reload"`, `"swap"`, `"restart"`, `"rollback"`, `"fallback"`, `"plug"`, or `"unplug"`. |
+| `from`, `to` | The firmware hash before the update, and the one it installed or tried to install. |
+| `ok` | Whether the update succeeded. |
+| `error` | Why it failed, or why the device fell back. |
+| `group` | For a group replaced together, the `seq` of the group's first record. |
+
+The history keeps at most `historyLimit` records, 256 by default, in memory, and a restart of the rack starts it empty.
+
+## The log
+
+Each entry of the log is a `LogEntry`, `{ time, level, device?, message, data? }`. `device` names the device that wrote the entry with `ctx.log`; the rack's own entries have none. The `logger` option of `start()` receives every entry, and `rack start` and `rack dev` print them as text, or as one line of JSON each with `--log json`.
+
+The rack's entries that a program or an operator may look for:
+
+| Message | Level | When | `data` |
+|---|---|---|---|
+| `rack <name> started` | info | Every device is online. | |
+| `rack <name> stopped` | info | The rack has shut down. | |
+| `control listening` | info | The management endpoint listens. | `address` |
+| `listening` | info | A listener of a device listens; `device` names the device. | `url` |
+| `listener handed over` | info | A hot swap moved a listener to the new instance. | `url` |
+| `listener closed` | info | A listener stopped for good. | `url` |
+| `certificates replaced` | info | A listener took new certificates. | |
+| `certificates rejected` | error | Changed certificates didn't load at the HTTP panel's second check; the old ones stay. | |
+| `<device> powered on`, `<device> powered off` | info | A device started, or stopped. | `firmware` |
+| `<device> swapped` | info | A hot swap installed a new instance of the device. | |
+| `<device> crashed: <detail>` | error | A device crashed. | |
+| `<device> resetting` | warn | The rack resets a device after a crash or a watchdog bite. | |
+| `watching <directory> for changes` | info | `rack dev` watches the base directory. | |
+| `standard input closed` | info | With `--stop-on-stdin-close`, the rack's standard input closed, and the rack shuts down. | |
+
+The other entries are messages for people, and their wording may change.

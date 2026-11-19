@@ -4,6 +4,8 @@
 
 Errors cross the backplane as `RackError`s with a `code`, a `message`, and optional `data`.
 
+A device gives its callers codes of its own by throwing `new RackError(code, message, data?)`. Its codes must not start with `RACK_`, except `RACK_OVERLOADED` for a limit of its own; any other exception reaches the caller as `RACK_DEVICE_FAULT`, as [Data and errors](../guides/devices.md#data-and-errors) describes.
+
 ## Codes
 
 | Code | Meaning |
@@ -19,3 +21,9 @@ Errors cross the backplane as `RackError`s with a `code`, a `message`, and optio
 | `RACK_MANIFEST` | The manifest or the assembly is invalid. |
 | `RACK_SWAP_REJECTED` | A swap, plug, unplug, or reload was refused, for example while a thread of the device is stuck. |
 | `RACK_HOOK_FAILED` | A lifecycle hook failed or timed out. |
+
+## Codes of the standard devices
+
+| Code | Device | Meaning |
+|---|---|---|
+| `SQL_ERROR` | `sqlite` | The database failed the statement. `data.code` holds the driver's code, such as `SQLITE_CONSTRAINT_UNIQUE`. |
