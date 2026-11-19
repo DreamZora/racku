@@ -17,6 +17,7 @@
  * @decision .agents/decisions/261118_071513-http-panel-device.md#observation
  * @decision .agents/decisions/261118_165318-stream-threshold.md#tests
  * @decision .agents/decisions/261118_165318-stream-threshold.md#cancellation
+ * @decision .agents/decisions/261118_195832-faster-panel-responses.md#tests
  */
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
@@ -321,6 +322,29 @@ describe("http-panel requests", () => {
       return handle?.kind === "rpc" && handle.active === 0 && handle.errors;
     });
     expect(errors).toEqual({ RACK_CANCELLED: 1 });
+  });
+
+  test("README.md: a response body of 14 KiB or more goes out chunked, apart from the answer to HEAD", async () => {
+    const { port } = await panelRack();
+    const head = async (method: string, size: number) =>
+      (
+        await rawHead(port, [
+          `${method} /web/download?size=${size}&chunk=${size} HTTP/1.1`,
+          `Host: 127.0.0.1:${port}`,
+          "Connection: close",
+        ])
+      ).toLowerCase();
+    const small = await head("GET", 14 * 1024 - 1);
+    expect(small).toContain(`content-length: ${14 * 1024 - 1}`);
+    expect(small).not.toContain("transfer-encoding");
+    const large = await head("GET", 14 * 1024);
+    expect(large).toContain("transfer-encoding: chunked");
+    expect(large).not.toContain("content-length");
+    expect(await head("HEAD", 20_000)).toContain("content-length: 20000");
+    // The chunked body arrives whole.
+    const url = new URL(`http://127.0.0.1:${port}/web/download?size=20000&chunk=20000`);
+    const body = new Uint8Array(await (await fetch(url)).arrayBuffer());
+    expect([body.byteLength, body.every((byte) => byte === 7)]).toEqual([20_000, true]);
   });
 
   test("README.md: streamThreshold decides which request bodies go to the device as bytes and which stream", async () => {
@@ -1105,17 +1129,17 @@ describe("http/v2 and httpHandler", () => {
       const output = await handler.handle({ ...request, body: null }, call);
       return "status" in output ? output.body : undefined;
     };
-    // The default is 256 KiB; a body of 1 KiB or more is moved, and a smaller one copied.
+    // The default is 16 MiB; a body of 1 KiB or more is moved, and a smaller one copied.
     const plain = httpHandler(fetch);
     expect(await bodyOf(plain, 1000)).toBeInstanceOf(Uint8Array);
     expect(moved).toEqual([]);
-    const whole = await bodyOf(plain, 256 * 1024);
+    const whole = await bodyOf(plain, 16 * MiB);
     expect(whole).toBeInstanceOf(Uint8Array);
     expect(moved).toEqual([(whole as Uint8Array).buffer as ArrayBuffer]);
-    const large = await bodyOf(plain, 256 * 1024 + 1);
+    const large = await bodyOf(plain, 16 * MiB + 1);
     expect(large).toBeInstanceOf(ReadableStream);
     expect((await new Response(large as ReadableStream).arrayBuffer()).byteLength).toBe(
-      256 * 1024 + 1,
+      16 * MiB + 1,
     );
     const slow = await bodyOf(plain, 0);
     expect(slow).toBeInstanceOf(ReadableStream);

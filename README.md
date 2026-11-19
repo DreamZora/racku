@@ -707,13 +707,15 @@ A configuration that doesn't validate fails the panel's boot with `RACK_INVALID_
 
 **Requests.** The panel's call carries the method, URL, headers, route parameters, and body. `httpHandler` hands your function a standard `Request`, whose `signal` aborts when the client goes away or the call times out, and keeps duplicate response headers, such as several `Set-Cookie` headers.
 
-- **Bodies.** A request body with a declared length of at most the panel's `streamThreshold`, 256 KiB by default, goes to the device whole, and a longer or chunked one streams, as [Streams](#streams) describes. Either way, it reaches your function as `request.body`. A response body that ends at once within `httpHandler`'s `streamThreshold`, also 256 KiB by default, goes back whole, and any other streams, so server-sent events and large downloads start at once:
+- **Bodies.** A request body with a declared length of at most the panel's `streamThreshold`, 256 KiB by default, goes to the device whole, and a longer or chunked one streams, as [Streams](#streams) describes. Either way, it reaches your function as `request.body`. A response body that ends at once within `httpHandler`'s `streamThreshold`, 16 MiB by default, goes back whole, and any other streams, so server-sent events and large downloads start at once:
 
   ```ts
-  http: httpHandler({ fetch: app.fetch, streamThreshold: 1024 * 1024 }), // responses up to 1 MiB go whole
+  http: httpHandler({ fetch: app.fetch, streamThreshold: 256 * 1024 }), // responses over 256 KiB stream
   ```
 
   A body sent whole moves in one message, which is faster, while it holds all of its bytes until the other side takes them; a body that streams holds at most a stream's window in flight, and the slower side slows the other. `streamThreshold` is an integer of 0 or more, and 0 streams every body that has bytes.
+
+  The panel sends a response body of 14 KiB or more with chunked encoding, without `Content-Length`, apart from the answer to a `HEAD` request. Bun 1.4.4 writes a larger body slowly when the handler answers after waiting for something, as a panel's always does, and a stream avoids that.
 - **Timeouts.** The call's timeout, `callTimeout`, runs from the end of the request body to the response head. A body sent whole must arrive within `idleTimeout`, so a client must send at least `streamThreshold / idleTimeout` on average, 25.6 KiB/s with the defaults, for the largest; raise `idleTimeout`, or lower `streamThreshold`, for slower clients. A body that streams fails once it moves nothing for `idleTimeout`, in either direction. Bun's own timer, which would cut a whole exchange, doesn't run while a request is under way.
 - **Statuses.** Where the panel writes the body, it is JSON, `{ code, message }`:
 

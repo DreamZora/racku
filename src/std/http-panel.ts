@@ -12,6 +12,7 @@
  * @decision .agents/decisions/261118_071513-http-panel-device.md#certificates-that-change
  * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
  * @decision .agents/decisions/261118_165318-stream-threshold.md#the-threshold
+ * @decision .agents/decisions/261118_195832-faster-panel-responses.md#bodies-of-14-kib-and-more
  */
 import { createPrivateKey, X509Certificate } from "node:crypto";
 import { resolve } from "node:path";
@@ -42,6 +43,15 @@ const STREAM_THRESHOLD = 256 * 1024;
 const MOVE_FROM = 1024;
 /** The message of the 408 for a body sent whole that didn't arrive within `idleTimeout`. */
 const LATE_BODY = "the client didn't send its body within idleTimeout";
+/**
+ * The smallest response body that the panel hands to Bun as a stream of one chunk instead of as
+ * bytes. Bun 1.4.4 writes a body of bytes over about 15 KiB slowly when the handler answers
+ * after waiting for something, as the panel always does: 16 KiB responses ran at 11 000 per
+ * second against 62 000 as a stream, in a probe on Linux. Below this size, bytes are faster.
+ *
+ * @decision .agents/decisions/261118_195832-faster-panel-responses.md#bodies-of-14-kib-and-more
+ */
+const ONE_CHUNK_FROM = 14 * 1024;
 /** The most message calls a socket has unfinished. */
 const MESSAGES_IN_FLIGHT = 16;
 /**
@@ -581,9 +591,25 @@ async function handle(
   }
   const streamed = output.body instanceof ReadableStream;
   try {
+    const bytes = streamed ? null : (output.body as Uint8Array | null);
+    // A HEAD response sends no body, so it keeps bytes, and with them its Content-Length.
+    if (bytes !== null && bytes.byteLength >= ONE_CHUNK_FROM && request.method !== "HEAD") {
+      // Bun sends a stream chunked, and drops a Content-Length the device named.
+      const headers = new Headers(output.headers);
+      headers.delete("content-length");
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      });
+      const response = new Response(body, { status: output.status, headers });
+      server.timeout(request, idle);
+      return response;
+    }
     const responseBody = streamed
       ? watched(output.body as ReadableStream<Uint8Array>, () => server.timeout(request, idle))
-      : (output.body as Uint8Array | null);
+      : bytes;
     const response = new Response(responseBody, { status: output.status, headers: output.headers });
     if (!streamed) server.timeout(request, idle);
     return response;

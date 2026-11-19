@@ -106,8 +106,7 @@ export interface HttpHandlers<T = unknown> {
   ): Response | undefined | Promise<Response | undefined>;
   /**
    * The largest response body, in bytes, that goes back in one message when it is complete at
-   * once; a larger or slower one streams. An integer of 0 or more; default 256 KiB, the window
-   * of a stream.
+   * once; a larger or slower one streams. An integer of 0 or more; default 16 MiB.
    */
   streamThreshold?: number;
   websocket?: {
@@ -132,12 +131,12 @@ export interface HttpHandler<T = unknown> extends PortImpl<HttpMembers> {
 }
 
 /**
- * The default largest body that goes in one message: a stream's window, which a stream of a
- * body that size would fill at once anyway.
+ * The default largest response body that goes back in one message: one in memory moved whole
+ * at twice the rate of a stream under load, and the panel then holds at most this much of it.
  *
- * @decision .agents/decisions/261118_165318-stream-threshold.md#the-threshold
+ * @decision .agents/decisions/261118_195832-faster-panel-responses.md#responses-sent-whole
  */
-const STREAM_THRESHOLD = 256 * 1024;
+const STREAM_THRESHOLD = 16 * 1024 * 1024;
 /** Microtask turns that a read of a body may take and still count as at once. */
 const HOPS = 4;
 /**
@@ -265,7 +264,7 @@ function rest(
  *
  * `fetch` receives a standard `Request`, whose `signal` aborts when the client goes away or the
  * call times out, and whose body streams when the panel streams it. A `Response` whose body
- * ends at once within `streamThreshold`, 256 KiB by default, goes back in one message, which
+ * ends at once within `streamThreshold`, 16 MiB by default, goes back in one message, which
  * moves its bytes instead of copying them from 1 KiB on; any other body streams, so server-sent
  * events and large downloads work. With `websocket`, `fetch` accepts an upgrade with
  * `server.upgrade(request, options)`; the sockets' `send()` and `close()` travel as the events
@@ -284,6 +283,7 @@ function rest(
  * @throws {RackError} `RACK_INVALID_INPUT` when `streamThreshold` is not an integer of 0 or more.
  * @decision .agents/decisions/261118_071513-http-panel-device.md#the-connector
  * @decision .agents/decisions/261118_165318-stream-threshold.md#the-threshold
+ * @decision .agents/decisions/261118_195832-faster-panel-responses.md#responses-sent-whole
  */
 export function httpHandler<T = unknown>(
   handlers: FetchHandler | HttpHandlers<T>,
