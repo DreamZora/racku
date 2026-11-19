@@ -919,7 +919,7 @@ rack42u runs on Windows as it does on Linux and macOS, with these differences:
 | Check decision records | `bun run check:decisions` |
 | All of the above | `bun run check` |
 
-CI runs for every push to `main`, and on request: `bun run check` on Linux, and `bun test` on macOS and Windows. A failure on any of the three fails the run. To check a branch before merging it, start the workflow by hand with "Run workflow" on the Actions tab, or with `gh workflow run check.yml --ref <branch>`.
+CI runs for every push to `main`, and on request: `bun run check` on Linux, `bun test` on macOS and Windows, and `bun test` on the latest Bun release on Linux. A failure of any of the four jobs fails the run. To check a branch before merging it, start the workflow by hand with "Run workflow" on the Actions tab, or with `gh workflow run check.yml --ref <branch>`.
 
 Design decisions live in [`.agents/decisions/`](.agents/decisions); [`AGENTS.md`](AGENTS.md) explains how the project is run.
 
