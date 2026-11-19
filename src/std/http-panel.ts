@@ -11,6 +11,7 @@
  * @decision .agents/decisions/261118_071513-http-panel-device.md#websocket
  * @decision .agents/decisions/261118_071513-http-panel-device.md#certificates-that-change
  * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+ * @decision .agents/decisions/261118_165318-stream-threshold.md#the-threshold
  */
 import { createPrivateKey, X509Certificate } from "node:crypto";
 import { resolve } from "node:path";
@@ -29,8 +30,14 @@ import * as v from "valibot";
 const MiB = 1024 * 1024;
 
 type Bytes = Uint8Array<ArrayBuffer>;
-/** A request body with a declared length up to this size goes to the device as bytes. */
-const SMALL_BODY = 64 * 1024;
+/**
+ * The default largest request body, of a declared length, that goes to the device as bytes: a
+ * stream's window, which a stream of a body that size would fill at once anyway.
+ */
+const STREAM_THRESHOLD = 256 * 1024;
+const LATE = Symbol("late");
+/** The message of the 408 for a body sent whole that didn't arrive within `idleTimeout`. */
+const LATE_BODY = "the client didn't send its body within idleTimeout";
 /** The most message calls a socket has unfinished. */
 const MESSAGES_IN_FLIGHT = 16;
 /**
@@ -56,6 +63,7 @@ export const PanelConfig = v.object({
     v.pipe(v.string(), v.regex(/^[^.]+\.[^.]+$/, "must be a <device>.<port> address")),
   ),
   maxBodySize: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1)), MiB),
+  streamThreshold: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0)), STREAM_THRESHOLD),
   idleTimeout: v.optional(whole(1, 255), 10),
   tls: v.optional(v.union([Pair, v.pipe(v.array(Pair), v.minLength(1))])),
   certificateCheck: v.optional(whole(1, 3_600), 60),
@@ -225,7 +233,10 @@ function tlsOf(pairs: readonly Loaded[]): ListenerTls | ListenerTls[] {
 /** Why a request failed, as a status: what the decision's table of statuses says. */
 function statusFor(error: unknown, stalled: { client: boolean; device: boolean }): Response {
   const message = messageOf(error);
-  if (stalled.client) return json(408, "RACK_TIMEOUT", "the client stopped sending its body");
+  if (stalled.client) {
+    const whole = error instanceof RackError && error.message === LATE_BODY;
+    return json(408, "RACK_TIMEOUT", whole ? LATE_BODY : "the client stopped sending its body");
+  }
   if (stalled.device) return json(504, "RACK_TIMEOUT", "the device stopped reading the body");
   const code = codeOf(error);
   if (code === "RACK_LINK_DOWN" || code === "RACK_OVERLOADED") return json(503, code, message);
@@ -243,48 +254,40 @@ function bodyError(error: unknown): RackError {
 }
 
 /**
- * Reads a body of a declared length up to 64 KiB, which goes to the device as bytes. It fails
- * with `RACK_TIMEOUT` when the client sends nothing for `idle` s, under one timer that each
- * chunk restarts. The bytes are in a buffer of their own, which the call moves.
+ * Reads a body of a declared length up to `streamThreshold`, which goes to the device as bytes,
+ * in a buffer of its own that the call moves. It fails with `RACK_TIMEOUT` when the body hasn't
+ * arrived in full within `idle` s.
+ *
+ * Bun reads it natively, as `request.bytes()`, which in a probe on Linux served more than twice
+ * the small requests that a reader in JavaScript did; but it shows no progress, so the bound is
+ * on the whole body instead of on its idle time.
+ *
+ * @decision .agents/decisions/261118_165318-stream-threshold.md#bodies-sent-whole
  */
-async function readSmall(
-  source: ReadableStream<Uint8Array>,
+async function readWhole(
+  request: Request,
   idle: number,
   stalled: { client: boolean },
 ): Promise<Bytes> {
-  const reader = source.getReader();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const quiet = new Promise<"quiet">((resolve) => {
-    timer = setTimeout(() => resolve("quiet"), idle * 1000);
+  const late = new Promise<typeof LATE>((resolve) => {
+    timer = setTimeout(() => resolve(LATE), idle * 1000);
   });
-  const chunks: Uint8Array[] = [];
-  let size = 0;
+  const reading = request.bytes() as Promise<Bytes>;
   try {
-    for (;;) {
-      const next = await Promise.race([reader.read(), quiet]);
-      if (next === "quiet") {
-        stalled.client = true;
-        // The body is given up; a failure to cancel it changes nothing.
-        void reader.cancel().catch(() => undefined);
-        throw new RackError("RACK_TIMEOUT", "the client stopped sending its body");
-      }
-      if (next.done) break;
-      chunks.push(next.value);
-      size += next.value.byteLength;
-      timer?.refresh();
+    const bytes = await Promise.race([reading, late]);
+    if (bytes === LATE) {
+      stalled.client = true;
+      // Bun fails the read once the panel answers; nothing waits for it any more.
+      reading.catch(() => undefined);
+      throw new RackError("RACK_TIMEOUT", LATE_BODY);
     }
+    return bytes;
   } catch (error) {
     throw error instanceof RackError ? error : bodyError(error);
   } finally {
     clearTimeout(timer);
   }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
 }
 
 /**
@@ -412,15 +415,18 @@ async function handle(
   let body: Bytes | ReadableStream<Uint8Array> | null = null;
   if (request.method !== "GET" && request.method !== "HEAD" && request.body !== null) {
     const length = request.headers.get("content-length");
-    if (length !== null && Number(length) <= SMALL_BODY) {
+    if (length !== null && Number(length) <= config.streamThreshold) {
       try {
-        body = await readSmall(request.body, config.idleTimeout, stalled);
+        body = await readWhole(request, config.idleTimeout, stalled);
       } catch (error) {
         unwatchClient(waiting);
         restore();
         return statusFor(error, stalled);
       }
-      options.transfer = [body.buffer];
+      // Bun's bytes() gives a buffer of its own, as measured on Linux; the call moves it.
+      if (body.byteOffset === 0 && body.byteLength === body.buffer.byteLength) {
+        options.transfer = [body.buffer];
+      }
     } else body = guard(request.body, config.idleTimeout, stalled, () => aborter.abort());
   }
   const socket = upgrade ? `${ctx.slot.name}:${instance}:${++socketCount}` : undefined;

@@ -696,7 +696,8 @@ export default device({
 | `routes` | required | Route patterns mapped to `<device>.<port>` addresses. Unmatched paths get 404. |
 | `allowedHosts` | none | More names that clients may send as `Host` to a panel on a loopback `hostname`, besides its address and `localhost`. Other hosts get 403. |
 | `maxBodySize` | 1 MiB | The largest request body, in bytes. A larger one gets 413. |
-| `idleTimeout` | 10 | Seconds, 1 to 255. An idle connection closes, and a body that moves nothing for so long fails. |
+| `streamThreshold` | 256 KiB | The largest request body, in bytes, that goes to the device whole. A body with a declared length up to it must arrive within `idleTimeout`; a larger one, and a chunked one, streams. |
+| `idleTimeout` | 10 | Seconds, 1 to 255. An idle connection closes, a body sent whole that hasn't arrived within it fails, and so does a streamed body that moves nothing for so long. |
 | `tls` | none | `{ cert, key }`, or a list of `{ cert, key, serverName }` for SNI: paths of PEM files, relative to the base directory. |
 | `certificateCheck` | 60 | How often the panel checks its certificate files, in seconds, 1 to 3 600. |
 | `webSocket.maxMessageSize` | 1 MiB | The largest message a client may send, in bytes. A larger one closes its WebSocket with 1009. |
@@ -706,15 +707,21 @@ A configuration that doesn't validate fails the panel's boot with `RACK_INVALID_
 
 **Requests.** The panel's call carries the method, URL, headers, route parameters, and body. `httpHandler` hands your function a standard `Request`, whose `signal` aborts when the client goes away or the call times out, and keeps duplicate response headers, such as several `Set-Cookie` headers.
 
-- **Bodies stream.** A request body with a declared length of at most 64 KiB travels as bytes, and a longer or chunked one streams, as [Streams](#streams) describes, to reach your function as `request.body`. A response body that ends at once within 64 KiB goes back as bytes, and any other streams, so server-sent events and large downloads start at once. Either way, the slower side slows the other.
-- **Timeouts.** The call's timeout, `callTimeout`, runs from the end of the request body to the response head. A body that moves nothing for `idleTimeout` fails, in either direction. Bun's own timer, which would cut a whole exchange, doesn't run while a request is under way.
+- **Bodies.** A request body with a declared length of at most the panel's `streamThreshold`, 256 KiB by default, goes to the device whole, and a longer or chunked one streams, as [Streams](#streams) describes. Either way, it reaches your function as `request.body`. A response body that ends at once within `httpHandler`'s `streamThreshold`, also 256 KiB by default, goes back whole, and any other streams, so server-sent events and large downloads start at once:
+
+  ```ts
+  http: httpHandler({ fetch: app.fetch, streamThreshold: 1024 * 1024 }), // responses up to 1 MiB go whole
+  ```
+
+  A body sent whole moves in one message, which is faster, while it holds all of its bytes until the other side takes them; a body that streams holds at most a stream's window in flight, and the slower side slows the other. `streamThreshold` is an integer of 0 or more, and 0 streams every body that has bytes.
+- **Timeouts.** The call's timeout, `callTimeout`, runs from the end of the request body to the response head. A body sent whole must arrive within `idleTimeout`, so a client must send at least `streamThreshold / idleTimeout` on average, 25.6 KiB/s with the defaults, for the largest; raise `idleTimeout`, or lower `streamThreshold`, for slower clients. A body that streams fails once it moves nothing for `idleTimeout`, in either direction. Bun's own timer, which would cut a whole exchange, doesn't run while a request is under way.
 - **Statuses.** Where the panel writes the body, it is JSON, `{ code, message }`:
 
   | Outcome | Status |
   |---|---|
   | `RACK_LINK_DOWN`, or `RACK_OVERLOADED`, also at the need's `queueLimit` | 503 |
   | No response head within `callTimeout`, or a device that stopped reading the body for `idleTimeout` | 504 |
-  | A client that stopped sending its body for `idleTimeout` | 408 |
+  | A body sent whole that hasn't arrived within `idleTimeout`, or a streamed body that the client stopped sending for `idleTimeout` | 408 |
   | Any other error, and response headers that `Response` rejects | 502 |
   | A body over `maxBodySize` | 413, with an empty body; a body that streamed fails at the device with `RACK_INVALID_INPUT` |
   | Another host, on a loopback `hostname` | 403 |

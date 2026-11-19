@@ -87,6 +87,48 @@ export function rawStatus(port: number, lines: string[], body?: string): Promise
   });
 }
 
+/**
+ * Sends raw request lines on a new connection, then the pieces of a body `gap` ms apart, and
+ * returns the whole response once the connection closes. It stops sending once a response
+ * arrives.
+ */
+export function dripResponse(
+  port: number,
+  lines: string[],
+  pieces: string[],
+  gap: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const socket = netConnect({ host: "127.0.0.1", port }, () => {
+      socket.write(`${lines.join("\r\n")}\r\n\r\n`);
+      let next = 0;
+      const send = () => {
+        if (data !== "" || next >= pieces.length) return;
+        socket.write(pieces[next++] as string);
+        timer = setTimeout(send, gap);
+      };
+      timer = setTimeout(send, gap);
+    });
+    socket.on("data", (chunk) => {
+      data += chunk.toString();
+    });
+    socket.on("close", () => {
+      clearTimeout(timer);
+      resolve(data);
+    });
+    // A server that answers before the body ends may reset the connection; the answer counts.
+    socket.on("error", (error) => {
+      if (data === "") reject(error);
+    });
+    socket.setTimeout(10_000, () => {
+      socket.destroy();
+      reject(new Error("no answer"));
+    });
+  });
+}
+
 /** Sends raw request lines on a new connection and returns the head of the response. */
 export function rawHead(port: number, lines: string[]): Promise<string> {
   return new Promise((resolve, reject) => {

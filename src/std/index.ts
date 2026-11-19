@@ -69,6 +69,7 @@ export interface HttpPanelPair {
  * Configuration of the `http-panel` device.
  *
  * @decision .agents/decisions/261118_071513-http-panel-device.md#configuration
+ * @decision .agents/decisions/261118_165318-stream-threshold.md#the-threshold
  */
 export interface HttpPanelConfig {
   /** The address to listen on; default `127.0.0.1`. `0.0.0.0` listens on every IPv4 interface. */
@@ -82,6 +83,12 @@ export interface HttpPanelConfig {
   routes: Record<string, string>;
   /** The largest request body, in bytes; default 1 MiB. A larger one gets 413. */
   maxBodySize?: number;
+  /**
+   * The largest request body, in bytes, that goes to the device as bytes; default 256 KiB. A
+   * body of a declared length up to it must arrive within `idleTimeout`; a larger one, and a
+   * chunked one, stream.
+   */
+  streamThreshold?: number;
   /**
    * Seconds, 1 to 255; default 10. An idle connection closes, and a body that moves nothing for
    * so long fails.

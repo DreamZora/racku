@@ -104,6 +104,12 @@ export interface HttpHandlers<T = unknown> {
     request: Request,
     server: HttpServer<T>,
   ): Response | undefined | Promise<Response | undefined>;
+  /**
+   * The largest response body, in bytes, that goes back in one message when it is complete at
+   * once; a larger or slower one streams. An integer of 0 or more; default 256 KiB, the window
+   * of a stream.
+   */
+  streamThreshold?: number;
   websocket?: {
     open?(ws: HttpSocket<T>): void | Promise<void>;
     message?(ws: HttpSocket<T>, data: string | Uint8Array): void | Promise<void>;
@@ -125,8 +131,13 @@ export interface HttpHandler<T = unknown> extends PortImpl<HttpMembers> {
   restore(list: readonly HttpSocketState<T>[]): void;
 }
 
-/** Bodies up to this size go in one message; larger or slower ones stream. */
-const SMALL = 64 * 1024;
+/**
+ * The default largest body that goes in one message: a stream's window, which a stream of a
+ * body that size would fill at once anyway.
+ *
+ * @decision .agents/decisions/261118_165318-stream-threshold.md#the-threshold
+ */
+const STREAM_THRESHOLD = 256 * 1024;
 /** Microtask turns that a read of a body may take and still count as at once. */
 const HOPS = 4;
 /**
@@ -173,12 +184,15 @@ async function soon(next: Promise<Read>): Promise<Read | typeof LATER> {
 }
 
 /**
- * The body of a response: `null`, its bytes when it ends within 64 KiB without waiting, or a
- * stream otherwise, so that a large or slow body, such as server-sent events, starts at once.
+ * The body of a response: `null`, its bytes when it ends within `threshold` without waiting, or
+ * a stream otherwise, so that a large or slow body, such as server-sent events, starts at once.
  * A read counts as at once when it settles within a few microtask turns, or else before a
  * `setImmediate`, which ends the event loop's turn.
  */
-async function bodyOf(response: Response): Promise<Bytes | ReadableStream<Uint8Array> | null> {
+async function bodyOf(
+  response: Response,
+  threshold: number,
+): Promise<Bytes | ReadableStream<Uint8Array> | null> {
   const body = response.body;
   if (body === null) return null;
   const reader: Reader = body.getReader();
@@ -200,7 +214,7 @@ async function bodyOf(response: Response): Promise<Bytes | ReadableStream<Uint8A
     }
     taken.push(chunk);
     size += chunk.byteLength;
-    if (size > SMALL) return rest(taken, reader, undefined);
+    if (size > threshold) return rest(taken, reader, undefined);
   }
   // A buffer of its own, which the result moves to the panel instead of copying it.
   const bytes = new Uint8Array(size);
@@ -243,9 +257,9 @@ function rest(
  *
  * `fetch` receives a standard `Request`, whose `signal` aborts when the client goes away or the
  * call times out, and whose body streams when the panel streams it. A `Response` whose body
- * ends at once within 64 KiB goes back in one message, which moves its bytes instead of copying
- * them; any other body streams, so server-sent events and large downloads work. With
- * `websocket`, `fetch` accepts an upgrade with
+ * ends at once within `streamThreshold`, 256 KiB by default, goes back in one message, which
+ * moves its bytes instead of copying them; any other body streams, so server-sent events and
+ * large downloads work. With `websocket`, `fetch` accepts an upgrade with
  * `server.upgrade(request, options)`; the sockets' `send()` and `close()` travel as the events
  * of `emit`, the port's emitter.
  *
@@ -255,10 +269,13 @@ function rest(
  * silence at each call it gets, of any member. A message for a socket it doesn't know closes
  * that socket with 1011.
  *
- * @param handlers A fetch-style function, or `fetch` with WebSocket handlers.
+ * @param handlers A fetch-style function, or `fetch` with WebSocket handlers and
+ *   `streamThreshold`.
  * @param emit `ctx.emit.<port>` of the port, needed for WebSockets.
  * @returns The port implementation to return from `powerOn`, with `list()` and `restore()`.
+ * @throws {RackError} `RACK_INVALID_INPUT` when `streamThreshold` is not an integer of 0 or more.
  * @decision .agents/decisions/261118_071513-http-panel-device.md#the-connector
+ * @decision .agents/decisions/261118_165318-stream-threshold.md#the-threshold
  */
 export function httpHandler<T = unknown>(
   handlers: FetchHandler | HttpHandlers<T>,
@@ -266,6 +283,13 @@ export function httpHandler<T = unknown>(
 ): HttpHandler<T> {
   const options: HttpHandlers<T> =
     typeof handlers === "function" ? { fetch: (request) => handlers(request) } : handlers;
+  const threshold = options.streamThreshold ?? STREAM_THRESHOLD;
+  if (!Number.isSafeInteger(threshold) || threshold < 0) {
+    throw new RackError(
+      "RACK_INVALID_INPUT",
+      `httpHandler: streamThreshold must be an integer of 0 or more, not ${String(threshold)}`,
+    );
+  }
   const sockets = new Map<string, Entry<T>>();
   /** Sockets upgraded and not opened yet, with their data. */
   const upgrading = new Map<string, T>();
@@ -398,7 +422,7 @@ export function httpHandler<T = unknown>(
       if (response === undefined) {
         throw new RackError("RACK_INVALID_OUTPUT", "fetch returned no response");
       }
-      const body = await bodyOf(response);
+      const body = await bodyOf(response, threshold);
       if (body instanceof Uint8Array) call.transfer(body.buffer);
       return { status: response.status, headers: pairsOf(response.headers), body };
     },

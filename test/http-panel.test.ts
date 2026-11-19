@@ -15,6 +15,7 @@
  * @decision .agents/decisions/261118_071513-http-panel-device.md#the-connector
  * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
  * @decision .agents/decisions/261118_071513-http-panel-device.md#observation
+ * @decision .agents/decisions/261118_165318-stream-threshold.md#tests
  * @decision .agents/decisions/261118_165318-stream-threshold.md#cancellation
  */
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
@@ -40,6 +41,7 @@ import { PanelConfig, SYNC_MS } from "../src/std/http-panel.ts";
 import { errorOf, FIXTURES, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 import {
   certificateOf,
+  dripResponse,
   freePort,
   rawHead,
   rawStatus,
@@ -208,7 +210,7 @@ describe("http-panel requests", () => {
   test("README.md: answers 408 when the client stops sending its body, as bytes or as a stream", async () => {
     const { port } = await panelRack({ idleTimeout: 1 });
     const head = (extra: string) => ["POST /web/upload HTTP/1.1", `Host: 127.0.0.1:${port}`, extra];
-    // A declared length up to 64 KiB travels as bytes, which the panel reads first.
+    // A declared length up to streamThreshold travels as bytes, which the panel reads first.
     const started = performance.now();
     expect(await rawStatus(port, head("Content-Length: 1000"), "0123456789")).toStartWith(
       "HTTP/1.1 408",
@@ -218,6 +220,29 @@ describe("http-panel requests", () => {
     expect(
       await rawStatus(port, head("Transfer-Encoding: chunked"), "a\r\n0123456789\r\n"),
     ).toStartWith("HTTP/1.1 408");
+  });
+
+  test("README.md: a body sent whole must arrive within idleTimeout, while a streamed one may take longer as long as it moves", async () => {
+    const { port } = await panelRack({ idleTimeout: 1 });
+    const head = (extra: string) => [
+      "POST /web/upload HTTP/1.1",
+      `Host: 127.0.0.1:${port}`,
+      extra,
+      "Connection: close",
+    ];
+    // 2 bytes every 200 ms: 2 s for the body, and never 1 s without bytes.
+    const pieces = Array.from({ length: 10 }, () => "xx");
+    const started = performance.now();
+    const whole = await dripResponse(port, head("Content-Length: 20"), pieces, 200);
+    expect(whole).toStartWith("HTTP/1.1 408");
+    expect(whole).toContain("the client didn't send its body within idleTimeout");
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeGreaterThan(900);
+    expect(elapsed).toBeLessThan(1_900);
+    const chunks = [...pieces.map((piece) => `2\r\n${piece}\r\n`), "0\r\n\r\n"];
+    const streamed = await dripResponse(port, head("Transfer-Encoding: chunked"), chunks, 200);
+    expect(streamed).toStartWith("HTTP/1.1 200");
+    expect(streamed.endsWith("\r\n\r\n20")).toBe(true);
   });
 
   test("README.md: answers 504 when the device stops reading the body", async () => {
@@ -234,7 +259,8 @@ describe("http-panel requests", () => {
   });
 
   test("README.md: callTimeout runs from the end of the request body to the response head", async () => {
-    const { port } = await panelRack({}, { callTimeout: 300 });
+    // The body is over streamThreshold, so it streams, and the call starts with its first bytes.
+    const { port } = await panelRack({ streamThreshold: 64 * 1024 }, { callTimeout: 300 });
     // The client sends the second half of its body after longer than callTimeout.
     const half = "x".repeat(100 * 1024);
     const response = await new Promise<string>((resolve, reject) => {
@@ -293,6 +319,26 @@ describe("http-panel requests", () => {
       return handle?.kind === "rpc" && handle.active === 0 && handle.errors;
     });
     expect(errors).toEqual({ RACK_CANCELLED: 1 });
+  });
+
+  test("README.md: streamThreshold decides which request bodies go to the device as bytes and which stream", async () => {
+    const { running, get } = await panelRack({ streamThreshold: 1024 });
+    const opened = async () => {
+      const handle = (await metricsOf(running, "web")).provides.http?.handle;
+      return handle?.kind === "rpc" ? (handle.streams?.opened ?? 0) : undefined;
+    };
+    const upload = async (size: number) =>
+      await (await get("/web/upload", { method: "POST", body: new Uint8Array(size) })).text();
+    expect(await upload(1024)).toBe("1024");
+    expect(await opened()).toBe(0);
+    expect(await upload(1025)).toBe("1025");
+    expect(await opened()).toBe(1);
+    await running.stop();
+    // With 0, every body that has bytes streams.
+    const none = await panelRack({ streamThreshold: 0 });
+    expect(await (await none.get("/web/upload", { method: "POST", body: "x" })).text()).toBe("1");
+    const handle = (await metricsOf(none.running, "web")).provides.http?.handle;
+    expect(handle?.kind === "rpc" && handle.streams?.opened).toBe(1);
   });
 
   test("serves through the installed instance after a swap", async () => {
@@ -779,6 +825,7 @@ describe("http-panel configuration", () => {
       port: 0,
       routes: {},
       maxBodySize: MiB,
+      streamThreshold: 256 * 1024,
       idleTimeout: 10,
       certificateCheck: 60,
       webSocket: { maxMessageSize: MiB, maxConnections: 10_000 },
@@ -884,8 +931,8 @@ describe("http-panel observation", () => {
     await get("/web/greeting");
     await get("/web/boom");
     await get("/chat/state");
-    // A body over 64 KiB streams, which the need's counters show.
-    await get("/web/upload", { method: "POST", body: new Uint8Array(100 * 1024) });
+    // A body over streamThreshold, 256 KiB by default, streams, which the need's counters show.
+    await get("/web/upload", { method: "POST", body: new Uint8Array(300 * 1024) });
     // Answers for which no call reached a device count nowhere.
     await get("/elsewhere");
     const raw = (host: string, extra: string[] = []) =>
@@ -904,7 +951,7 @@ describe("http-panel observation", () => {
       calls: 3,
       ok: 2,
       errors: { RACK_DEVICE_FAULT: 1 },
-      streams: { opened: 1, open: 0, bytesSent: 100 * 1024, errors: {} },
+      streams: { opened: 1, open: 0, bytesSent: 300 * 1024, errors: {} },
     });
     expect(needs.chat_http?.handle).toMatchObject({ calls: 1, ok: 1, errors: {} });
     const socket = await socketTo(url, "/chat");
@@ -1035,8 +1082,8 @@ describe("http/v2 and httpHandler", () => {
     expect(new TextDecoder().decode(output.body as Uint8Array)).toBe("aborted");
   });
 
-  test("README.md: a body that ends at once within 64 KiB goes as bytes, and any other streams", async () => {
-    const handler = httpHandler((request) => {
+  test("README.md: a response body that ends at once within streamThreshold goes as bytes, moved, and any other streams", async () => {
+    const fetch = (request: Request) => {
       const size = Number(new URL(request.url).searchParams.get("size"));
       if (size > 0) return new Response(new Uint8Array(size));
       return new Response(
@@ -1048,19 +1095,40 @@ describe("http/v2 and httpHandler", () => {
           },
         }),
       );
-    });
-    const body = async (size: number) => {
+    };
+    const moved: ArrayBuffer[] = [];
+    const call: CallContext = { ...CALL, transfer: (...buffers) => moved.push(...buffers) };
+    const bodyOf = async (handler: ReturnType<typeof httpHandler>, size: number) => {
       const request = { method: "GET", url: `http://r/?size=${size}`, headers: [], params: {} };
-      const output = await handler.handle({ ...request, body: null }, CALL);
+      const output = await handler.handle({ ...request, body: null }, call);
       return "status" in output ? output.body : undefined;
     };
-    expect(await body(1000)).toBeInstanceOf(Uint8Array);
-    const large = await body(100 * 1024);
+    // The default is 256 KiB.
+    const plain = httpHandler(fetch);
+    const whole = await bodyOf(plain, 256 * 1024);
+    expect(whole).toBeInstanceOf(Uint8Array);
+    expect(moved).toEqual([(whole as Uint8Array).buffer as ArrayBuffer]);
+    const large = await bodyOf(plain, 256 * 1024 + 1);
     expect(large).toBeInstanceOf(ReadableStream);
-    expect((await new Response(large as ReadableStream).arrayBuffer()).byteLength).toBe(100 * 1024);
-    const slow = await body(0);
+    expect((await new Response(large as ReadableStream).arrayBuffer()).byteLength).toBe(
+      256 * 1024 + 1,
+    );
+    const slow = await bodyOf(plain, 0);
     expect(slow).toBeInstanceOf(ReadableStream);
     expect(await new Response(slow as ReadableStream).text()).toBe("late");
+    // A handler with its own threshold.
+    const small = httpHandler({ fetch, streamThreshold: 1000 });
+    expect(await bodyOf(small, 1000)).toBeInstanceOf(Uint8Array);
+    expect(await bodyOf(small, 1001)).toBeInstanceOf(ReadableStream);
+    // With 0, every body that has bytes streams.
+    expect(await bodyOf(httpHandler({ fetch, streamThreshold: 0 }), 1)).toBeInstanceOf(
+      ReadableStream,
+    );
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      expect(() => httpHandler({ fetch, streamThreshold: bad })).toThrow(
+        expect.objectContaining({ code: "RACK_INVALID_INPUT" }),
+      );
+    }
   });
 
   test("README.md: a request body that streams reaches fetch as request.body", async () => {
