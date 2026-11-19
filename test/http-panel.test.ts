@@ -310,6 +310,8 @@ describe("http-panel requests", () => {
     const { running, get } = await panelRack();
     // A call that ends leaves its controller to the next one, which the client then cancels.
     expect(await (await get("/web/greeting")).text()).toBe("hello");
+    // The device answers before it stops counting the greeting, so it may still count it here.
+    await waitFor(() => statusOf(running, "web").inFlight === 0);
     const controller = new AbortController();
     const pending = get("/web/slow", { signal: controller.signal }).catch(() => "gone");
     await waitFor(() => statusOf(running, "web").inFlight === 1);
@@ -319,7 +321,7 @@ describe("http-panel requests", () => {
     expect(await pending).toBe("gone");
     const errors = await waitFor(async () => {
       const handle = (await metricsOf(running, "web")).provides.http?.handle;
-      return handle?.kind === "rpc" && handle.active === 0 && handle.errors;
+      return handle?.kind === "rpc" && handle.calls === 2 && handle.active === 0 && handle.errors;
     });
     expect(errors).toEqual({ RACK_CANCELLED: 1 });
   });
