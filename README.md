@@ -4,11 +4,11 @@ rack42u is a Bun framework for building an application out of hot-swappable **de
 
 The framework provides the rack runtime and a few standard devices. What you mount in the rack, and whether the result is an API server, a worker process, or something else, is up to you.
 
-> **Status: P3.** P3 adds byte streams in calls, listeners that devices open and that the rack hands over across swaps, and the HTTP panel as a standard device, with WebSocket, streaming bodies, and certificates that change without a restart. P2 added watchdogs for hung devices, stops that wait for a device's thread to end, and bounds on every backlog between devices. P1 added scanned racks, cold swaps and restarts, update safety, and `rack ctl` to P0, the first usable version. See [Not supported yet](#not-supported-yet) for what is still missing.
+> **Status: P3.** P3 adds byte streams in calls, listeners that devices open and that the rack hands over across swaps, and the HTTP panel as a standard device, with WebSocket, streaming bodies, and certificates that change without a restart. P2 added watchdogs for hung devices, stops that wait for a device's thread to end, and bounds on every backlog between devices. P1 added scanned racks, cold swaps and restarts, update safety, and `rack ctl` to P0, the first usable version. See [Not supported yet](#not-supported-yet) for what is still missing. rack42u has no formal release yet, so any version until the first one may break the API.
 
 ## Requirements
 
-- [Bun](https://bun.sh) 1.4.4 or later. rack42u runs only on Bun; it is published as TypeScript source.
+- [Bun](https://bun.sh) 1.4.4 or later. CI tests 1.4.4 on every system, and the latest Bun release on Linux. rack42u runs only on Bun, and ships as TypeScript source.
 - Linux or Windows on x64, or macOS on Apple silicon: the systems that CI tests. [Windows](#windows) lists what differs there.
 
 ## Try the example

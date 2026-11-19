@@ -49,7 +49,7 @@ Status: accepted
 
 ## Implementation
 
-- `.github/workflows/check.yml` holds the three jobs, none with `continue-on-error`.
+- `.github/workflows/check.yml` holds the three jobs, on the minimum Bun that it names once as `BUN_MINIMUM`, and the job on the latest Bun release that [Informal versions until the first release, and the Bun versions rack42u follows](261119_054816-versions-and-bun.md#what-ci-tests) adds, none with `continue-on-error`.
   - It runs on `push` to `main` and on `workflow_dispatch`.
   - Its concurrency group is `check-${{ github.ref }}`, with `cancel-in-progress`.
   - It pins `actions/checkout` v7.0.1 and `oven-sh/setup-bun` v2.2.0 by commit hash.

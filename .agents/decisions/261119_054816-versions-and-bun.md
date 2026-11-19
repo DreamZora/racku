@@ -98,6 +98,13 @@ Status: accepted
       - Use only the Bun APIs that the minimum has. Code that exists for a bug of a Bun release names the bug and the release.
     ```
 
+## Implementation
+
+- `.github/workflows/check.yml` names the minimum once, as `BUN_MINIMUM`, for the Linux, macOS, and Windows jobs, and the job `linux-latest`, "Linux, latest Bun", runs `bun test` on the latest Bun release.
+- `test/bun-version.test.ts` checks that `engines.bun`, `@types/bun`, the workflow, the README's Requirements, and `AGENTS.md` name the same minimum, and which Bun each job installs.
+- The README's Requirements say what CI tests, and its status says that any version before the first formal release may break the API.
+- `AGENTS.md` holds the rules in its section "Versions", and "Current state" points there.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-19, together with the two other decisions drafted that day, after reviewing them: "Approved, all of them. Get to work."

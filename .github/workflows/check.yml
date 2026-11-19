@@ -1,5 +1,6 @@
 # The checks of main and of manual runs, as
-# .agents/decisions/261118_015210-ci-with-windows.md decides.
+# .agents/decisions/261118_015210-ci-with-windows.md decides, on the Bun versions that
+# .agents/decisions/261119_054816-versions-and-bun.md decides.
 name: check
 
 on:
@@ -9,6 +10,11 @@ on:
 
 permissions:
   contents: read
+
+# The minimum Bun version, which engines.bun in package.json names. test/bun-version.test.ts
+# checks that every place that names it names the same version.
+env:
+  BUN_MINIMUM: "1.4.4"
 
 # A new run checks everything an unfinished run of the same branch would.
 concurrency:
@@ -24,7 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_MINIMUM }}
       - run: bun install --frozen-lockfile
       - run: bun run check
 
@@ -36,7 +42,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_MINIMUM }}
       - run: bun install --frozen-lockfile
       - run: bun test
 
@@ -48,6 +54,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.4
+          bun-version: ${{ env.BUN_MINIMUM }}
+      - run: bun install --frozen-lockfile
+      - run: bun test
+
+  # The newest Bun release, so that one that breaks rack42u fails a run instead of an app.
+  linux-latest:
+    name: Linux, latest Bun
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bun test

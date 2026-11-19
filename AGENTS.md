@@ -33,7 +33,7 @@ This file defines the project background, architectural constraints, and working
   - [Running a rack under another program](.agents/decisions/261118_173838-running-under-another-program.md): `--stop-on-stdin-close` and `--log json` for `rack start` and `rack dev`.
   - [examples/net-tool, a TCP and UDP tool on Tauri 2 and Quasar](.agents/decisions/261118_173845-net-tool-example.md): the first project on rack42u, run from source.
   - [Content-Length for every response body of known size, without Bun's slow path](.agents/decisions/261118_215039-content-length-for-known-sizes.md): `wholeResponse()` in `rack42u`, with which the panel answers, so a body of bytes or text keeps its `Content-Length` at every size, sent from 15 KiB on as a direct stream that Bun writes in one piece.
-- The minimum Bun version is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
+- rack42u has no formal release yet, and it follows Bun by a minimum version; [Versions](#versions) holds the rules for both.
 - rack42u works around two bugs of Bun 1.4.4, which aren't reported to Bun yet: [Watching two Bun bugs before reporting them](.agents/decisions/261119_031624-watching-bun-bugs.md) holds the reports, and the watch lasts until 2027-01-19.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list, such as the `inline` and `chassis` forms, still needs its own decision before work starts.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
@@ -164,6 +164,18 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 5. Run the checks closest to the change first, then widen them with the scope; see [Commands](#commands). Report only commands that actually ran, with their results.
    - CI runs only for pushes to `main` and manual runs, so `bun run check` before each commit is what checks a branch. A change to platform behavior, such as paths, sockets, signals, or file modes, needs a manual run on its branch before it merges; ask the user to start one.
 6. Finish by updating `## Implementation` in the affected decisions and the documentation they affect. Commits follow the global rules and list the relevant decisions in `Context:`.
+
+## Versions
+
+[Informal versions until the first release, and the Bun versions rack42u follows](.agents/decisions/261119_054816-versions-and-bun.md) decides these rules.
+
+- rack42u has no formal release yet. Until the user cuts the first one, every version is informal: any may break the API, a version is tagged only at the user's word, and the repository stays private. Apps depend on rack42u through git.
+- rack42u names a minimum Bun version, not a pinned one, and supports every later release.
+  - The minimum is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
+  - `engines.bun` names it as `>=1.4.4`. `@types/bun`, `.github/workflows/check.yml`, the README's Requirements, and this file name the same version, and `test/bun-version.test.ts` checks that they agree.
+  - CI tests the minimum on Linux, macOS, and Windows, and the latest Bun release on Linux. A failure on the latest release is a defect: fix rack42u, or work around the bug of Bun and record it.
+  - Until the first formal release, move the minimum whenever work needs it, such as for a fix, an API, or a workaround that can go. Move the five places in one change, run CI by hand on its branch, and say why in the commit. After the release, a major version can still raise its minimum, in a minor version.
+  - Use only the Bun APIs that the minimum has. Code that exists for a bug of a Bun release names the bug and the release.
 
 ## Commands
 
