@@ -5,7 +5,7 @@ Trial apps that agents build on rack42u, knowing it only from its skill and its 
 ## Running a round
 
 1. Start Claude Code in this folder: `cd .agents/trials && claude`.
-2. Ask it to run the workflow `rack42u-trials`, with a budget of 2 million output tokens: "Run the workflow rack42u-trials +2M". The workflow doesn't start without a budget. It runs the four apps, two at a time, on Sonnet 5.5, and then merges their problems into `issues.json`; `/workflows` shows its progress.
+2. Ask it to run the workflow `rack42u-trials` with a budget of 2 million output tokens, which it passes to the workflow as args: "Run the workflow rack42u-trials with the args \"2M\"". The workflow doesn't start without a budget. A `+2M` directive in the request also gives one when it registers; on 2026-11-19 it didn't. The workflow runs the four apps, two at a time, on Sonnet 5.5, and then merges their problems into `issues.json`; `/workflows` shows its progress.
 3. When it has ended, in a session at the repository's root, ask the Agent to commit the round and file its issues.
 
 ## What is here

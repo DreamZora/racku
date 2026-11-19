@@ -1,7 +1,7 @@
 export const meta = {
   name: 'rack42u-trials',
   description: 'Build the four trial apps on rack42u, two at a time, and merge the problems they meet into issues.json',
-  whenToUse: 'When the user asks, in .agents/trials/ of the rack42u repository, to run a round of trials with a token budget',
+  whenToUse: 'When the user asks, in .agents/trials/ of the rack42u repository, to run a round of trials. Pass the token budget the user names as args, such as "2M"; the workflow does not start without one.',
   phases: [
     { title: 'Trials', detail: 'one agent per app, two at a time', model: 'sonnet' },
     { title: 'Merge', detail: 'the problems of every app, merged into issues.json', model: 'sonnet' },
@@ -137,18 +137,38 @@ function mergePrompt(results) {
   ].join('\n\n')
 }
 
-if (!budget.total) {
-  log('A round of trials needs a token budget: ask again with one, such as "+2M".')
+/**
+ * The output tokens that `args` names: a number, a string such as "2M", "+2M", or "2000k", or an
+ * object with such a `budget`; null when it names none.
+ */
+function budgetOf(value) {
+  const given = typeof value === 'object' && value !== null ? value.budget : value
+  if (typeof given === 'number') return Number.isFinite(given) && given > 0 ? given : null
+  if (typeof given !== 'string') return null
+  const match = /^\+?\s*(\d+(?:\.\d+)?)\s*([km]?)$/i.exec(given.trim())
+  if (match === null) return null
+  const unit = { '': 1, k: 1000, m: 1000000 }[match[2].toLowerCase()]
+  const tokens = Number(match[1]) * unit
+  return tokens > 0 ? tokens : null
+}
+
+// The budget comes from a "+2M" directive in the user's request, or, since such a directive can
+// fail to register, from the budget that the user names, which the session passes as args.
+const total = budget.total ?? budgetOf(args)
+if (total === null) {
+  log('A round of trials needs a token budget: pass the one the user names as args, such as "2M".')
   return { error: 'no token budget' }
 }
+const remaining = () => Math.max(0, total - budget.spent())
+log(`Budget: ${Math.round(total / 1000)}k output tokens, ${budget.total ? 'from the directive' : 'from args'}.`)
 
 phase('Trials')
 const results = []
 for (const round of ROUNDS) {
   const needed = round.length * TRIAL_TOKENS + MERGE_TOKENS
-  if (budget.remaining() < needed) {
+  if (remaining() < needed) {
     log(
-      `Not started, for lack of budget: ${round.join(' and ')}, which need ${needed / 1000}k tokens with the merge; ${Math.round(budget.remaining() / 1000)}k are left.`,
+      `Not started, for lack of budget: ${round.join(' and ')}, which need ${needed / 1000}k tokens with the merge; ${Math.round(remaining() / 1000)}k are left.`,
     )
     for (const app of round) results.push({ app, notStarted: 'the budget could not cover it' })
     continue
