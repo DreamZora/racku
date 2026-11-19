@@ -10,7 +10,7 @@ This folder holds trial apps built on rack42u by agents that know rack42u only f
 
 ## What you know of rack42u
 
-- The skill `rack42u`, in this folder's `.claude/skills/rack42u/`.
+- The skill `rack42u`. Load it with the Skill tool: its files lie outside this folder, through a link, so reading them directly may be denied.
 - Once you've added rack42u to your app: its documentation, in your app's `node_modules/rack42u/README.md` and `node_modules/rack42u/docs/`.
 - Nothing else. When the skill and the documentation don't answer a question, you may read rack42u's source, in `node_modules/rack42u/src/`; record in `TRIAL.md` that you had to, and why.
 - Don't change anything under `node_modules/`.
@@ -22,7 +22,10 @@ This folder holds trial apps built on rack42u by agents that know rack42u only f
 
 ## Commands
 
-- You may run `bun`, `bunx`, `curl`, and commands that list or read files. Other commands are denied.
+- You may run `bun`, `bunx`, `curl`, `echo`, and commands that list or read files. Other commands are denied.
+- Change files with the editing tools, not with `sed` or shell redirection.
+- Keep scratch files, such as a probe of how Bun behaves, in your app's `scratch/` folder, which git ignores. Don't write outside your app's folder.
+- A call that is denied is a problem of the trial setup: record it in `TRIAL.md`, and go on another way. Stop only when no way is left, and say so in `TRIAL.md`.
 - Never run `git`: this folder is inside rack42u's repository, and git commands would act on rack42u itself. Bun runs git by itself when it installs rack42u, which is fine.
 
 ## TRIAL.md

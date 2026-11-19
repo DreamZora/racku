@@ -1,7 +1,7 @@
 export const meta = {
   name: 'rack42u-trials',
   description: 'Build the four trial apps on rack42u, two at a time, and merge the problems they meet into issues.json',
-  whenToUse: 'When the user asks, in .agents/trials/ of the rack42u repository, to run a round of trials. Pass the token budget the user names as args, such as "2M"; the workflow does not start without one.',
+  whenToUse: 'When the user asks, in .agents/trials/ of the rack42u repository, to run a round of trials. Pass the token budget the user names as args, such as "2M", or { budget, apps } to run only some apps; the workflow does not start without a budget.',
   phases: [
     { title: 'Trials', detail: 'one agent per app, two at a time', model: 'sonnet' },
     { title: 'Merge', detail: 'the problems of every app, merged into issues.json', model: 'sonnet' },
@@ -154,6 +154,28 @@ function budgetOf(value) {
 
 // The budget comes from a "+2M" directive in the user's request, or, since such a directive can
 // fail to register, from the budget that the user names, which the session passes as args.
+/**
+ * The apps that `args` names in `apps`, in the order of ROUNDS, or every app when it names none;
+ * `{ unknown }` when it names an app that isn't one of them.
+ */
+function appsOf(value) {
+  const all = ROUNDS.flat()
+  const named = typeof value === 'object' && value !== null && Array.isArray(value.apps) ? value.apps : null
+  if (named === null) return all
+  const unknown = named.filter((app) => !all.includes(app))
+  if (unknown.length > 0) return { unknown }
+  return all.filter((app) => named.includes(app))
+}
+
+const apps = appsOf(args)
+if (!Array.isArray(apps)) {
+  log(`No such trial app: ${apps.unknown.join(', ')}. The apps are ${ROUNDS.flat().join(', ')}.`)
+  return { error: 'unknown trial app' }
+}
+// Two apps at a time, in the order of ROUNDS.
+const rounds = []
+for (let index = 0; index < apps.length; index += 2) rounds.push(apps.slice(index, index + 2))
+
 const total = budget.total ?? budgetOf(args)
 if (total === null) {
   log('A round of trials needs a token budget: pass the one the user names as args, such as "2M".')
@@ -164,7 +186,7 @@ log(`Budget: ${Math.round(total / 1000)}k output tokens, ${budget.total ? 'from 
 
 phase('Trials')
 const results = []
-for (const round of ROUNDS) {
+for (const round of rounds) {
   const needed = round.length * TRIAL_TOKENS + MERGE_TOKENS
   if (remaining() < needed) {
     log(

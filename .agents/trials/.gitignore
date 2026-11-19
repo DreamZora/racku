@@ -10,4 +10,5 @@ data/
 bun.lock
 *.log
 .env
+scratch/
 .claude/settings.local.json
