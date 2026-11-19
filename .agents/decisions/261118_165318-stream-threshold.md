@@ -132,7 +132,7 @@ Measured on 2026-11-18 on the local machine: Ubuntu 26.04.1 LTS, Linux 7.0.0-43-
   - The panel's calls take a signal of their own controller. The panel keeps the calls that wait for a head in two sets, and a timer of 100 ms, which runs only while calls wait, attaches the client's signal to those that were already waiting at its last tick.
   - The listener host no longer copies its counters into shared memory at the start and end of each request; its ticker of 100 ms already does, so `status()` lags by at most that.
   - `httpHandler` reads a response body without a timer when each read settles within four microtask turns, as a body in memory does. Only a read that is still pending then races a `setImmediate`, as before.
-  - The panel lists request headers with `forEach` instead of spreading them.
+  - [Panel responses no slower than the main-thread panel](261118_195832-faster-panel-responses.md#implementation) records the later changes to the panel's cost per request; the panel lists request headers by spreading them again.
 - **Benchmark.**
   - Measured on 2026-11-18 with the setup of the [panel decision's benchmark](261118_071513-http-panel-device.md#implementation): the same machine, 3 client processes of 64 keep-alive clients each, 3 s per scenario, and the median of 3 runs. The device behind the panel answered with `httpHandler` and its default `streamThreshold`, unless the table says otherwise. The main-thread panel ran at `f7e772c` and copied every body in full.
   - "Before" is the panel decision's benchmark, where it measured the scenario.

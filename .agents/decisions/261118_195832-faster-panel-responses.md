@@ -86,6 +86,42 @@ Measured on 2026-11-18 on the local machine: Ubuntu 26.04.1 LTS, Linux 7.0.0-43-
 - The README: `httpHandler`'s default, and the chunked encoding of response bodies of 14 KiB or more.
 - `src/std/http.ts` and `src/std/http-panel.ts`, with the tests in `test/http-panel.test.ts`.
 
+## Implementation
+
+- **Modules.**
+  - `src/std/http.ts`: `STREAM_THRESHOLD` of 16 MiB, and `MOVE_FROM`, which moves only bodies of 1 KiB or more.
+  - `src/std/http-panel.ts`: `ONE_CHUNK_FROM`, the stream of one chunk, and the same `MOVE_FROM` for request bodies.
+- **Changes that keep every stated behavior**, which the evidence's profile pointed to:
+  - `src/worker.ts`: the timeouts of calls run in one queue per timeout value, with one timer for the oldest call, in place of a timer per call; and a call listens to its signal as an `EventListenerObject`, with no closure per call.
+  - `src/listeners.ts`: the handlers that arrive in one turn of the event loop share one `setImmediate` and one promise before they run, and the `Host` check remembers the last header that passed.
+  - `src/std/http-panel.ts`:
+    - The controllers of calls that ended without being aborted, while nothing else listened to them, serve later calls, up to 1 024 of them.
+    - The bodies being read whole wait in one queue of deadlines with one timer, in place of a timer and a race per body.
+    - A request's records are one object, the route parameters go into the call without a copy, and the headers are listed by spreading them.
+    - A body sent whole is told by its declared length, without reading `request.body`, for which Bun would build a stream that `bytes()` doesn't use.
+    - Only a `GET` is checked for a WebSocket upgrade, as RFC 6455 allows no other method.
+- **Benchmark,** with the setup of [Evidence](#evidence): the old setup is the main-thread panel at `f7e772c`, which copied every body; the new one is this decision's panel device with its defaults. The device answered with `httpHandler`, from a buffer in memory for downloads. Each row gives the medians of the pairs and the median of their ratios.
+
+  | Scenario | Main-thread panel | Panel device | Ratio |
+  |---|---:|---:|---:|
+  | `GET`, a 2-byte response | 52 598 requests/s | 52 639 requests/s | 1.00 |
+  | `POST` of 1 KiB | 45 182 requests/s | 45 970 requests/s | 1.01 |
+  | `GET` of 4 KiB | 183 MiB/s | 185 MiB/s | 1.01 |
+  | `GET` of 16 KiB | 162 MiB/s | 552 MiB/s | 3.44 |
+  | `GET` of 64 KiB | 500 MiB/s | 1 177 MiB/s | 2.35 |
+  | `GET` of 256 KiB | 1 131 MiB/s | 1 767 MiB/s | 1.57 |
+  | `GET` of 1 MiB | 1 854 MiB/s | 2 326 MiB/s | 1.26 |
+  | `GET` of 4 MiB | 2 187 MiB/s | 2 484 MiB/s | 1.14 |
+  | `GET` of 16 MiB | 1 968 MiB/s | 2 483 MiB/s | 1.26 |
+  | `POST` of 64 KiB | 1 369 MiB/s | 1 706 MiB/s | 1.24 |
+  | `POST` of 256 KiB | 1 954 MiB/s | 2 582 MiB/s | 1.31 |
+  | `POST` of 1 MiB, streamed | 1 481 MiB/s | 1 812 MiB/s | 1.24 |
+
+  - The first three rows come from 8 pairs, after the last change to the panel's requests; the others from 4 pairs, before it, which only read request bodies faster.
+  - Single pairs of the first three rows ranged from 0.97 to 1.05: the panel device serves small requests at the main-thread panel's rate, within the machine's noise.
+  - A forwarding device that did only what a panel must, as [Evidence](#evidence) describes, served small `GET`s at 1.06 times the main-thread panel's rate. The rest of the panel's work, its limits, cancellation, WebSocket, and checks of hosts, costs about that.
+- **Tests:** in `test/http-panel.test.ts`, the cases of [Tests](#tests).
+
 ## Confirmation
 
 - On 2026-11-18 the user asked that the panel device be no slower than the main-thread panel.
