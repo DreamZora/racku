@@ -189,6 +189,7 @@ for (const round of ROUNDS) {
       results.push(result)
     }
   })
+  log(`Spent so far: ${Math.round(budget.spent() / 1000)}k of ${Math.round(total / 1000)}k output tokens.`)
 }
 
 phase('Merge')
