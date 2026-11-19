@@ -8,6 +8,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
+import { typecheck } from "./fixtures/typecheck.ts";
 
 /** The guides, in the order of their file names. */
 const GUIDES = await Promise.all(
@@ -123,3 +124,10 @@ test("the bench example of the guides tests the greeter as written", async () =>
   expect(stderr).toContain("1 pass");
   expect(existsSync(join(app.dir, ".rack", "bench"))).toBe(false);
 });
+
+// @doc docs/guides/running.md#running-a-rack-from-code
+test("the greeter app of the guides type-checks", async () => {
+  const sources = files();
+  sources.set("main.ts", program());
+  expect(await typecheck(sources)).toBe("");
+}, 60_000);

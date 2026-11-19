@@ -13,7 +13,7 @@ import { codeOf, errorOf, FIXTURES, Recorder, useRacks, waitFor } from "./fixtur
 const startRack = useRacks();
 
 describe("start and stop", () => {
-  // @doc README.md#concepts
+  // @doc docs/concepts.md#the-gravity-rule
   test("powers devices on from the bottom up and off from the top down", async () => {
     const { running, rec } = await startRack({
       slots: {

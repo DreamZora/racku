@@ -136,6 +136,11 @@ Each step is a change of its own.
   - `test/guides.test.ts`, which was `test/readme.test.ts`, runs the greeter app that the guides build across their documents.
   - Tests name the sections they confirm with `@doc`, in place of the `README.md:` that began their names.
   - "Other sockets" in `listeners.md` said that a device's own sockets close with its instance, which no test confirmed; a test in `test/listeners.test.ts` now does, with the fixture device `raw-socket`.
+- `docs/getting-started.md` builds a notes app outside the repository.
+  - `test/getting-started.test.ts` installs rack42u as the guide says, as a git dependency: from a repository that it fills with the files under test, by a `git+file:` URL and the commit, with a cache of its own. It runs the guide's `bun run start`, `bun run test`, and `bun run dev`, and compares the answers of its `curl` lines with the ones the guide shows.
+  - On 2026-11-19, on the local machine, the guide's `git+ssh://` URL installed rack42u from the private repository, over HTTPS with git's credentials, and a `git+https://github.com/` URL failed with 404, since Bun downloads such a URL from GitHub's API without credentials.
+- `test/fixtures/typecheck.ts` type-checks the app of the getting-started guide and the app of the guides, against the sources of rack42u.
+- `docs/concepts.md` holds the README's concepts, and the tests that confirmed them name its sections. `docs/design.md` gives the goals, the main choices, and the limits.
 
 ## Confirmation
 

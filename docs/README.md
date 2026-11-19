@@ -2,6 +2,15 @@
 
 This directory holds the documentation of rack42u, for builders of apps on it, people and agents alike. The [README](../README.md) introduces rack42u.
 
+## Start here
+
+- [Getting started](getting-started.md): an app of your own, outside this repository, from adding rack42u to changing a device while the rack runs.
+
+## Understand rack42u
+
+- [Concepts](concepts.md): how a rack works, from slots, devices, and connectors to the backplane, firmware, swaps, and faults.
+- [Design](design.md): why rack42u is built this way, what each choice costs, and the limits that remain.
+
 ## Guides
 
 Each guide covers one part of rack42u. Together they build one small app, a greeter, file by file: its connector in Connectors, its device in Devices, its manifest in Racks, its web device in The HTTP panel, the program that runs it in Running a rack, and its test in Testing a device. Read those six in that order; the others stand on their own.

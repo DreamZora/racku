@@ -45,28 +45,9 @@ A second example, [`examples/net-tool`](examples/net-tool), is a desktop app: a 
 
 The [guides](docs/README.md#guides) build a second small app, file by file, and the test suite extracts their files and runs them.
 
-## Concepts
-
-| Term | Meaning |
-|---|---|
-| Rack | One process. 42U by default; the size is configurable. |
-| Slot | A position in the rack, numbered from 1 at the bottom. |
-| Device | A module in one file that occupies one or more U. Each device runs in its own Worker. |
-| Connector | A named, versioned contract of RPC methods and events, such as `kv/v1`. |
-| Port | One connector on a device, addressed as `<device>.<port>`. |
-| Backplane | The only channel between devices. Devices never import each other. |
-| Link | A direct channel the backplane sets up from one device's need to another device's port. Calls and events between devices travel on links, Worker to Worker, without passing through the rack's main thread. |
-| Patch | An explicit connection, needed when several devices provide the same connector. |
-| Panel | A device that owns external connections, such as the standard [HTTP panel](docs/guides/http.md), and passes the work to other devices through the backplane. |
-| Listener | An HTTP server, WebSocket included, that a device opens with `ctx.serve()`, and that the rack hands over when the device swaps. |
-| Firmware | The hashed bundle a device file is built into; the hash is its version. |
-| Swap | The one process behind replace, hot reload, plug, and unplug. |
-
-The **gravity rule** holds the design together: a device may depend only on devices in lower slots. The rack powers devices on from the bottom up and off from the top down, so storage sits low and entry points sit high.
-
 ## Documentation
 
-The [documentation](docs/README.md) has a guide for each part of rack42u, from connectors and devices to updates, faults, and the HTTP panel, and a reference of the API, the `rack` command, the error codes, and the reports.
+[Concepts](docs/concepts.md) explains how a rack works, and [Getting started](docs/getting-started.md) builds an app of your own. The [documentation](docs/README.md) also has a guide for each part of rack42u, from connectors and devices to updates, faults, and the HTTP panel, and a reference of the API, the `rack` command, the error codes, and the reports.
 
 ## Not supported yet
 

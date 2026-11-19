@@ -55,7 +55,7 @@ const PUMP_RACK = {
 };
 
 describe("links", () => {
-  // @doc README.md#concepts
+  // @doc docs/concepts.md#the-backplane-and-links
   // Calls and events between devices travel on links, Worker to Worker.
   // @decision .agents/decisions/261116_024226-backplane-links.md#links
   test("calls between devices complete while the rack main thread is blocked", async () => {
