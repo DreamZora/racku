@@ -1,0 +1,13 @@
+# What the trial apps install and write as they run, as
+# ../decisions/261119_074252-trial-apps.md decides. Their specs, code, package.json, TRIAL.md, and
+# issues.json are tracked.
+node_modules/
+.rack/
+data/
+*.db
+*.db-shm
+*.db-wal
+bun.lock
+*.log
+.env
+.claude/settings.local.json

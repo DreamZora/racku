@@ -1,0 +1,26 @@
+{
+  "claudeMdExcludes": ["**/rack42u/CLAUDE.md", "**/rack42u/AGENTS.md"],
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Workflow",
+      "Skill",
+      "TaskStop",
+      "Monitor",
+      "Edit(/**)",
+      "Bash(bun *)",
+      "Bash(bunx *)",
+      "Bash(curl *)",
+      "Bash(cd *)",
+      "Bash(pwd)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(grep *)",
+      "Bash(find *)",
+      "Bash(mkdir *)"
+    ]
+  }
+}
