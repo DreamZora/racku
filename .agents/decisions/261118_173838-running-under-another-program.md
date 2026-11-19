@@ -103,6 +103,7 @@ Measured on 2026-11-18 on the local machine, Ubuntu 26.04.1 LTS, Linux 7.0.0-43-
 - `src/cli.ts`: `--stop-on-stdin-close` reads `Bun.stdin.stream()` and drops each chunk; when the stream ends, or a read fails, the rack logs `standard input closed` and stops as on `SIGTERM`. A close during a shutdown exits at once with code 1, and prints `rack: standard input closed, exiting without finishing the shutdown`.
 - `src/log.ts`: `formatLogJson()` and `jsonLogger()`, which `--log json` uses for every entry of `rack start` and `rack dev`, `control listening` and the entries of `rack dev`'s file watcher included.
 - The exit codes stayed as they were, as [Exit codes](#exit-codes) says. A shutdown whose hooks time out still ends, within the rack's timeouts, and exits with 0, since the rack's `stop()` doesn't fail for it; the row of [Failure modes](#failure-modes) that gives it code 1 doesn't hold, and changing that needs a decision of its own.
+- On Windows, `Bun.spawn` puts the children it doesn't detach in a job object that the system ends together with the program. A rack started that way stops at once when its program ends, without its shutdown, as CI run 44487270826 showed; the README tells such a program to start the rack with `detached: true`, and the test's program does so.
 - Tests: in `test/cli.test.ts`, with `test/fixtures/host-program.ts` as the program that runs a rack and is killed. The exit codes of a failed start and of a usage error had tests already; an unknown `--log` format is a usage error too.
 
 ## Confirmation
