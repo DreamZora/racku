@@ -75,12 +75,13 @@ const IMPORT_PAUSE = 10;
  * Imports a firmware bundle in the Worker that runs or describes its device.
  *
  * Bun 1.4.4 can report a bundle missing while it is on disk. Its module resolver keeps the
- * entries of each directory in one cache for the whole process, and when a lookup misses, it
- * clears the directory from the cache and looks once more. When the file was written after its
- * directory was cached, and other Workers resolve modules at the same time, the second lookup
- * can miss too, and another `import()` finds the file. A rack writes every bundle into a directory
- * that earlier Workers have cached, and starts several Workers together, so a bundle that Bun
- * reports missing while it is on disk is imported again, up to {@link IMPORT_ATTEMPTS} times in all.
+ * entries of each directory in one cache for the whole process. When a lookup of a file written
+ * after its directory was cached misses, Bun clears the directory from the cache and looks once
+ * more, but only if its own clear removed something. So when two Workers miss in one directory
+ * at the same time, the second clear removes nothing, and that Worker's miss is final; another
+ * `import()` finds the file. A rack writes every bundle into a directory that earlier Workers
+ * have cached, and starts several Workers together, so a bundle that Bun reports missing while it
+ * is on disk is imported again, up to {@link IMPORT_ATTEMPTS} times in all.
  *
  * @param url `file:` URL of the bundle.
  * @param load Imports a URL; `import()` unless a test replaces it.
