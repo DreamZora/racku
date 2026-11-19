@@ -22,6 +22,7 @@ async function crash(running: RackHandle, kind: "reject" | "throw" | "exit"): Pr
   await running.call("probe.probe", "crash", kind).catch(() => undefined);
 }
 
+// @doc docs/guides/faults.md#crashes
 describe("crash resets", () => {
   test.each(["reject", "throw", "exit"] as const)(
     "a crash by %s resets the device from the same firmware",

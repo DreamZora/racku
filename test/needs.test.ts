@@ -21,15 +21,16 @@ const B = slot("./devices/probe.ts", { name: "b" });
 const picker = (config: Record<string, unknown>) => slot("./devices/picker.ts", { config });
 const names = (running: RackHandle) => running.call("picker.picker", "names", undefined);
 
+// @doc docs/guides/devices.md#needs-from-configuration
 describe("needs from configuration", () => {
-  test("README.md: a device's needs can come from its configuration, and patched() wires each to its address", async () => {
+  test("a device's needs can come from its configuration, and patched() wires each to its address", async () => {
     const { running } = await startRack({
       slots: { 1: A, 2: B, 3: picker({ targets: ["b", "a"] }) },
     });
     expect(await names(running)).toEqual({ a: "a", b: "b" });
   });
 
-  test("README.md: needs from configuration without patched() are wired as any need", async () => {
+  test("needs from configuration without patched() are wired as any need", async () => {
     const plain = picker({ targets: ["x"], wire: false });
     const ambiguous = await errorOf(startRack({ slots: { 1: A, 2: B, 3: plain } }));
     expect(ambiguous.message).toContain("picker.x (test.probe/v1) is ambiguous: a.probe, b.probe");
@@ -37,7 +38,7 @@ describe("needs from configuration", () => {
     expect(await names(running)).toEqual({ x: "a" });
   });
 
-  test("README.md: a patch in the manifest wins over patched()", async () => {
+  test("a patch in the manifest wins over patched()", async () => {
     const { running } = await startRack({
       slots: { 1: A, 2: B, 3: picker({ targets: ["a"] }) },
       patch: [["picker.a", "b.probe"]],
@@ -45,7 +46,7 @@ describe("needs from configuration", () => {
     expect(await names(running)).toEqual({ a: "b" });
   });
 
-  test("README.md: a reload with new configuration wires the needs the device computes from it", async () => {
+  test("a reload with new configuration wires the needs the device computes from it", async () => {
     const placed = (targets: string[]) => ({ slots: { 1: A, 2: B, 3: picker({ targets }) } });
     const { running } = await startRack(placed(["a"]));
     expect(await names(running)).toEqual({ a: "a" });
@@ -54,7 +55,7 @@ describe("needs from configuration", () => {
     expect(await names(running)).toEqual({ a: "a", b: "b" });
   });
 
-  test("README.md: a needs function that throws, or returns something that isn't needs, fails with RACK_INVALID_CONFIG", async () => {
+  test("a needs function that throws, or returns something that isn't needs, fails with RACK_INVALID_CONFIG", async () => {
     const thrown = await errorOf(startRack({ slots: { 1: picker({ fail: true }) } }));
     expect(thrown.code).toBe("RACK_INVALID_CONFIG");
     expect(thrown.message).toContain("no needs today");
@@ -63,7 +64,7 @@ describe("needs from configuration", () => {
     expect(bad.message).toContain("needs.x");
   });
 
-  test("README.md: in a scanned rack, patched() pulls in the model its address names, unless a use entry for the need picks another", async () => {
+  test("in a scanned rack, patched() pulls in the model its address names, unless a use entry for the need picks another", async () => {
     const app = await tempApp(["connectors.ts", "devices/probe.ts", "devices/picker.ts"], FIXTURES);
     apps.push(app);
     const scanned = (use: Record<string, string>) =>

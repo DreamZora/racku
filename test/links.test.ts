@@ -55,9 +55,10 @@ const PUMP_RACK = {
 };
 
 describe("links", () => {
-  // README.md, "Concepts": calls and events between devices travel on links, Worker to Worker.
+  // @doc README.md#concepts
+  // Calls and events between devices travel on links, Worker to Worker.
   // @decision .agents/decisions/261116_024226-backplane-links.md#links
-  test("README.md: calls between devices complete while the rack main thread is blocked", async () => {
+  test("calls between devices complete while the rack main thread is blocked", async () => {
     const { running } = await startRack(PUMP_RACK);
     // Taken before the call: the main thread relays nothing from here until the loop ends, and
     // the device may start the moment the call goes out.
@@ -76,7 +77,7 @@ describe("links", () => {
   });
 
   // @decision .agents/decisions/261116_024226-backplane-links.md#events
-  test("README.md: events between devices arrive while the rack main thread is blocked", async () => {
+  test("events between devices arrive while the rack main thread is blocked", async () => {
     const { running } = await startRack(PUMP_RACK);
     // Taken before the call, as above.
     const blockedAt = Date.now();
@@ -95,9 +96,10 @@ describe("links", () => {
     expect(arrivals[0] as number).toBeLessThan(releasedAt);
   });
 
-  // README.md, "Hot swap and hot reload", step 4: held calls go to the new instance.
+  // @doc docs/guides/updates.md#the-swap-sequence
+  // Step 4: held calls go to the new instance.
   // @decision .agents/decisions/261116_024226-backplane-links.md#wiring-and-routing
-  test("README.md: calls between devices during a swap without state handover all succeed", async () => {
+  test("calls between devices during a swap without state handover all succeed", async () => {
     const { running } = await startRack(PUMP_RACK);
     const burst = running.call("pump.pump", "burst", { n: 3_000 });
     await Bun.sleep(5);
@@ -105,9 +107,10 @@ describe("links", () => {
     expect(await burst).toMatchObject({ startedAt: expect.any(Number) });
   });
 
-  // README.md, "Running a rack": `queued` counts calls waiting while the provider is swapped.
+  // @doc docs/reference/reports.md#metrics
+  // `queued` counts calls waiting while the provider is swapped.
   // @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
-  test("README.md: a held slot gets no call until the switch, and the queued calls then arrive in order", async () => {
+  test("a held slot gets no call until the switch, and the queued calls then arrive in order", async () => {
     const { running } = await startRack(PUMP_RACK);
     // A slow call keeps the old instance draining, so the hold lasts until it ends.
     const slow = running.call("counter.counter", "slowInc", 300);

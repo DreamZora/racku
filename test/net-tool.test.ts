@@ -111,6 +111,7 @@ describe("net on the bench", () => {
     expect(await net.call("net", "list", undefined)).toEqual([]);
   });
 
+  // @doc docs/guides/listeners.md#other-sockets
   test("a TCP server accepts the test's connection, whose bytes go both ways", async () => {
     const app = await netTool();
     await using net = await bench("./devices/net.ts", { baseDir: app.dir });
@@ -154,6 +155,7 @@ describe("net on the bench", () => {
     client.end();
   });
 
+  // @doc docs/guides/listeners.md#other-sockets
   test("UDP goes both ways, and a send needs an address and a datagram's size", async () => {
     const app = await netTool();
     await using net = await bench("./devices/net.ts", { baseDir: app.dir });

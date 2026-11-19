@@ -40,6 +40,7 @@ describe("slot", () => {
 });
 
 describe("rack", () => {
+  // @doc README.md#concepts
   test("defaults to 42U and orders slots from the bottom up", () => {
     const manifest = rack("shop", { slots: { 5: slot("./b.ts"), 1: slot("./a.ts") } });
     expect(manifest.size).toBe(42);

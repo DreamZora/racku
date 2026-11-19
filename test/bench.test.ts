@@ -51,7 +51,9 @@ function bytesStream(size: number): ReadableStream<Uint8Array> {
 }
 
 describe("the bench", () => {
-  test("README.md: a device runs against stubs, which validate and record its calls and emit to it", async () => {
+  // @doc docs/guides/testing.md#the-bench
+  // @doc docs/guides/testing.md#stubs
+  test("a device runs against stubs, which validate and record its calls and emit to it", async () => {
     const { store, kv } = memoryKv();
     const { blobs } = memoryBlobs();
     await using orders = await bench(ORDERS, {
@@ -109,7 +111,8 @@ describe("the bench", () => {
     ).toBe("RACK_MANIFEST");
   });
 
-  test("README.md: records keep the last 10 000 entries, and count the older ones they dropped", async () => {
+  // @doc docs/guides/testing.md#members-of-a-bench
+  test("records keep the last 10 000 entries, and count the older ones they dropped", async () => {
     const { kv } = memoryKv();
     await using orders = await bench(ORDERS, {
       baseDir: FIXTURES,
@@ -131,6 +134,7 @@ describe("the bench", () => {
     expect(orders.dropped).toEqual({ events: 0, logs: 0, faults: 0 });
   });
 
+  // @doc docs/guides/testing.md#the-bench
   test("a need without a stub, a stub of another connector, and a stub for no need fail with RACK_MANIFEST", async () => {
     const { kv } = memoryKv();
     const { blobs } = memoryBlobs();
@@ -165,7 +169,8 @@ describe("the bench", () => {
     expect(existsSync(BENCHES)).toBe(false);
   });
 
-  test("README.md: otherwise bench() fails as start() does, for a bad configuration or a failed hook", async () => {
+  // @doc docs/guides/testing.md#the-bench
+  test("otherwise bench() fails as start() does, for a bad configuration or a failed hook", async () => {
     const needs = { kv: memoryKv().kv, blobs: memoryBlobs().blobs };
     expect(await codeOf(bench(ORDERS, { baseDir: FIXTURES, config: {}, needs }))).toBe(
       "RACK_INVALID_CONFIG",
@@ -178,6 +183,7 @@ describe("the bench", () => {
     expect(existsSync(BENCHES)).toBe(false);
   });
 
+  // @doc docs/guides/testing.md#stubs
   test("the device gets a stub's errors, bad output, and silence as a rack would give them", async () => {
     let aborted: unknown;
     const kv = stub(Kv, {
@@ -231,6 +237,7 @@ describe("the bench", () => {
     expect(partial.calls).toHaveLength(1);
   });
 
+  // @doc docs/guides/testing.md#members-of-a-bench
   test("a hot swap carries the state, a restart doesn't, and a crash resets the device", async () => {
     await using orders = await bench(ORDERS, {
       baseDir: FIXTURES,
@@ -267,6 +274,7 @@ describe("the bench", () => {
     expect(await orders.call("orders", "count", undefined)).toBe(0);
   });
 
+  // @doc docs/guides/testing.md#members-of-a-bench
   test("a device's listener answers at the URL that status() shows", async () => {
     await using orders = await bench(ORDERS, {
       baseDir: FIXTURES,
@@ -279,6 +287,7 @@ describe("the bench", () => {
     expect(await fetch(url as string).then((response) => response.text())).toBe("0 orders");
   });
 
+  // @doc docs/guides/testing.md#stubs
   test("streams cross a stub read whole, up to 16 MiB", async () => {
     const { files, blobs } = memoryBlobs();
     await using orders = await bench(ORDERS, {
@@ -311,7 +320,8 @@ describe("the bench", () => {
     expect(await codeOf(orders.call("orders", "download", "big.bin"))).toBe("RACK_INVALID_OUTPUT");
   });
 
-  test("README.md: await using stops the rack and deletes the bench's files", async () => {
+  // @doc docs/guides/testing.md#members-of-a-bench
+  test("await using stops the rack and deletes the bench's files", async () => {
     let running: RackHandle | undefined;
     {
       await using orders = await bench(ORDERS, {

@@ -29,6 +29,7 @@ async function pair() {
 }
 
 describe("RPC", () => {
+  // @doc docs/reference/api.md#the-rack-handle
   test("rack.call reaches a port and returns its output", async () => {
     const { running } = await pair();
     expect(await running.call("probe.probe", "echo", { nested: [1, "two", null] })).toEqual({
@@ -36,11 +37,14 @@ describe("RPC", () => {
     });
   });
 
+  // @doc docs/guides/devices.md#the-context
   test("devices call each other through the wiring", async () => {
     const { relay } = await pair();
     expect(await relay("double", 21)).toEqual({ ok: true, value: 42 });
   });
 
+  // @doc docs/guides/devices.md#data-and-errors
+  // @doc docs/reference/errors.md#rackerror
   test("a RackError thrown by a device reaches the caller with its code and data", async () => {
     const { running, relay } = await pair();
     const input = { code: "ORDER_NOT_FOUND", message: "no order 7", data: { id: 7 } };
@@ -58,6 +62,8 @@ describe("RPC", () => {
     });
   });
 
+  // @doc docs/guides/devices.md#data-and-errors
+  // @doc docs/reference/errors.md#codes
   test("any other exception reaches the caller as RACK_DEVICE_FAULT with its message", async () => {
     const { running, relay } = await pair();
     const error = await errorOf(running.call("probe.probe", "fail", { message: "plain error" }));
@@ -68,6 +74,7 @@ describe("RPC", () => {
   });
 
   // @decision .agents/decisions/261116_024226-backplane-links.md#where-validation-happens
+  // @doc docs/guides/connectors.md#validation
   test("the provider validates input and output", async () => {
     const { running, relay } = await pair();
     expect(await codeOf(running.call("probe.probe", "double", "twenty"))).toBe(
@@ -77,11 +84,14 @@ describe("RPC", () => {
     expect((await relay("double", "twenty")).code).toBe("RACK_INVALID_INPUT");
   });
 
+  // @doc docs/guides/devices.md#data-and-errors
+  // @doc docs/reference/errors.md#codes
   test("input that cannot be cloned fails with RACK_INVALID_INPUT", async () => {
     const { running } = await pair();
     expect(await codeOf(running.call("probe.probe", "echo", () => 1))).toBe("RACK_INVALID_INPUT");
   });
 
+  // @doc docs/reference/errors.md#codes
   test("unknown addresses and members fail with RACK_NO_ROUTE", async () => {
     const { running } = await pair();
     for (const [address, method] of [
@@ -97,6 +107,8 @@ describe("RPC", () => {
     }
   });
 
+  // @doc docs/guides/devices.md#a-device-file
+  // @doc docs/reference/errors.md#codes
   test("the backplane times a call out and aborts the provider's call.signal", async () => {
     const { running, relay } = await pair();
     const result = await relay("wait", { ms: 5_000 }, { timeout: 50 });
@@ -119,6 +131,7 @@ describe("RPC", () => {
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
+  // @doc docs/reference/api.md#start
   test("the default timeout is the rack's callTimeout", async () => {
     const { running } = await startRack(
       { slots: { 1: slot("./devices/probe.ts") } },
@@ -127,6 +140,7 @@ describe("RPC", () => {
     expect(await codeOf(running.call("probe.probe", "wait", { ms: 5_000 }))).toBe("RACK_TIMEOUT");
   });
 
+  // @doc docs/reference/errors.md#codes
   test("a cancelled call fails at once with RACK_CANCELLED and aborts the provider", async () => {
     const { running, relay } = await pair();
     const startedAt = Date.now();
@@ -140,6 +154,7 @@ describe("RPC", () => {
     expect(aborts).toEqual(["RACK_CANCELLED"]);
   });
 
+  // @doc docs/reference/api.md#the-rack-handle
   test("callers outside the rack cancel with an AbortSignal", async () => {
     const { running } = await pair();
     const controller = new AbortController();
@@ -165,6 +180,7 @@ describe("RPC", () => {
 });
 
 describe("events", () => {
+  // @doc docs/guides/devices.md#the-context
   test("subscribers receive events in emission order", async () => {
     const { running } = await pair();
     for (const n of [1, 2, 3, 4, 5]) await running.call("probe.probe", "ping", { n });
@@ -175,6 +191,7 @@ describe("events", () => {
     expect(received).toEqual([1, 2, 3, 4, 5]);
   });
 
+  // @doc docs/guides/connectors.md#validation
   test("an invalid payload rejects the emit with RACK_INVALID_OUTPUT", async () => {
     const { running } = await pair();
     expect(await running.call("probe.probe", "emitBad", undefined)).toBe("RACK_INVALID_OUTPUT");

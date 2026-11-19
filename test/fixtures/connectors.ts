@@ -65,6 +65,11 @@ export const Relay = connector("test.relay/v1", {
   received: rpc(v.undefined(), v.array(v.number())),
 });
 
+/** The port of a TCP echo server that a device opens itself, with `Bun.listen`. */
+export const RawSocket = connector("test.raw-socket/v1", {
+  port: rpc(v.undefined(), v.number()),
+});
+
 /** A stateful counter whose count moves between instances through snapshot and restore. */
 export const Counter = connector("test.counter/v1", {
   inc: rpc(v.undefined(), v.number()),

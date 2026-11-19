@@ -137,7 +137,9 @@ async function endpointOf(
 
 describe.skipIf(WINDOWS)("the Unix socket", () => {
   // README.md, "Managing a running rack".
-  test("README.md: rack start opens a socket only its user can use, and rack ctl operates the rack through it", async () => {
+  // @doc docs/guides/managing.md#rack-ctl
+  // @doc docs/guides/managing.md#who-can-connect
+  test("rack start opens a socket only its user can use, and rack ctl operates the rack through it", async () => {
     const created = await app();
     const rack = run(["start"], created.dir);
     await rack.waitFor(/control listening/);
@@ -166,7 +168,8 @@ describe.skipIf(WINDOWS)("the Unix socket", () => {
     expect(existsSync(paths.socket)).toBe(false);
   });
 
-  test("README.md: a stale socket is replaced, and a second rack refuses to start while one answers", async () => {
+  // @doc docs/guides/managing.md#who-can-connect
+  test("a stale socket is replaced, and a second rack refuses to start while one answers", async () => {
     const created = await app();
     const spec = { slots: { 1: slot("./devices/counter.ts") } };
     const paths = controlPaths(created.dir);
@@ -191,7 +194,8 @@ describe.skipIf(WINDOWS)("the Unix socket", () => {
 
   // README.md, "Managing a running rack". macOS's temporary directories are such paths: /var is a
   // symlink to /private/var.
-  test("README.md: rack ctl finds the rack when the two reach its base directory by different paths, such as a symlink", async () => {
+  // @doc docs/guides/managing.md#rack-ctl
+  test("rack ctl finds the rack when the two reach its base directory by different paths, such as a symlink", async () => {
     const created = await app();
     const link = `${created.dir}-link`;
     await symlink(created.dir, link);
@@ -211,8 +215,9 @@ describe.skipIf(WINDOWS)("the Unix socket", () => {
   });
 });
 
+// @doc docs/guides/managing.md#who-can-connect
 describe("the TCP endpoint", () => {
-  test("README.md: the TCP endpoint takes requests only with the token, and refuses requests a web page sends", async () => {
+  test("the TCP endpoint takes requests only with the token, and refuses requests a web page sends", async () => {
     const created = await app();
     const { running } = await startRack(
       { slots: { 1: slot("./devices/counter.ts") } },
@@ -253,7 +258,7 @@ describe("the TCP endpoint", () => {
     expect(existsSync(paths.file)).toBe(false);
   });
 
-  test("README.md: RACK_CONTROL_TOKEN sets the token, and rack ctl reaches a rack by --url and --token", async () => {
+  test("RACK_CONTROL_TOKEN sets the token, and rack ctl reaches a rack by --url and --token", async () => {
     const created = await app();
     const rack = run(["start", "--control-port", "0"], created.dir, {
       RACK_CONTROL_TOKEN: "shared-secret",
@@ -270,15 +275,16 @@ describe("the TCP endpoint", () => {
   });
 });
 
+// @doc docs/guides/managing.md#who-can-connect
 describe("transports by platform", () => {
-  test("README.md: Linux and macOS default to the Unix socket, and Windows and --control-port to TCP", () => {
+  test("Linux and macOS default to the Unix socket, and Windows and --control-port to TCP", () => {
     expect(controlTransport(undefined, "linux")).toBe("unix");
     expect(controlTransport(undefined, "darwin")).toBe("unix");
     expect(controlTransport(undefined, "win32")).toBe("tcp");
     expect(controlTransport(0, "linux")).toBe("tcp");
   });
 
-  test("README.md: the control file lives in the user's own state directory, never in the app", () => {
+  test("the control file lives in the user's own state directory, never in the app", () => {
     const saved = { local: process.env.LOCALAPPDATA, runtime: process.env.XDG_RUNTIME_DIR };
     try {
       process.env.LOCALAPPDATA = "C:\\Users\\ada\\AppData\\Local";
@@ -297,8 +303,9 @@ describe("transports by platform", () => {
   });
 });
 
+// @doc docs/guides/managing.md#the-protocol
 describe("the protocol", () => {
-  test("README.md: operations from the endpoint and from code run one at a time, in call order", async () => {
+  test("operations from the endpoint and from code run one at a time, in call order", async () => {
     const created = await app();
     const { running } = await startRack(
       {
@@ -316,7 +323,7 @@ describe("the protocol", () => {
     expect(running.history().map((record) => record.cause)).toEqual(["restart", "swap"]);
   });
 
-  test("README.md: plug takes its slot spec as { source, name, config }", async () => {
+  test("plug takes its slot spec as { source, name, config }", async () => {
     const created = await app();
     const { running } = await startRack(
       { slots: { 1: slot("./devices/counter.ts") } },
@@ -328,6 +335,7 @@ describe("the protocol", () => {
     expect(running.status().map((s) => s.name)).toEqual(["counter", "second"]);
   });
 
+  // @doc docs/guides/managing.md#rack-ctl
   test("rack ctl reports when no rack runs for the directory", async () => {
     const created = await app();
     const ctl = run(["ctl", "status"], created.dir);
@@ -338,7 +346,9 @@ describe("the protocol", () => {
 
 describe.skipIf(!WINDOWS)("Windows defaults", () => {
   // README.md, "Managing a running rack". Runs only in CI's Windows job.
-  test("README.md: on Windows, rack start listens on loopback TCP, writes its control file under %LOCALAPPDATA%, and rack ctl reaches it", async () => {
+  // @doc docs/guides/running.md#windows
+  // @doc docs/guides/managing.md#who-can-connect
+  test("on Windows, rack start listens on loopback TCP, writes its control file under %LOCALAPPDATA%, and rack ctl reaches it", async () => {
     const saved = process.env.LOCALAPPDATA;
     const local = join(CONTROL_DIR, "LocalAppData");
     process.env.LOCALAPPDATA = local;

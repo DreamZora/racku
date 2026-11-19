@@ -13,6 +13,7 @@ import { codeOf, errorOf, FIXTURES, Recorder, useRacks, waitFor } from "./fixtur
 const startRack = useRacks();
 
 describe("start and stop", () => {
+  // @doc README.md#concepts
   test("powers devices on from the bottom up and off from the top down", async () => {
     const { running, rec } = await startRack({
       slots: {
@@ -36,6 +37,7 @@ describe("start and stop", () => {
   });
 
   // @decision .agents/decisions/261115_222025-p0-api-details.md#rack-handle
+  // @doc docs/reference/api.md#the-rack-handle
   test("status reports each device by slot", async () => {
     const { running } = await startRack({
       slots: { 5: slot("./devices/tall.ts"), 1: slot("./devices/probe.ts", { name: "p" }) },
@@ -54,6 +56,7 @@ describe("start and stop", () => {
   });
 
   // @decision .agents/decisions/261115_222025-p0-api-details.md#rack-handle
+  // @doc docs/reference/api.md#the-rack-handle
   test("after stop, calls and management operations fail and status is empty", async () => {
     const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
     await running.stop();
@@ -64,6 +67,8 @@ describe("start and stop", () => {
     expect(await codeOf(running.reload())).toBe("RACK_SWAP_REJECTED");
   });
 
+  // @doc docs/reference/api.md#start
+  // @doc docs/reference/errors.md#codes
   test("a failing hook rejects start and powers off the devices already on", async () => {
     const rec = new Recorder();
     const failed = start(
@@ -90,6 +95,7 @@ describe("start and stop", () => {
     ]);
   });
 
+  // @doc docs/reference/api.md#start
   test("a hook that does not finish fails after hookTimeout", async () => {
     const manifest = rack("test", {
       slots: { 1: slot("./devices/lifecycle.ts", { config: { hangAt: "activate" } }) },
@@ -101,6 +107,8 @@ describe("start and stop", () => {
     expect(error.message).toContain("activate timed out after 200 ms");
   });
 
+  // @doc docs/guides/devices.md#the-context
+  // @doc docs/reference/errors.md#codes
   test("invalid configuration fails with RACK_INVALID_CONFIG", async () => {
     const manifest = rack("test", {
       slots: { 1: slot("./devices/lifecycle.ts", { config: { failAt: "nowhere" } }) },
@@ -136,6 +144,7 @@ describe("start and stop", () => {
   });
 });
 
+// @doc docs/guides/racks.md#placing-devices-by-hand
 describe("assembly", () => {
   async function assemblyError(spec: Parameters<typeof rack>[1]): Promise<string> {
     const error = await errorOf(start(rack("test", spec), { baseDir: FIXTURES, logger: () => {} }));
@@ -212,6 +221,7 @@ describe("assembly", () => {
 
   // A route is a need that patched() wires, so it fails as such a patch does.
   // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+  // @doc docs/guides/http.md#routes
   test("rejects a panel route to a port that is not http/v2", async () => {
     const message = await assemblyError({
       slots: {
@@ -226,6 +236,7 @@ describe("assembly", () => {
 });
 
 describe("device context", () => {
+  // @doc docs/guides/devices.md#the-context
   test("exposes the slot, firmware, base directory, and validated config", async () => {
     const { running } = await startRack({
       slots: { 4: slot("./devices/probe.ts", { name: "p", config: { label: "x" } }) },
@@ -236,6 +247,7 @@ describe("device context", () => {
   });
 
   // @decision .agents/decisions/261112_043034-device-api.md#device-context
+  // @doc docs/guides/devices.md#the-environment
   test("each Worker receives a copy of the environment at its creation", async () => {
     process.env.RACK42U_TEST_ENV = "copied";
     try {
@@ -249,6 +261,7 @@ describe("device context", () => {
   });
 
   // @decision .agents/decisions/261112_035943-hot-swap.md#the-main-thread-never-loads-device-code
+  // @doc docs/guides/racks.md#placing-devices-by-hand
   test("the rack main thread never evaluates device code", async () => {
     const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
     expect(await running.call("probe.probe", "echo", "hi")).toBe("hi");
@@ -258,6 +271,8 @@ describe("device context", () => {
   });
 
   // @decision .agents/decisions/261112_035943-hot-swap.md#lifecycle
+  // @doc docs/guides/devices.md#hooks
+  // @doc docs/guides/devices.md#background-work
   test("background tasks run after activate and stop before the deactivate hook", async () => {
     const { running, rec } = await startRack({
       slots: {
@@ -276,6 +291,7 @@ describe("device context", () => {
     expect(rec.logs.slice(deactivate).some((e) => e.message === "tick")).toBe(false);
   });
 
+  // @doc docs/guides/devices.md#background-work
   test("errors thrown by scope timers are logged and do not crash the device", async () => {
     const { running, rec } = await startRack({
       slots: { 1: slot("./devices/lifecycle.ts", { config: { tickMs: 5, tickThrows: true } }) },
@@ -285,6 +301,7 @@ describe("device context", () => {
     expect(running.status()[0]?.crashes).toBe(0);
   });
 
+  // @doc docs/guides/devices.md#background-work
   test("scope.after runs once, and the function it returns cancels the timer", async () => {
     const { rec } = await startRack({
       slots: { 1: slot("./devices/lifecycle.ts", { config: { afterMs: 10 } }) },
@@ -296,6 +313,7 @@ describe("device context", () => {
   });
 
   // @decision .agents/decisions/261115_222025-p0-api-details.md#device-hooks
+  // @doc docs/guides/devices.md#background-work
   test("scope.signal aborts before the deactivate hook runs", async () => {
     const { running, rec } = await startRack({ slots: { 1: slot("./devices/lifecycle.ts") } });
     await running.stop();
@@ -307,6 +325,7 @@ describe("device context", () => {
   });
 
   // @decision .agents/decisions/261115_222025-p0-api-details.md#device-hooks
+  // @doc docs/guides/devices.md#the-context
   test("ctx.signal aborts after the powerOff hook", async () => {
     const { running, rec } = await startRack({ slots: { 1: slot("./devices/lifecycle.ts") } });
     await running.stop();
@@ -316,6 +335,7 @@ describe("device context", () => {
     expect(messages.at(-1)).toBe("signal aborted");
   });
 
+  // @doc docs/guides/devices.md#the-context
   test("device logs reach the logger and subscribers with the device name", async () => {
     const { running, rec } = await startRack({ slots: { 1: slot("./devices/lifecycle.ts") } });
     const entry = rec.logs.find((e) => e.message === "hook");

@@ -159,8 +159,8 @@ function codeOf(call: Promise<unknown>): Promise<string> {
 }
 
 describe("a hung instance", () => {
-  // README.md, "Hot swaps, cold swaps, and restarts".
-  test("README.md: a hot swap of a device hung in JavaScript fails, and the rack ends the old instance and resets the device from its old firmware", async () => {
+  // @doc docs/guides/updates.md#the-swap-sequence
+  test("a hot swap of a device hung in JavaScript fails, and the rack ends the old instance and resets the device from its old firmware", async () => {
     const created = await app();
     const { running } = await startRack(RACK, options(created));
     const spin = codeOf(running.call("jam.jam", "spin", undefined));
@@ -184,7 +184,7 @@ describe("a hung instance", () => {
     });
   }, 15_000);
 
-  test("README.md: a hot swap whose deactivate fails activates the old instance again, and its watchdogs watch it again", async () => {
+  test("a hot swap whose deactivate fails activates the old instance again, and its watchdogs watch it again", async () => {
     const created = await app({ deactivate: `throw new Error("deactivate failed on purpose");` });
     const { running } = await startRack(RACK, options(created, { watchdog: 1_000 }));
     await created.write("devices/jam.ts", jam(created, { version: "v2" }));
@@ -199,8 +199,8 @@ describe("a hung instance", () => {
     expect(jamStatus(running).crashes).toBe(1);
   }, 15_000);
 
-  // README.md, "Stuck threads".
-  test("README.md: a stop that a device doesn't answer within hookTimeout gets no further hooks, and its calls fail with RACK_DEVICE_FAULT", async () => {
+  // @doc docs/guides/faults.md#stuck-threads
+  test("a stop that a device doesn't answer within hookTimeout gets no further hooks, and its calls fail with RACK_DEVICE_FAULT", async () => {
     const created = await app({ swap: "cold" });
     const { running } = await startRack(RACK, options(created, { drainTimeout: 2_000 }));
     const spin = codeOf(running.call("jam.jam", "spin", undefined));
@@ -218,8 +218,9 @@ describe("a hung instance", () => {
 });
 
 describe("a thread stuck in native code", () => {
-  // README.md, "Stuck threads".
-  test("README.md: a cold restart starts the new instance only once the old instance's thread has stopped", async () => {
+  // @doc docs/guides/faults.md#stuck-threads
+  // @doc docs/guides/updates.md#hot-swaps-cold-swaps-and-restarts
+  test("a cold restart starts the new instance only once the old instance's thread has stopped", async () => {
     const created = await app({ swap: "cold" });
     const pipe = await pipeIn(created);
     const { running, rec } = await startRack(RACK, options(created));
@@ -242,7 +243,7 @@ describe("a thread stuck in native code", () => {
     expect(jamStatus(running)).toMatchObject({ state: "online", stuck: [] });
   }, 15_000);
 
-  test("README.md: a cold restart whose old thread stays stuck fails, faults the slot, and nothing of the device starts until the thread stops", async () => {
+  test("a cold restart whose old thread stays stuck fails, faults the slot, and nothing of the device starts until the thread stops", async () => {
     const created = await app({ swap: "cold" });
     const pipe = await pipeIn(created);
     const { running, rec } = await startRack(RACK, options(created));
@@ -286,7 +287,7 @@ describe("a thread stuck in native code", () => {
     expect(await running.call("jam.jam", "inc", undefined)).toBe(1);
   }, 15_000);
 
-  test("README.md: a hot swap of a device stuck in native code faults the slot while the thread is stuck, and a swap brings it back after", async () => {
+  test("a hot swap of a device stuck in native code faults the slot while the thread is stuck, and a swap brings it back after", async () => {
     const created = await app();
     const pipe = await pipeIn(created);
     const { running } = await startRack(RACK, options(created));
@@ -313,7 +314,7 @@ describe("a thread stuck in native code", () => {
     expect(await running.call("jam.jam", "version", undefined)).toBe("v2");
   }, 15_000);
 
-  test("README.md: a hot swap whose new instance gets stuck keeps the old one serving, and the next swap fails until the thread stops", async () => {
+  test("a hot swap whose new instance gets stuck keeps the old one serving, and the next swap fails until the thread stops", async () => {
     const created = await app();
     const pipe = await pipeIn(created);
     const { running } = await startRack(RACK, options(created));
@@ -342,7 +343,7 @@ describe("a thread stuck in native code", () => {
     expect(await running.call("jam.jam", "version", undefined)).toBe("v3");
   }, 15_000);
 
-  test("README.md: unplugging a device whose thread is stuck fails with RACK_DEVICE_FAULT and keeps it in the rack until the thread stops", async () => {
+  test("unplugging a device whose thread is stuck fails with RACK_DEVICE_FAULT and keeps it in the rack until the thread stops", async () => {
     const created = await app();
     const pipe = await pipeIn(created);
     const { running } = await startRack(RACK, options(created));
@@ -359,7 +360,7 @@ describe("a thread stuck in native code", () => {
     expect(running.status()).toEqual([]);
   }, 15_000);
 
-  test("README.md: a slot that a watchdog bite left faulted restarts only once the stuck thread has stopped", async () => {
+  test("a slot that a watchdog bite left faulted restarts only once the stuck thread has stopped", async () => {
     const created = await app();
     const pipe = await pipeIn(created);
     const { running } = await startRack(RACK, options(created, { watchdog: 1_000 }));
@@ -426,7 +427,7 @@ describe("a thread stuck in native code", () => {
     expect((await powerOns(created)).map((run) => run.version)).toEqual(["v1", "v1", "v1", "v1"]);
   }, 25_000);
 
-  test("README.md: stop() waits for a stuck thread for one hookTimeout, and logs it", async () => {
+  test("stop() waits for a stuck thread for one hookTimeout, and logs it", async () => {
     const created = await app();
     const pipe = await pipeIn(created);
     const { running, rec } = await startRack(RACK, options(created));
@@ -443,7 +444,7 @@ describe("a thread stuck in native code", () => {
     );
   }, 15_000);
 
-  test("README.md: firmware whose loading gets stuck isn't loaded again until the thread stops", async () => {
+  test("firmware whose loading gets stuck isn't loaded again until the thread stops", async () => {
     const created = await app();
     const pipe = await pipeIn(created);
     const { running, rec } = await startRack(RACK, options(created));

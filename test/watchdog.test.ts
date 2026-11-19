@@ -129,9 +129,10 @@ async function online(running: RackHandle): Promise<void> {
   await waitFor(() => probeStatus(running).state === "online", 10_000);
 }
 
+// @doc docs/guides/faults.md#hangs-and-watchdogs
 describe("the event-loop watchdog", () => {
   // README.md, "Hangs and watchdogs".
-  test("README.md: a device whose event loop stays blocked is reset, and its calls in flight fail with RACK_DEVICE_FAULT", async () => {
+  test("a device whose event loop stays blocked is reset, and its calls in flight fail with RACK_DEVICE_FAULT", async () => {
     const created = await app(probe());
     const { running, rec } = await startRack(RACK, { baseDir: created.dir, watchdog: 1_000 });
     await running.call("probe.probe", "inc", undefined);
@@ -165,7 +166,7 @@ describe("the event-loop watchdog", () => {
     );
   });
 
-  test("README.md: an endless chain of microtasks starves the event loop, and the watchdog resets the device", async () => {
+  test("an endless chain of microtasks starves the event loop, and the watchdog resets the device", async () => {
     const created = await app(probe());
     const { running } = await startRack(RACK, { baseDir: created.dir, watchdog: 1_000 });
     await running.call("probe.probe", "hang", "microtask").catch(() => undefined);
@@ -175,9 +176,10 @@ describe("the event-loop watchdog", () => {
   });
 });
 
+// @doc docs/guides/faults.md#hangs-and-watchdogs
 describe("device watchdogs", () => {
   // README.md, "Hangs and watchdogs".
-  test("README.md: a work loop that stops feeding its watchdog gets the device reset, with the watchdog named in the error", async () => {
+  test("a work loop that stops feeding its watchdog gets the device reset, with the watchdog named in the error", async () => {
     const created = await app(probe({ activate: POLLER }));
     const { running } = await startRack(RACK, { baseDir: created.dir, watchdog: 1_000 });
     await running.call("probe.probe", "inc", undefined);
@@ -198,7 +200,7 @@ describe("device watchdogs", () => {
     expect(probeStatus(running)).toMatchObject({ state: "online", crashes: 1 });
   }, 15_000);
 
-  test("README.md: scope.watchdog takes at least 1 000 ms, arms at most 16, and numbers the unnamed ones", async () => {
+  test("scope.watchdog takes at least 1 000 ms, arms at most 16, and numbers the unnamed ones", async () => {
     const activate = `    for (const ms of [999, Number.NaN]) {
       try {
         scope.watchdog(ms);
@@ -232,7 +234,7 @@ describe("device watchdogs", () => {
     expect(names).toHaveLength(17);
   });
 
-  test("README.md: cancel() disarms a watchdog", async () => {
+  test("cancel() disarms a watchdog", async () => {
     const activate = `    scope.watchdog(1_000, "job").cancel();`;
     const created = await app(probe({ activate }));
     const { running } = await startRack(RACK, { baseDir: created.dir });
@@ -241,7 +243,7 @@ describe("device watchdogs", () => {
     expect(probeStatus(running).watchdogs.map((watchdog) => watchdog.name)).toEqual(["event loop"]);
   });
 
-  test("README.md: watchdogs disarm when deactivate starts, so a slow deactivate during a swap doesn't trip them", async () => {
+  test("watchdogs disarm when deactivate starts, so a slow deactivate during a swap doesn't trip them", async () => {
     // A deactivate that blocks the event loop longer than the watchdog's timeout: hookTimeout
     // bounds it, not the watchdog.
     const deactivate =
@@ -256,9 +258,11 @@ describe("device watchdogs", () => {
   });
 });
 
+// @doc docs/guides/faults.md#hangs-and-watchdogs
 describe("biting", () => {
   // README.md, "Hangs and watchdogs".
-  test("README.md: a device that hangs on probation falls back to its known-good firmware", async () => {
+  // @doc docs/guides/updates.md#fallback
+  test("a device that hangs on probation falls back to its known-good firmware", async () => {
     const created = await app(probe());
     const { running } = await startRack(RACK, { baseDir: created.dir, watchdog: 1_000 });
     const good = probeStatus(running).firmware;
@@ -283,7 +287,7 @@ describe("biting", () => {
     expect(await running.call("probe.probe", "inc", undefined)).toBe(1);
   });
 
-  test("README.md: a device that hangs again after every reset ends up faulted", async () => {
+  test("a device that hangs again after every reset ends up faulted", async () => {
     const hangs = "    scope.after(50, () => {\n      for (;;) {}\n    });";
     const created = await app(probe({ activate: hangs }));
     const { running, rec } = await startRack(RACK, { baseDir: created.dir, watchdog: 1_000 });
@@ -298,7 +302,7 @@ describe("biting", () => {
     expect(probeStatus(running).crashes).toBe(4);
   }, 20_000);
 
-  test("README.md: a Worker stuck in native code faults its slot once hookTimeout passes, and a swap brings the device back", async () => {
+  test("a Worker stuck in native code faults its slot once hookTimeout passes, and a swap brings the device back", async () => {
     const created = await app(probe());
     const pipe = await pipeIn(created);
     const { running, rec } = await startRack(RACK, {
@@ -343,7 +347,8 @@ describe("biting", () => {
     await pipe.release();
   }, 15_000);
 
-  test("README.md: the window of the crash limit is 60 s, or four times the longest watchdog timeout", () => {
+  // @doc docs/guides/faults.md#crashes
+  test("the window of the crash limit is 60 s, or four times the longest watchdog timeout", () => {
     expect([crashWindow(0), crashWindow(10_000), crashWindow(15_000)]).toEqual([
       60_000, 60_000, 60_000,
     ]);
@@ -351,9 +356,10 @@ describe("biting", () => {
   });
 });
 
+// @doc docs/guides/faults.md#hangs-and-watchdogs
 describe("configuration and observation", () => {
   // README.md, "Hangs and watchdogs".
-  test("README.md: status() lists each device's watchdogs, and metrics() its event-loop delay", async () => {
+  test("status() lists each device's watchdogs, and metrics() its event-loop delay", async () => {
     const activate = `    const dog = scope.watchdog(5_000, "poller");
     scope.every(100, () => dog.feed());`;
     const created = await app(probe({ activate }));
@@ -375,7 +381,7 @@ describe("configuration and observation", () => {
     expect(entry?.loop.delayMs).toBeGreaterThanOrEqual(0);
   });
 
-  test("README.md: watchdog: 0 turns off every watchdog, and a hung device then holds its calls until they time out", async () => {
+  test("watchdog: 0 turns off every watchdog, and a hung device then holds its calls until they time out", async () => {
     const activate = `    scope.watchdog(1_000, "never fed");`;
     const created = await app(probe({ activate }));
     // Stopping waits for the hung device's hooks and calls: keep those waits short.
@@ -390,7 +396,8 @@ describe("configuration and observation", () => {
     expect(probeStatus(running)).toMatchObject({ state: "online", crashes: 0, watchdogs: [] });
   });
 
-  test("README.md: the start option watchdog is 0 or at least 1 000 ms", async () => {
+  // @doc docs/reference/api.md#start
+  test("the start option watchdog is 0 or at least 1 000 ms", async () => {
     const created = await app(probe());
     const error = await errorOf(startRack(RACK, { baseDir: created.dir, watchdog: 500 }));
     expect([error.code, error.message]).toEqual([
@@ -399,7 +406,7 @@ describe("configuration and observation", () => {
     ]);
   });
 
-  test("README.md: rack start --no-watchdog turns off every watchdog", async () => {
+  test("rack start --no-watchdog turns off every watchdog", async () => {
     const created = await app(probe());
     await created.write(
       "rack.ts",

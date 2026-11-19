@@ -144,9 +144,10 @@ function poweredOn(running: RackHandle, device: string): SlotStatus[] {
   return seen;
 }
 
+// @doc docs/guides/updates.md#fallback
 describe("passive fallback", () => {
   // README.md, "Update safety".
-  test("README.md: a new instance that crashes on probation falls back to the known-good firmware", async () => {
+  test("a new instance that crashes on probation falls back to the known-good firmware", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir });
     const v1 = counterStatus(running)?.firmware;
@@ -189,7 +190,7 @@ describe("passive fallback", () => {
     });
   });
 
-  test("README.md: after probation, the new firmware is known-good, and a crash resets it as usual", async () => {
+  test("after probation, the new firmware is known-good, and a crash resets it as usual", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir, probation: 100 });
     await created.write("devices/counter.ts", counter("v2"));
@@ -204,7 +205,7 @@ describe("passive fallback", () => {
     expect(counterStatus(running)?.firmware).toBe(v2);
   });
 
-  test("README.md: probation: 0 turns fallback off", async () => {
+  test("probation: 0 turns fallback off", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir, probation: 0 });
     await created.write("devices/counter.ts", counter("v2"));
@@ -218,7 +219,7 @@ describe("passive fallback", () => {
     expect(counterStatus(running)?.firmware).toBe(v2);
   });
 
-  test("README.md: a group replaced together falls back together", async () => {
+  test("a group replaced together falls back together", async () => {
     const created = await app({ "devices/store.ts": STORE, "devices/client.ts": CLIENT });
     const { running } = await startRack(
       { slots: { 1: slot("./devices/store.ts"), 2: slot("./devices/client.ts") } },
@@ -261,8 +262,9 @@ describe("passive fallback", () => {
   });
 });
 
+// @doc docs/guides/updates.md#rollback
 describe("active rollback", () => {
-  test("README.md: rollback goes back to the firmware before the current one, keeping the state", async () => {
+  test("rollback goes back to the firmware before the current one, keeping the state", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir });
     const v1 = counterStatus(running)?.firmware;
@@ -286,7 +288,7 @@ describe("active rollback", () => {
     expect(counterStatus(running)?.probationUntil).toBeUndefined();
   });
 
-  test("README.md: rollback with to goes back to any firmware the history keeps", async () => {
+  test("rollback with to goes back to any firmware the history keeps", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir });
     const v1 = counterStatus(running)?.firmware as string;
@@ -303,7 +305,7 @@ describe("active rollback", () => {
     ]);
   });
 
-  test("README.md: rolling back a device of a group replacement takes the whole group back", async () => {
+  test("rolling back a device of a group replacement takes the whole group back", async () => {
     const created = await app({ "devices/store.ts": STORE, "devices/client.ts": CLIENT });
     const { running } = await startRack(
       { slots: { 1: slot("./devices/store.ts"), 2: slot("./devices/client.ts") } },
@@ -323,7 +325,7 @@ describe("active rollback", () => {
     );
   });
 
-  test("README.md: a rollback to firmware with other needs than the running plan is refused", async () => {
+  test("a rollback to firmware with other needs than the running plan is refused", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir });
     await created.write("devices/counter.ts", counter("v2", { needsBase: true }));
@@ -336,8 +338,9 @@ describe("active rollback", () => {
   });
 });
 
+// @doc docs/guides/updates.md#history
 describe("update history", () => {
-  test("README.md: history lists every update newest first, for the rack or one device, within historyLimit", async () => {
+  test("history lists every update newest first, for the rack or one device, within historyLimit", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir, historyLimit: 3 });
     for (const version of ["v2", "v3", "v4"]) {
@@ -358,7 +361,7 @@ describe("update history", () => {
     expect(running.history("base")).toHaveLength(1);
   });
 
-  test("README.md: the rack deletes the firmware bundles it built once nothing needs them", async () => {
+  test("the rack deletes the firmware bundles it built once nothing needs them", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const firmwareDir = join(created.dir, ".rack", "firmware");
     const { running } = await startRack(COUNTER_RACK, {

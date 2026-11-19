@@ -17,9 +17,10 @@ const BYTES_RACK = {
 
 const MB = 1 << 20;
 
+// @doc docs/guides/data.md#moving-buffers
 describe("transfer", () => {
   // README.md, "Binary data": a call moves the buffers listed in `transfer` and copies the rest.
-  test("README.md: a call between devices moves the buffers listed in transfer, and copies by default", async () => {
+  test("a call between devices moves the buffers listed in transfer, and copies by default", async () => {
     const { running } = await startRack(BYTES_RACK);
     const send = (size: number, move: boolean) =>
       running.call("bytes-client.client", "send", { size, move });
@@ -27,7 +28,7 @@ describe("transfer", () => {
     expect(await send(1024, false)).toEqual({ length: 1024, sum: 1024, detachedAtOnce: false });
   });
 
-  test("README.md: call.transfer moves a result to the caller, and results are copied by default", async () => {
+  test("call.transfer moves a result to the caller, and results are copied by default", async () => {
     const { running } = await startRack(BYTES_RACK);
     const fetch = (size: number, move: boolean) =>
       running.call("bytes-client.client", "fetch", { size, move });
@@ -43,7 +44,7 @@ describe("transfer", () => {
     });
   });
 
-  test("README.md: a call takes its buffers whatever its outcome, unless the transfer list is invalid", async () => {
+  test("a call takes its buffers whatever its outcome, unless the transfer list is invalid", async () => {
     const { running } = await startRack(BYTES_RACK);
     const fail = (how: string) => running.call("bytes-client.client", "fail", how);
     expect(await fail("cancelled")).toEqual({ code: "RACK_CANCELLED", detached: true });
@@ -62,14 +63,14 @@ describe("transfer", () => {
     });
   });
 
-  test("README.md: call.transfer rejects a SharedArrayBuffer with RACK_INVALID_OUTPUT", async () => {
+  test("call.transfer rejects a SharedArrayBuffer with RACK_INVALID_OUTPUT", async () => {
     const { running } = await startRack(BYTES_RACK);
     expect(await codeOf(running.call("bytes.bytes", "badTransfer", undefined))).toBe(
       "RACK_INVALID_OUTPUT",
     );
   });
 
-  test("README.md: rack.call moves the buffers listed in transfer, and receives moved results", async () => {
+  test("rack.call moves the buffers listed in transfer, and receives moved results", async () => {
     const { running } = await startRack(BYTES_RACK);
     const bytes = new Uint8Array(MB).fill(3);
     const pending = running.call("bytes.bytes", "inspect", { bytes }, { transfer: [bytes.buffer] });
@@ -133,7 +134,7 @@ describe("transfer", () => {
 
   // README.md, "Binary data": calls held during a swap take their buffers at once.
   // @decision .agents/decisions/261116_024226-backplane-links.md#in-flight-calls-holding-and-draining
-  test("README.md: calls that wait while their provider is swapped take their buffers at once and deliver them after the switch", async () => {
+  test("calls that wait while their provider is swapped take their buffers at once and deliver them after the switch", async () => {
     const { running } = await startRack(BYTES_RACK);
     // A slow call keeps the old instance draining, so the hold lasts until it ends.
     const slow = running
@@ -168,28 +169,29 @@ describe("transfer", () => {
   });
 });
 
+// @doc docs/guides/data.md#sharing-buffers
 describe("shared buffers", () => {
   // README.md, "Binary data": a SharedArrayBuffer is shared, not copied.
-  test("README.md: a SharedArrayBuffer in a call between devices is shared, not copied", async () => {
+  test("a SharedArrayBuffer in a call between devices is shared, not copied", async () => {
     const { running } = await startRack(BYTES_RACK);
     expect(await running.call("bytes-client.client", "share", undefined)).toBe(42);
   });
 
-  test("README.md: rack.call shares a typed array on a SharedArrayBuffer with the provider", async () => {
+  test("rack.call shares a typed array on a SharedArrayBuffer with the provider", async () => {
     const { running } = await startRack(BYTES_RACK);
     const bytes = new Uint8Array(new SharedArrayBuffer(4));
     await running.call("bytes.bytes", "write", { bytes, value: 42, ms: 0 });
     expect(bytes[0]).toBe(42);
   });
 
-  test("README.md: a SharedArrayBuffer in a result is shared with the caller", async () => {
+  test("a SharedArrayBuffer in a result is shared with the caller", async () => {
     const { running } = await startRack(BYTES_RACK);
     const shared = (await running.call("bytes.bytes", "lend", undefined)) as SharedArrayBuffer;
     new Uint8Array(shared)[0] = 9;
     expect(await running.call("bytes.bytes", "peek", undefined)).toBe(9);
   });
 
-  test("README.md: a SharedArrayBuffer in an event is shared with the subscribers", async () => {
+  test("a SharedArrayBuffer in an event is shared with the subscribers", async () => {
     const { running } = await startRack(BYTES_RACK);
     await running.call("bytes.bytes", "publish", undefined);
     // The subscriber writes into the buffer it received, and the publisher sees the write.

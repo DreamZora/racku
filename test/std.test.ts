@@ -52,6 +52,7 @@ describe("standard connectors", () => {
   });
 });
 
+// @doc docs/guides/storage.md#memkv
 describe("memkv", () => {
   async function kvRack(watcherConfig?: { throwOn: string }) {
     const { running, rec } = await startRack({
@@ -61,7 +62,8 @@ describe("memkv", () => {
     return { running, rec, kv };
   }
 
-  // README.md: errors thrown by event handlers are logged and do not crash the device.
+  // @doc docs/guides/devices.md#background-work
+  // Errors thrown by event handlers are logged and do not crash the device.
   test("an event handler that throws is logged and the subscriber keeps running", async () => {
     const { running, rec, kv } = await kvRack({ throwOn: "bad" });
     await kv("set", { key: "bad", value: "1" });
@@ -118,6 +120,7 @@ describe("memkv", () => {
   });
 });
 
+// @doc docs/guides/storage.md#sqlite
 describe("sqlite", () => {
   async function sqlRack(path: string, baseDir?: string) {
     const { running } = await startRack(

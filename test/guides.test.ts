@@ -1,6 +1,6 @@
 /**
- * Runs the app that README.md builds section by section, exactly as the README shows it, so the
- * README and this test change together.
+ * Runs the app that the guides under docs/guides/ build, file by file, exactly as they show it, so
+ * the guides and this test change together.
  *
  * @decision .agents/decisions/261112_043034-device-api.md
  */
@@ -9,29 +9,42 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
 
-const README = await Bun.file(join(ROOT, "README.md")).text();
+/** The guides, in the order of their file names. */
+const GUIDES = await Promise.all(
+  [...new Bun.Glob("*.md").scanSync(join(ROOT, "docs", "guides"))].sort().map(async (name) => ({
+    name,
+    text: await Bun.file(join(ROOT, "docs", "guides", name)).text(),
+  })),
+);
 
 const apps: TempApp[] = [];
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
-/** The `ts` code blocks of the README, keyed by the path in their `// <path>` first line. */
+/** The `ts` code blocks of the guides, keyed by the path in their `// <path>` first line. */
 function files(): Map<string, string> {
   const result = new Map<string, string>();
-  for (const [, code = ""] of README.matchAll(/```ts\n([\s\S]*?)```/g)) {
-    const path = /^\/\/ ([\w./-]+\.ts)\n/.exec(code)?.[1];
-    if (path !== undefined) result.set(path, code);
+  for (const { name, text } of GUIDES) {
+    for (const [, code = ""] of text.matchAll(/```ts\n([\s\S]*?)```/g)) {
+      const path = /^\/\/ ([\w./-]+\.ts)\n/.exec(code)?.[1];
+      if (path === undefined) continue;
+      if (result.has(path))
+        throw new Error(`${path} appears twice in the guides, again in ${name}`);
+      result.set(path, code);
+    }
   }
   return result;
 }
 
-/** The "From code" snippet: the block that imports the manifest and starts the rack. */
+/** The program of "Running a rack from code": the block that imports the manifest and starts it. */
 function program(): string {
-  for (const [, code = ""] of README.matchAll(/```ts\n([\s\S]*?)```/g)) {
-    if (code.includes('import manifest from "./rack.ts"')) return code;
+  for (const { text } of GUIDES) {
+    for (const [, code = ""] of text.matchAll(/```ts\n([\s\S]*?)```/g)) {
+      if (code.includes('import manifest from "./rack.ts"')) return code;
+    }
   }
-  throw new Error("README.md has no program that starts the rack");
+  throw new Error("no guide has a program that starts the rack");
 }
 
 async function freePort(): Promise<number> {
@@ -41,7 +54,12 @@ async function freePort(): Promise<number> {
   return port as number;
 }
 
-test("README.md: the hello app runs as written", async () => {
+// @doc docs/guides/connectors.md#defining-a-connector
+// @doc docs/guides/devices.md#a-device-file
+// @doc docs/guides/racks.md#placing-devices-by-hand
+// @doc docs/guides/http.md#mounting-the-panel
+// @doc docs/guides/running.md#running-a-rack-from-code
+test("the greeter app of the guides runs as written", async () => {
   const app = await tempApp();
   apps.push(app);
   const port = String(await freePort());
@@ -86,7 +104,8 @@ test("README.md: the hello app runs as written", async () => {
 });
 
 // @decision .agents/decisions/261118_173457-device-test-bench.md#tests
-test("README.md: the bench example tests the greeter as written", async () => {
+// @doc docs/guides/testing.md#the-bench
+test("the bench example of the guides tests the greeter as written", async () => {
   const app = await tempApp();
   apps.push(app);
   for (const [path, code] of files()) await app.write(path, code);

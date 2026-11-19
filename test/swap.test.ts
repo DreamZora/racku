@@ -46,6 +46,7 @@ interface Count {
   version: string;
 }
 
+// @doc docs/guides/updates.md#the-swap-sequence
 describe("swap", () => {
   test("replaces the instance and hands in-memory state over", async () => {
     const { running, rec } = await startRack({ slots: { 1: slot("./devices/counter.ts") } });
@@ -60,6 +61,7 @@ describe("swap", () => {
     expect(running.status()[0]?.state).toBe("online");
   });
 
+  // @doc docs/reference/api.md#the-rack-handle
   test("swaps to another device file under the same name", async () => {
     const app = await fixtureApp();
     await app.write(
@@ -185,6 +187,7 @@ describe("swap", () => {
 
   // A route is a need of the panel, so its port is a port another device uses.
   // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+  // @doc docs/guides/http.md#routes
   test("rejects a swap that removes a port a panel route uses", async () => {
     const { running } = await startRack({
       slots: {
@@ -197,6 +200,7 @@ describe("swap", () => {
     expect(error.message).toContain("http-panel.web_http uses web.http");
   });
 
+  // @doc docs/reference/errors.md#codes
   test("rejects unknown device names with RACK_NO_ROUTE", async () => {
     const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
     expect(await codeOf(running.swap("ghost"))).toBe("RACK_NO_ROUTE");
@@ -275,6 +279,7 @@ describe("swap", () => {
   });
 });
 
+// @doc docs/reference/api.md#the-rack-handle
 describe("plug and unplug", () => {
   test("plug powers a device on and wires it to the devices below", async () => {
     const { running, rec } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
@@ -324,6 +329,8 @@ describe("plug and unplug", () => {
   });
 });
 
+// @doc docs/reference/api.md#the-rack-handle
+// @doc docs/guides/running.md#hot-reload-with-rack-dev
 describe("reload", () => {
   test("swaps only the devices whose firmware changed and keeps their state", async () => {
     const app = await fixtureApp();

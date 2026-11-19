@@ -100,9 +100,11 @@ describe("the plan", () => {
     expect(plan.unused).toEqual([]);
   });
 
-  // README.md, "Scanned racks": the example with a panel among the roots.
+  // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  // The example with a panel among the roots.
   // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
-  test("README.md: a panel's route pulls in the model it names, and the plan places the panel above it", () => {
+  // @doc docs/guides/http.md#routes
+  test("a panel's route pulls in the model it names, and the plan places the panel above it", () => {
     const all = example();
     all.set("a", { ...(all.get("a") as PlanType), provides: { http: port("http/v2") } });
     all.set("http-panel", {
@@ -127,7 +129,9 @@ describe("the plan", () => {
   });
 
   // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
-  test("README.md: a use entry keyed <model>.<need> wins over patched(), and one keyed by a connector id doesn't", () => {
+  // @doc docs/guides/devices.md#needs-from-configuration
+  // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  test("a use entry keyed <model>.<need> wins over patched(), and one keyed by a connector id doesn't", () => {
     const all = types({
       one: { provides: { p: port("p/v1") } },
       two: { provides: { p: port("p/v1") } },

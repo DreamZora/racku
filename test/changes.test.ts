@@ -96,8 +96,9 @@ function summary(results: { device: string; mode: string; error?: { code: string
   return results.map((result) => [result.device, result.mode, result.error?.code ?? null]);
 }
 
+// @doc docs/guides/updates.md#changed-plans-and-edited-manifests
 describe("changed plans", () => {
-  test("README.md: under rack dev, reload plugs, replaces, and unplugs instances to follow a changed plan", async () => {
+  test("under rack dev, reload plugs, replaces, and unplugs instances to follow a changed plan", async () => {
     const created = await app(scannedFiles());
     const { running } = await startRack(SCANNED, { baseDir: created.dir, plan: "update" });
     await running.call("a.poke", "inc", "f");
@@ -132,7 +133,7 @@ describe("changed plans", () => {
     expect(plan).not.toContain("c-f");
   });
 
-  test("README.md: a changed use entry rewires needs without restarting their devices", async () => {
+  test("a changed use entry rewires needs without restarting their devices", async () => {
     const created = await app({ ...scannedFiles(), "devices/e2.ts": counter("e2", "E") });
     const first = { ...SCANNED, use: { "demo.e/v1": "e" } };
     const { running, rec } = await startRack(first, { baseDir: created.dir, plan: false });
@@ -154,6 +155,7 @@ describe("changed plans", () => {
   });
 });
 
+// @doc docs/guides/updates.md#changed-plans-and-edited-manifests
 describe("edited manifests", () => {
   const files = () => ({
     "devices/d.ts": counter("d", "D"),
@@ -163,7 +165,7 @@ describe("edited manifests", () => {
     "devices/label.ts": LABEL,
   });
 
-  test("README.md: an edited manifest plugs new devices, moves others, and unplugs removed ones while the rack runs", async () => {
+  test("an edited manifest plugs new devices, moves others, and unplugs removed ones while the rack runs", async () => {
     const created = await app(files());
     const { running } = await startRack(
       { slots: { 1: slot("./devices/d.ts"), 3: slot("./devices/x.ts") } },
@@ -200,7 +202,7 @@ describe("edited manifests", () => {
     ]);
   });
 
-  test("README.md: a changed configuration replaces the device, and a changed patch rewires without a restart", async () => {
+  test("a changed configuration replaces the device, and a changed patch rewires without a restart", async () => {
     const created = await app(files());
     const labelled = (label: string, target: string): RackSpec => ({
       slots: {
@@ -222,7 +224,7 @@ describe("edited manifests", () => {
     expect(await running.call("x.poke", "inc", "d")).toBe(1);
   });
 
-  test("README.md: a manifest edit that needs a restart is refused, and the rack keeps running", async () => {
+  test("a manifest edit that needs a restart is refused, and the rack keeps running", async () => {
     const created = await app(files());
     const placed = { slots: { 1: slot("./devices/d.ts") } };
     const { running } = await startRack(placed, { baseDir: created.dir });

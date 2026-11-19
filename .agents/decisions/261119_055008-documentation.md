@@ -132,6 +132,10 @@ Each step is a change of its own.
   - It also checks that `docs/README.md` links to every other document under `docs/`, the map that [The documentation](#the-documentation) asks for.
 - `scripts/markdown.ts` holds the headings and anchors that the decision gate and the documentation gate both read.
 - `docs/README.md` is the map of `docs/`.
+- The README's sections moved into the guides, `connectors.md`, `devices.md`, `data.md`, `listeners.md`, `racks.md`, `running.md`, `updates.md`, `faults.md`, `managing.md`, `testing.md`, `storage.md`, and `http.md` under `docs/guides/`, and into the reference, `api.md`, `cli.md`, `errors.md`, and `reports.md` under `docs/reference/`.
+  - `test/guides.test.ts`, which was `test/readme.test.ts`, runs the greeter app that the guides build across their documents.
+  - Tests name the sections they confirm with `@doc`, in place of the `README.md:` that began their names.
+  - "Other sockets" in `listeners.md` said that a device's own sockets close with its instance, which no test confirmed; a test in `test/listeners.test.ts` now does, with the fixture device `raw-socket`.
 
 ## Confirmation
 

@@ -34,7 +34,7 @@ This file defines the project background, architectural constraints, and working
   - [examples/net-tool, a TCP and UDP tool on Tauri 2 and Quasar](.agents/decisions/261118_173845-net-tool-example.md): the first project on rack42u, run from source.
   - [Content-Length for every response body of known size, without Bun's slow path](.agents/decisions/261118_215039-content-length-for-known-sizes.md): `wholeResponse()` in `rack42u`, with which the panel answers, so a body of bytes or text keeps its `Content-Length` at every size, sent from 15 KiB on as a direct stream that Bun writes in one piece.
 - rack42u has no formal release yet, and it follows Bun by a minimum version; [Versions](#versions) holds the rules for both.
-- The documentation work that [A README that explains rack42u, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md) decides is under way: the documentation gate, `bun run check:docs`, is in place.
+- The documentation work that [A README that explains rack42u, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md) decides is under way: the documentation gate, `bun run check:docs`, is in place, and the README's reference has moved into `docs/guides/` and `docs/reference/`, each section named by the tests that confirm it.
 - rack42u works around two bugs of Bun 1.4.4, which aren't reported to Bun yet: [Watching two Bun bugs before reporting them](.agents/decisions/261119_031624-watching-bun-bugs.md) holds the reports, and the watch lasts until 2027-01-19.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list still needs its own decision before work starts, except the `inline` form, which [The main thread runs no devices, and what child processes, connected racks, and single executables must meet](.agents/decisions/261119_054850-main-thread-runs-no-devices.md) drops. That decision also sets what the decisions for the `chassis` form, connected racks, and `bun build --compile` packaging must meet: transports, one authentication method for sockets and TCP, and devices outside an executable with a fallback to the ones inside it.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
@@ -217,8 +217,10 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 
 ```text
 AGENTS.md            this file; CLAUDE.md is a symlink to it
-README.md            the front page of the documentation; test/readme.test.ts runs its app
+README.md            the front page of the documentation; test/example.test.ts runs its example
 docs/                user documentation; README.md is its map
+  guides/            how to do one thing; test/guides.test.ts runs the app they build
+  reference/         the API, the rack command, error codes, and reports
 LICENSE              MIT
 package.json         manifest, exports, bin, and scripts
 tsconfig.json        TypeScript configuration

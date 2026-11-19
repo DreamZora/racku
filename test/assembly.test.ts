@@ -104,8 +104,9 @@ U7 c c - e=e.e f=c-f.f
 `;
 
 describe("scanned racks", () => {
-  // README.md, "Scanned racks".
-  test("README.md: a scanned rack plans shared instances and own copies from its device files", async () => {
+  // @doc docs/guides/racks.md#scanned-racks
+  // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  test("a scanned rack plans shared instances and own copies from its device files", async () => {
     const app = await exampleApp();
     const { running } = await startRack(SPEC, { baseDir: app.dir });
     expect(running.status().map((s) => [s.u, s.name, s.model, s.owner ?? null])).toEqual([
@@ -123,14 +124,16 @@ describe("scanned racks", () => {
     expect([await inc("b", "e"), await inc("c", "e")]).toEqual([1, 2]);
   });
 
-  test("README.md: a priority starts a device and what it needs earlier, within the dependency graph", async () => {
+  // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  test("a priority starts a device and what it needs earlier, within the dependency graph", async () => {
     const app = await exampleApp();
     await app.write("devices/c.ts", consumer("c", { e: "E", f: "own(F)" }, "\n  priority: 10,"));
     const { running } = await startRack(SPEC, { baseDir: app.dir });
     expect(running.status().map((s) => s.name)).toEqual(["c-f", "e", "c", "a-d", "a-f", "a", "b"]);
   });
 
-  test("README.md: a cycle fails with its path", async () => {
+  // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  test("a cycle fails with its path", async () => {
     const app = await exampleApp();
     await app.write(
       "devices/a.ts",
@@ -149,7 +152,8 @@ describe("scanned racks", () => {
     expect([error.code, error.message]).toEqual(["RACK_MANIFEST", "cycle: a.d → a-d.back → a"]);
   });
 
-  test("README.md: use picks the provider when several device files provide a connector", async () => {
+  // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  test("use picks the provider when several device files provide a connector", async () => {
     const app = await exampleApp();
     await app.write("devices/e2.ts", counter("e2", "E"));
     const ambiguous = await errorOf(startRack(SPEC, { baseDir: app.dir }));
@@ -164,7 +168,8 @@ describe("scanned racks", () => {
     expect(await running.call("e2.e2", "inc", undefined)).toBe(3);
   });
 
-  test("README.md: devices takes standard devices and named variants next to directories", async () => {
+  // @doc docs/guides/racks.md#scanned-racks
+  test("devices takes standard devices and named variants next to directories", async () => {
     const app = await exampleApp();
     await app.write(
       "devices/k.ts",
@@ -202,7 +207,8 @@ export default device({
     ]).toEqual([1, 2]);
   });
 
-  test("README.md: configuration comes from the instance name, then the model, then the spec in devices", async () => {
+  // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  test("configuration comes from the instance name, then the model, then the spec in devices", async () => {
     const app = await tempApp();
     apps.push(app);
     await app.write(
@@ -262,7 +268,8 @@ export default device({
     expect(await labels(second.running)).toEqual(["instance", "model"]);
   });
 
-  test("README.md: a file in a scanned directory must be a device, unless its name starts with _", async () => {
+  // @doc docs/guides/racks.md#scanned-racks
+  test("a file in a scanned directory must be a device, unless its name starts with _", async () => {
     const app = await exampleApp();
     await app.write("devices/_helpers.ts", "export const helper = 1;\n");
     await app.write("devices/.draft.ts", "export const draft = 1;\n");
@@ -279,7 +286,8 @@ export default device({
     ]);
   });
 
-  test("README.md: a scanned rack refuses plug, unplug, and swap from another file, and swaps from its own", async () => {
+  // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  test("a scanned rack refuses plug, unplug, and swap from another file, and swaps from its own", async () => {
     const app = await exampleApp();
     const { running } = await startRack(SPEC, { baseDir: app.dir });
     expect(await codeOf(running.plug(20, slot("./devices/d.ts", { name: "extra" })))).toBe(
@@ -292,8 +300,9 @@ export default device({
   });
 });
 
+// @doc docs/guides/racks.md#the-plan-file
 describe("the plan file", () => {
-  test("README.md: the first start writes the plan file, and later starts follow it as written", async () => {
+  test("the first start writes the plan file, and later starts follow it as written", async () => {
     const app = await exampleApp();
     const first = await startRack(SPEC, { baseDir: app.dir });
     expect(await app.read("test.plan")).toBe(PLAN);
@@ -304,7 +313,7 @@ describe("the plan file", () => {
     expect(second.running.status().map((s) => `U${s.u} ${s.name}`)).toContain("U10 c");
   });
 
-  test("README.md: rack start refuses a plan file that no longer fits, and rack dev rewrites it", async () => {
+  test("rack start refuses a plan file that no longer fits, and rack dev rewrites it", async () => {
     const app = await exampleApp();
     await (await startRack(SPEC, { baseDir: app.dir })).running.stop();
     await app.write("devices/b.ts", consumer("b", { e: "E", d: "D" }));
@@ -317,7 +326,7 @@ describe("the plan file", () => {
     expect(await app.read("test.plan")).toContain(" b b - e=e.e d=d.d\n");
   });
 
-  test("README.md: a rack run without a plan file neither reads nor writes one", async () => {
+  test("a rack run without a plan file neither reads nor writes one", async () => {
     const app = await exampleApp();
     await app.write("test.plan", "this line is not a plan\n");
     const { running } = await startRack(SPEC, { baseDir: app.dir, plan: false });
@@ -325,7 +334,7 @@ describe("the plan file", () => {
     expect(await app.read("test.plan")).toBe("this line is not a plan\n");
   });
 
-  test("README.md: a priority change alone keeps the plan file's order, and rack dev applies it", async () => {
+  test("a priority change alone keeps the plan file's order, and rack dev applies it", async () => {
     const app = await exampleApp();
     const following = await startRack(SPEC, { baseDir: app.dir });
     await app.write("devices/c.ts", consumer("c", { e: "E", f: "own(F)" }, "\n  priority: 10,"));
@@ -353,7 +362,7 @@ describe("the plan file", () => {
     expect((await app.read("test.plan")).split("\n")[2]).toBe("U1 c-f f c");
   });
 
-  test("README.md: under rack dev, a reload applies a priority change by moving instances to new slots", async () => {
+  test("under rack dev, a reload applies a priority change by moving instances to new slots", async () => {
     const app = await exampleApp();
     const { running } = await startRack(SPEC, { baseDir: app.dir, plan: "update" });
     const before = (await running.call("c.poke", "inc", "e")) as number;
@@ -375,7 +384,7 @@ describe("the plan file", () => {
     expect((await app.read("test.plan")).split("\n")[2]).toBe("U1 c-f f c");
   });
 
-  test("README.md: rack plan prints the plan, --write writes the file, and --check fails until it fits", async () => {
+  test("rack plan prints the plan, --write writes the file, and --check fails until it fits", async () => {
     const app = await exampleApp();
     const printed = new Cli(["plan"], app.dir);
     expect(await printed.exited()).toBe(0);
@@ -401,7 +410,8 @@ describe("the rack command with scanned racks", () => {
     await Promise.all(running.splice(0).map((cli) => cli.stop()));
   });
 
-  test("README.md: rack dev rewrites a plan file that no longer fits, and --no-plan ignores it", async () => {
+  // @doc docs/guides/racks.md#the-plan-file
+  test("rack dev rewrites a plan file that no longer fits, and --no-plan ignores it", async () => {
     const app = await exampleApp();
     await app.write("demo.plan", "U1 ghost ghost -\n");
     const start = new Cli(["start", "--no-plan"], app.dir);
@@ -431,7 +441,9 @@ describe("the rack command with scanned racks", () => {
 });
 
 describe("reloads of scanned racks", () => {
-  test("README.md: under rack start, reload swaps changed files, and a new plan runs once the plan file records it", async () => {
+  // @doc docs/guides/updates.md#changed-plans-and-edited-manifests
+  // @doc docs/guides/racks.md#the-plan-file
+  test("under rack start, reload swaps changed files, and a new plan runs once the plan file records it", async () => {
     const app = await exampleApp();
     const { running } = await startRack(SPEC, { baseDir: app.dir });
     await app.write("devices/d.ts", counter("d", "D").replace("let n = 0;", "let n = 100;"));
@@ -461,7 +473,8 @@ describe("reloads of scanned racks", () => {
 });
 
 describe("own needs in a manifest that places devices by hand", () => {
-  test("README.md: an own need must not share its provider with another need", async () => {
+  // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  test("an own need must not share its provider with another need", async () => {
     const app = await exampleApp();
     await app.write("devices/x.ts", consumer("x", { d: "own(D)" }));
     await app.write("devices/y.ts", consumer("y", { d: "D" }));

@@ -52,10 +52,12 @@ describe("connector", () => {
     expect(Kv.members.changed.kind).toBe("event");
   });
 
+  // @doc docs/guides/connectors.md#ids-and-versions
   test.each(["kv/v1", "acme.orders/v2", "http/v1", "web-cache/v10"])("accepts the id %s", (id) => {
     expect(rejectionCode(() => connector(id, {}))).toBeUndefined();
   });
 
+  // @doc docs/guides/connectors.md#ids-and-versions
   test.each(["kv", "KV/v1", "kv/1", "kv/v", "kv/v1.2", "kv_store/v1", "acme/orders/v1", ""])(
     "rejects the id '%s' with RACK_MANIFEST",
     (id) => {
@@ -81,6 +83,7 @@ describe("connector", () => {
 });
 
 describe("rpc and event", () => {
+  // @doc docs/guides/connectors.md#defining-a-connector
   test("accept zod schemas", () => {
     const Echo = connector("echo/v1", {
       echo: rpc(z.string(), z.string()),

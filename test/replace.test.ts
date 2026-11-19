@@ -112,8 +112,8 @@ interface Counted {
 }
 
 describe("cold swaps", () => {
-  // README.md, "Hot swaps, cold swaps, and restarts".
-  test('README.md: a device that declares swap: "cold" stops before its new instance starts, and keeps its state', async () => {
+  // @doc docs/guides/updates.md#hot-swaps-cold-swaps-and-restarts
+  test('a device that declares swap: "cold" stops before its new instance starts, and keeps its state', async () => {
     const cold = await app({ "devices/printer.ts": printer({ cold: true }) });
     const { running, rec } = await startRack(
       { slots: { 1: slot("./devices/printer.ts") } },
@@ -143,7 +143,7 @@ describe("cold swaps", () => {
     expect(await running.call("printer.count", "inc", undefined)).toEqual({ n: 2, version: "v1" });
   });
 
-  test("README.md: calls that arrive during a cold swap wait for the new instance instead of failing", async () => {
+  test("calls that arrive during a cold swap wait for the new instance instead of failing", async () => {
     const slow = "\n  async selfTest() {\n    await Bun.sleep(150);\n  },";
     const cold = await app({ "devices/printer.ts": printer({ cold: true, extra: slow }) });
     const { running } = await startRack(
@@ -163,7 +163,7 @@ describe("cold swaps", () => {
     expect(counts.at(-1)?.version).toBe("v2");
   });
 
-  test("README.md: when a cold swap fails to start, the old firmware starts again from its snapshot", async () => {
+  test("when a cold swap fails to start, the old firmware starts again from its snapshot", async () => {
     const failing =
       '\n  selfTest() {\n    if (VERSION === "v2") throw new Error("v2 is broken");\n  },';
     const cold = await app({ "devices/printer.ts": printer({ cold: true, extra: failing }) });
@@ -201,10 +201,11 @@ describe("cold swaps", () => {
   });
 });
 
+// @doc docs/guides/updates.md#hot-swaps-cold-swaps-and-restarts
 describe("restarts", () => {
   const RACK = { slots: { 1: slot("./devices/store.ts"), 2: slot("./devices/client.ts") } };
 
-  test("README.md: restart starts a device from scratch, and its direct consumers reload against it", async () => {
+  test("restart starts a device from scratch, and its direct consumers reload against it", async () => {
     const created = await app({ "devices/store.ts": STORE, "devices/client.ts": CLIENT });
     const { running } = await startRack(RACK, { baseDir: created.dir });
     await running.call("store.count", "inc", undefined);
@@ -220,7 +221,7 @@ describe("restarts", () => {
     );
   });
 
-  test("README.md: restart with cascade: false leaves the consumers running", async () => {
+  test("restart with cascade: false leaves the consumers running", async () => {
     const created = await app({ "devices/store.ts": STORE, "devices/client.ts": CLIENT });
     const { running } = await startRack(RACK, { baseDir: created.dir });
     const before = await running.call("client.client", "seen", undefined);
@@ -230,7 +231,7 @@ describe("restarts", () => {
     expect(await running.call("store.store", "id", undefined)).not.toBe(before);
   });
 
-  test("README.md: a restart that fails to start brings the old firmware back without state", async () => {
+  test("a restart that fails to start brings the old firmware back without state", async () => {
     const created = await app({ "devices/store.ts": STORE, "devices/client.ts": CLIENT });
     const { running } = await startRack(RACK, { baseDir: created.dir });
     await running.call("store.count", "inc", undefined);
@@ -248,10 +249,11 @@ describe("restarts", () => {
   });
 });
 
+// @doc docs/guides/updates.md#hot-swaps-cold-swaps-and-restarts
 describe("contract changes", () => {
   const RACK = { slots: { 1: slot("./devices/store.ts"), 2: slot("./devices/client.ts") } };
 
-  test("README.md: a contract change replaces the provider and its consumers together", async () => {
+  test("a contract change replaces the provider and its consumers together", async () => {
     const created = await app({ "devices/store.ts": STORE, "devices/client.ts": CLIENT });
     const { running } = await startRack(RACK, { baseDir: created.dir });
     await running.call("store.count", "inc", undefined);
@@ -268,7 +270,7 @@ describe("contract changes", () => {
     );
   });
 
-  test("README.md: a contract change that a consumer's firmware does not follow is refused, and nothing stops", async () => {
+  test("a contract change that a consumer's firmware does not follow is refused, and nothing stops", async () => {
     const created = await app({ "devices/store.ts": STORE, "devices/client.ts": CLIENT });
     const { running } = await startRack(RACK, { baseDir: created.dir });
     const before = await running.call("store.store", "id", undefined);

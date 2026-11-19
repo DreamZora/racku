@@ -116,8 +116,9 @@ const idOf = (welcome: string | undefined) => welcome?.split(" ").at(-1) as stri
 const panelErrors = (rec: { logs: { device?: string; level: string; message: string }[] }) =>
   rec.logs.filter((e) => e.device === "http-panel" && e.level === "error");
 
+// @doc docs/guides/http.md#requests
 describe("http-panel requests", () => {
-  test("README.md: passes the method, URL, headers, and body to the port its route names", async () => {
+  test("passes the method, URL, headers, and body to the port its route names", async () => {
     const { get } = await panelRack();
     const response = await get("/web/echo?x=1", {
       method: "POST",
@@ -135,24 +136,25 @@ describe("http-panel requests", () => {
     expect(await (await get("/web/greeting")).text()).toBe("hello");
   });
 
-  test("README.md: passes route parameters", async () => {
+  test("passes route parameters", async () => {
     const { get } = await panelRack();
     expect(await (await get("/items/42")).json()).toEqual({ id: "42" });
   });
 
-  test("README.md: keeps duplicate response headers such as Set-Cookie", async () => {
+  test("keeps duplicate response headers such as Set-Cookie", async () => {
     const { get } = await panelRack();
     expect((await get("/web/cookies")).headers.getSetCookie()).toEqual(["a=1", "b=2"]);
   });
 
-  test("README.md: answers an unmatched path with 404", async () => {
+  // @doc docs/guides/http.md#configuration
+  test("answers an unmatched path with 404", async () => {
     const { get } = await panelRack();
     const response = await get("/elsewhere");
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ code: "RACK_NO_ROUTE", message: "no route matches" });
   });
 
-  test("README.md: answers a failed call with 502, as it does response headers that Response rejects", async () => {
+  test("answers a failed call with 502, as it does response headers that Response rejects", async () => {
     const { get } = await panelRack();
     const failed = await get("/web/boom");
     expect([failed.status, await failed.json()]).toEqual([
@@ -164,14 +166,14 @@ describe("http-panel requests", () => {
     expect(((await bad.json()) as { code: string }).code).toBe("RACK_INVALID_OUTPUT");
   });
 
-  test("README.md: answers 504 when the response head comes later than callTimeout", async () => {
+  test("answers 504 when the response head comes later than callTimeout", async () => {
     const { get } = await panelRack({}, { callTimeout: 100 });
     const response = await get("/web/slow");
     expect(response.status).toBe(504);
     expect(((await response.json()) as { code: string }).code).toBe("RACK_TIMEOUT");
   });
 
-  test("README.md: answers 503 for a device that is down", async () => {
+  test("answers 503 for a device that is down", async () => {
     const { running, rec, get } = await panelRack();
     const crashes = () => rec.events.filter((e) => e.type === "fault").length;
     for (let n = 1; n <= 4; n++) {
@@ -184,7 +186,8 @@ describe("http-panel requests", () => {
     expect(((await response.json()) as { code: string }).code).toBe("RACK_LINK_DOWN");
   });
 
-  test("README.md: answers 413 for a body over maxBodySize, with a declared length or chunked", async () => {
+  // @doc docs/guides/http.md#configuration
+  test("answers 413 for a body over maxBodySize, with a declared length or chunked", async () => {
     const { running, port } = await panelRack({ maxBodySize: 64 * 1024 });
     const head = (extra: string) => [
       "POST /web/upload HTTP/1.1",
@@ -208,7 +211,7 @@ describe("http-panel requests", () => {
     expect(streams).toMatchObject({ opened: 1, errors: { RACK_INVALID_INPUT: 1 } });
   });
 
-  test("README.md: answers 408 when the client stops sending its body, as bytes or as a stream", async () => {
+  test("answers 408 when the client stops sending its body, as bytes or as a stream", async () => {
     const { port } = await panelRack({ idleTimeout: 1 });
     const head = (extra: string) => ["POST /web/upload HTTP/1.1", `Host: 127.0.0.1:${port}`, extra];
     // A declared length up to streamThreshold travels as bytes, which the panel reads first.
@@ -223,7 +226,7 @@ describe("http-panel requests", () => {
     ).toStartWith("HTTP/1.1 408");
   });
 
-  test("README.md: a body sent whole must arrive within idleTimeout, while a streamed one may take longer as long as it moves", async () => {
+  test("a body sent whole must arrive within idleTimeout, while a streamed one may take longer as long as it moves", async () => {
     const { port } = await panelRack({ idleTimeout: 1 });
     const head = (extra: string) => [
       "POST /web/upload HTTP/1.1",
@@ -246,7 +249,7 @@ describe("http-panel requests", () => {
     expect(streamed.endsWith("\r\n\r\n20")).toBe(true);
   });
 
-  test("README.md: answers 504 when the device stops reading the body", async () => {
+  test("answers 504 when the device stops reading the body", async () => {
     const { port } = await panelRack({ idleTimeout: 1, maxBodySize: 16 * MiB });
     const size = 8 * MiB;
     const started = performance.now();
@@ -259,7 +262,7 @@ describe("http-panel requests", () => {
     expect(performance.now() - started).toBeGreaterThan(900);
   });
 
-  test("README.md: callTimeout runs from the end of the request body to the response head", async () => {
+  test("callTimeout runs from the end of the request body to the response head", async () => {
     // The body is over streamThreshold, so it streams, and the call starts with its first bytes.
     const { port } = await panelRack({ streamThreshold: 64 * 1024 }, { callTimeout: 300 });
     // The client sends the second half of its body after longer than callTimeout.
@@ -282,13 +285,13 @@ describe("http-panel requests", () => {
     expect(response.endsWith(`\r\n\r\n${2 * half.length}`)).toBe(true);
   });
 
-  test("README.md: Bun's timer doesn't cut a request while the panel waits for its device", async () => {
+  test("Bun's timer doesn't cut a request while the panel waits for its device", async () => {
     const { get } = await panelRack({ idleTimeout: 1 });
     // Bun alone would cut an exchange this long, as the listener tests show.
     expect(await (await get("/web/sleep?ms=5500", { keepalive: false })).text()).toBe("slept");
   }, 15_000);
 
-  test("README.md: a response body that fails or stalls after its head ends the response abruptly", async () => {
+  test("a response body that fails or stalls after its head ends the response abruptly", async () => {
     const { get } = await panelRack({ idleTimeout: 1 });
     const rest = async (path: string) => {
       const response = await get(path);
@@ -306,7 +309,7 @@ describe("http-panel requests", () => {
     expect(performance.now() - started).toBeGreaterThan(900);
   });
 
-  test("README.md: a client that goes away cancels the call, with RACK_CANCELLED at the device", async () => {
+  test("a client that goes away cancels the call, with RACK_CANCELLED at the device", async () => {
     const { running, get } = await panelRack();
     // A call that ends leaves its controller to the next one, which the client then cancels.
     expect(await (await get("/web/greeting")).text()).toBe("hello");
@@ -327,7 +330,7 @@ describe("http-panel requests", () => {
   });
 
   // @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#tests
-  test("README.md: a response body sent whole keeps its Content-Length at every size, and a stream goes out chunked", async () => {
+  test("a response body sent whole keeps its Content-Length at every size, and a stream goes out chunked", async () => {
     const { port } = await panelRack();
     const head = async (method: string, path: string) =>
       (
@@ -356,7 +359,8 @@ describe("http-panel requests", () => {
     }
   });
 
-  test("README.md: streamThreshold decides which request bodies go to the device as bytes and which stream", async () => {
+  // @doc docs/guides/http.md#configuration
+  test("streamThreshold decides which request bodies go to the device as bytes and which stream", async () => {
     const { running, get } = await panelRack({ streamThreshold: 1024 });
     const opened = async () => {
       const handle = (await metricsOf(running, "web")).provides.http?.handle;
@@ -376,6 +380,7 @@ describe("http-panel requests", () => {
     expect(handle?.kind === "rpc" && handle.streams?.opened).toBe(1);
   });
 
+  // @doc docs/guides/http.md#routes
   test("serves through the installed instance after a swap", async () => {
     const { running, get } = await panelRack();
     const before = await (await get("/web/who")).text();
@@ -419,8 +424,9 @@ function pushBody(port: number, path: string, size: number) {
   return { written: () => written, response };
 }
 
+// @doc docs/guides/http.md#requests
 describe("http-panel streams", () => {
-  test("README.md: a large upload streams to the device, which slows the client", async () => {
+  test("a large upload streams to the device, which slows the client", async () => {
     const { port } = await panelRack({ maxBodySize: 64 * MiB });
     const size = 48 * MiB;
     // The device stops reading after 1 MiB for 1.5 s.
@@ -433,7 +439,7 @@ describe("http-panel streams", () => {
     expect(response.endsWith(`\r\n\r\n${size}`)).toBe(true);
   });
 
-  test("README.md: a large download streams to the client, whose pace slows the device", async () => {
+  test("a large download streams to the client, whose pace slows the device", async () => {
     const { port, get } = await panelRack();
     const size = 64 * MiB;
     let received = 0;
@@ -460,7 +466,7 @@ describe("http-panel streams", () => {
     expect(received).toBeGreaterThan(size);
   });
 
-  test("README.md: server-sent events arrive as the device sends them", async () => {
+  test("server-sent events arrive as the device sends them", async () => {
     const { get } = await panelRack();
     const response = await get("/web/events?n=3&gap=300");
     expect(response.headers.get("content-type")).toBe("text/event-stream");
@@ -478,7 +484,7 @@ describe("http-panel streams", () => {
     expect((arrivals.at(-1) as number) - (arrivals[0] as number)).toBeGreaterThan(400);
   });
 
-  test("README.md: a client that goes away cancels the device's stream", async () => {
+  test("a client that goes away cancels the device's stream", async () => {
     const { running, get } = await panelRack();
     const controller = new AbortController();
     const response = await get("/web/events?n=1000&gap=50", { signal: controller.signal });
@@ -494,8 +500,10 @@ describe("http-panel streams", () => {
   });
 });
 
+// @doc docs/guides/http.md#configuration
+// @doc docs/guides/http.md#requests
 describe("http-panel hosts", () => {
-  test("README.md: a panel on loopback answers 403 for another host, and serves localhost and allowedHosts", async () => {
+  test("a panel on loopback answers 403 for another host, and serves localhost and allowedHosts", async () => {
     const { port } = await panelRack({ allowedHosts: ["app.test"] });
     const status = (host: string) =>
       rawStatus(port, ["GET /web/greeting HTTP/1.1", `Host: ${host}`, "Connection: close"]);
@@ -505,7 +513,7 @@ describe("http-panel hosts", () => {
     expect(await status("app.test")).toStartWith("HTTP/1.1 200");
   });
 
-  test("README.md: a panel listens on 127.0.0.1 by default, and on 0.0.0.0 serves any host", async () => {
+  test("a panel listens on 127.0.0.1 by default, and on 0.0.0.0 serves any host", async () => {
     const loopback = await panelRack();
     expect(loopback.url.hostname).toBe("127.0.0.1");
     const { running } = loopback;
@@ -520,8 +528,9 @@ describe("http-panel hosts", () => {
   });
 });
 
+// @doc docs/guides/http.md#websocket
 describe("http-panel WebSocket", () => {
-  test("README.md: a device refuses an upgrade with its response, or accepts it and names a subprotocol", async () => {
+  test("a device refuses an upgrade with its response, or accepts it and names a subprotocol", async () => {
     const { url, port } = await panelRack();
     expect(await rawStatus(port, upgrade(port, "/chat?refuse"))).toStartWith("HTTP/1.1 403");
     const named = await socketTo(url, "/chat?protocol=chat", ["other", "chat"]);
@@ -539,7 +548,7 @@ describe("http-panel WebSocket", () => {
     expect(first.ws.protocol).toBe("other");
   });
 
-  test("README.md: text and binary messages travel both ways", async () => {
+  test("text and binary messages travel both ways", async () => {
     const { url } = await panelRack();
     const socket = await socketTo(url, "/chat?name=ann");
     expect(socket.messages[0]).toMatch(/^welcome ann \w+ http-panel:\w+:\d+$/);
@@ -552,14 +561,14 @@ describe("http-panel WebSocket", () => {
     expect(await socket.closed).toBe(4000);
   });
 
-  test("README.md: a message over maxMessageSize closes the WebSocket with 1009", async () => {
+  test("a message over maxMessageSize closes the WebSocket with 1009", async () => {
     const { url } = await panelRack({ webSocket: { maxMessageSize: 1024 } });
     const socket = await socketTo(url, "/chat");
     socket.ws.send("x".repeat(2048));
     expect(await socket.closed).toBe(1009);
   });
 
-  test("README.md: a client that reads too slowly is closed with 1013", async () => {
+  test("a client that reads too slowly is closed with 1013", async () => {
     const { url, port } = await panelRack();
     const client = await stalledSocket(port, "/chat", "flood 400");
     try {
@@ -569,7 +578,7 @@ describe("http-panel WebSocket", () => {
     }
   });
 
-  test("README.md: upgrades beyond maxConnections get 503, and the log says when refusing starts and ends", async () => {
+  test("upgrades beyond maxConnections get 503, and the log says when refusing starts and ends", async () => {
     const { url, port, rec } = await panelRack({ webSocket: { maxConnections: 2 } });
     const first = await socketTo(url, "/chat");
     await socketTo(url, "/chat");
@@ -585,7 +594,7 @@ describe("http-panel WebSocket", () => {
     await socketTo(url, "/chat");
   });
 
-  test("README.md: a socket under a slow device has at most 16 messages in calls, which start in order", async () => {
+  test("a socket under a slow device has at most 16 messages in calls, which start in order", async () => {
     const { url } = await panelRack();
     const socket = await socketTo(url, "/chat");
     for (let i = 0; i < 200; i++) socket.ws.send(`seq ${i}`);
@@ -596,7 +605,7 @@ describe("http-panel WebSocket", () => {
     expect(state.maxActive).toBeGreaterThan(1);
   });
 
-  test("README.md: a failed open or message call closes the socket, with 1013 for the codes that give 503", async () => {
+  test("a failed open or message call closes the socket, with 1013 for the codes that give 503", async () => {
     const { url } = await panelRack();
     const failing = await socketTo(url, "/chat");
     failing.ws.send("fail");
@@ -615,7 +624,7 @@ describe("http-panel WebSocket", () => {
     ).toBe(1011);
   });
 
-  test("README.md: several panels share one port of a device, and each takes the events of its own sockets", async () => {
+  test("several panels share one port of a device, and each takes the events of its own sockets", async () => {
     const routes = { "/chat": "chat.http", "/chat/*": "chat.http" };
     const { rec } = await startRack({
       slots: {
@@ -637,7 +646,7 @@ describe("http-panel WebSocket", () => {
     expect(b.messages.filter((m) => m === "news")).toHaveLength(1);
   });
 
-  test("README.md: the panel ignores events for sockets it no longer has", async () => {
+  test("the panel ignores events for sockets it no longer has", async () => {
     const { url, rec } = await panelRack();
     const gone = await socketTo(url, "/chat?name=gone");
     const stays = await socketTo(url, "/chat?name=stays");
@@ -653,8 +662,9 @@ describe("http-panel WebSocket", () => {
   });
 });
 
+// @doc docs/guides/http.md#websocket
 describe("http-panel swaps", () => {
-  test("README.md: swapping the device behind a route keeps its WebSockets and their state", async () => {
+  test("swapping the device behind a route keeps its WebSockets and their state", async () => {
     const { running, url } = await panelRack();
     const socket = await socketTo(url, "/chat?name=ann");
     const before = (await chatState(url)).instance;
@@ -668,7 +678,8 @@ describe("http-panel swaps", () => {
     expect((await chatState(url)).sockets).toEqual([idOf(socket.messages[0])]);
   });
 
-  test("README.md: swapping the panel keeps HTTP serving and closes WebSockets with 1012", async () => {
+  // @doc docs/guides/http.md#routes
+  test("swapping the panel keeps HTTP serving and closes WebSockets with 1012", async () => {
     const { running, get, url } = await panelRack();
     const socket = await socketTo(url, "/chat");
     await running.swap("http-panel");
@@ -678,7 +689,7 @@ describe("http-panel swaps", () => {
   });
 
   for (const how of ["reset", "restart"] as const) {
-    test(`README.md: after a ${how} of the device behind a route, its sockets close with 1011, also ones that never send`, async () => {
+    test(`after a ${how} of the device behind a route, its sockets close with 1011, also ones that never send`, async () => {
       process.env.RACK42U_TEST_PANEL_SYNC_MS = "200";
       const { running, rec, url, get } = await panelRack();
       const talks = await socketTo(url, "/chat?name=talks");
@@ -696,7 +707,7 @@ describe("http-panel swaps", () => {
     });
   }
 
-  test("README.md: after a panel crash, the device runs its close handler for the panel's sockets with 1006", async () => {
+  test("after a panel crash, the device runs its close handler for the panel's sockets with 1006", async () => {
     process.env.RACK42U_TEST_PANEL_SYNC_MS = "200";
     const routes = { "/chat": "chat.http", "/chat/*": "chat.http" };
     const { running, rec } = await startRack({
@@ -761,8 +772,9 @@ const entriesOf = (rec: { logs: { device?: string; message: string; time: number
     rec.logs.filter((e) => e.device === "http-panel" && e.message === "certificates rejected"),
 });
 
+// @doc docs/guides/http.md#certificates
 describe("http-panel certificates", () => {
-  test("README.md: with SNI, a pair that changed is replaced while one that doesn't load keeps its old version", async () => {
+  test("with SNI, a pair that changed is replaced while one that doesn't load keeps its old version", async () => {
     const { path, put } = await certificates();
     const { port, rec } = await panelRack({
       tls: [
@@ -782,7 +794,7 @@ describe("http-panel certificates", () => {
     expect(await certificateOf(port, "other.test")).toBe("three.test");
   });
 
-  test("README.md: a replaced certificate serves new connections, while connections opened before keep working", async () => {
+  test("a replaced certificate serves new connections, while connections opened before keep working", async () => {
     const { path, put } = await certificates();
     const { running, port, url, rec } = await panelRack({
       tls: { cert: path("one.crt"), key: path("one.key") },
@@ -805,7 +817,7 @@ describe("http-panel certificates", () => {
     await waitFor(() => socket.messages.some((m) => m.endsWith(" early: still there?")));
   });
 
-  test("README.md: a pair that doesn't load leaves the old one serving, with an error at the second check, once", async () => {
+  test("a pair that doesn't load leaves the old one serving, with an error at the second check, once", async () => {
     const { path, put } = await certificates();
     const { port, rec } = await panelRack({
       tls: { cert: path("one.crt"), key: path("one.key") },
@@ -825,7 +837,7 @@ describe("http-panel certificates", () => {
     expect(entriesOf(rec).rejected()).toHaveLength(1);
   }, 15_000);
 
-  test("README.md: a renewal that writes the certificate and the key one after the other loads without an error", async () => {
+  test("a renewal that writes the certificate and the key one after the other loads without an error", async () => {
     const { path, put } = await certificates();
     const { port, rec } = await panelRack({
       tls: { cert: path("one.crt"), key: path("one.key") },
@@ -845,7 +857,7 @@ describe("http-panel certificates", () => {
     expect(panelErrors(rec)).toEqual([]);
   }, 15_000);
 
-  test("README.md: a pair that doesn't load at start fails the panel's powerOn", async () => {
+  test("a pair that doesn't load at start fails the panel's powerOn", async () => {
     const error = await errorOf(
       panelRack({ tls: { cert: "certs/one.crt", key: "certs/two.key" } }),
     );
@@ -854,7 +866,8 @@ describe("http-panel certificates", () => {
 });
 
 describe("http-panel configuration", () => {
-  test("README.md: the defaults of the panel's configuration", () => {
+  // @doc docs/guides/http.md#configuration
+  test("the defaults of the panel's configuration", () => {
     expect(v.parse(PanelConfig, { port: 0, routes: {} })).toEqual({
       hostname: "127.0.0.1",
       port: 0,
@@ -869,7 +882,8 @@ describe("http-panel configuration", () => {
     expect(SYNC_MS).toBe(30_000);
   });
 
-  test("README.md: a route to a device that isn't below the panel fails with RACK_MANIFEST", async () => {
+  // @doc docs/guides/http.md#routes
+  test("a route to a device that isn't below the panel fails with RACK_MANIFEST", async () => {
     const above = await errorOf(
       startRack({ slots: { 1: httpPanel({ port: 0, routes: { "/web/*": "web.http" } }), 2: WEB } }),
     );
@@ -884,7 +898,8 @@ describe("http-panel configuration", () => {
     );
   });
 
-  test("README.md: a configuration that doesn't validate fails with RACK_INVALID_CONFIG", async () => {
+  // @doc docs/guides/http.md#configuration
+  test("a configuration that doesn't validate fails with RACK_INVALID_CONFIG", async () => {
     const port = await errorOf(
       startRack({ slots: { 1: httpPanel({ port: 70_000, routes: {} }) } }),
     );
@@ -904,7 +919,8 @@ describe("http-panel configuration", () => {
     ]);
   });
 
-  test("README.md: the panel names each need after its address", async () => {
+  // @doc docs/guides/http.md#routes
+  test("the panel names each need after its address", async () => {
     const { running, rec } = await startRack({
       slots: {
         1: slot("./devices/web.ts", { name: "2fa" }),
@@ -915,7 +931,8 @@ describe("http-panel configuration", () => {
     expect(Object.keys((await metricsOf(running, "http-panel")).needs)).toEqual(["_2fa_http"]);
   });
 
-  test("README.md: in a scanned rack, the panel's routes pull in the models they name", async () => {
+  // @doc docs/guides/http.md#routes
+  test("in a scanned rack, the panel's routes pull in the models they name", async () => {
     const app = await tempApp(["connectors.ts", "devices/web.ts", "devices/counter.ts"], FIXTURES);
     apps.push(app);
     const panel = httpPanel({ port: 0, routes: { "/web/*": "web.http" } });
@@ -933,7 +950,8 @@ describe("http-panel configuration", () => {
     expect(report.unused).toEqual(["counter", "http-panel"]);
   });
 
-  test("README.md: edited routes and a new port replace the panel without a restart", async () => {
+  // @doc docs/guides/http.md#routes
+  test("edited routes and a new port replace the panel without a restart", async () => {
     const { running, rec } = await startRack({
       slots: { 1: WEB, 2: httpPanel({ port: 0, routes: { "/web/*": "web.http" } }) },
     });
@@ -960,8 +978,9 @@ describe("http-panel configuration", () => {
   });
 });
 
+// @doc docs/guides/http.md#observation
 describe("http-panel observation", () => {
-  test("README.md: the panel's needs count the calls per route target, and status() shows its listener", async () => {
+  test("the panel's needs count the calls per route target, and status() shows its listener", async () => {
     const { running, get, url, port } = await panelRack();
     await get("/web/greeting");
     await get("/web/boom");
@@ -1056,7 +1075,8 @@ function chatHandler() {
 const SILENCE = 90_000;
 
 describe("http/v2 and httpHandler", () => {
-  test("README.md: http/v2 has the members handle, opened, message, closed, sockets, send, and close", () => {
+  // @doc docs/guides/http.md#the-httpv2-connector
+  test("http/v2 has the members handle, opened, message, closed, sockets, send, and close", () => {
     expect(describeConnector(Http)).toEqual({
       id: "http/v2",
       members: {
@@ -1071,7 +1091,8 @@ describe("http/v2 and httpHandler", () => {
     });
   });
 
-  test("README.md: httpHandler turns a fetch function into an http/v2 implementation", async () => {
+  // @doc docs/guides/http.md#mounting-the-panel
+  test("httpHandler turns a fetch function into an http/v2 implementation", async () => {
     const handler = httpHandler(async (request) => {
       const headers = new Headers({ "content-type": "text/plain" });
       headers.append("set-cookie", "a=1");
@@ -1099,7 +1120,8 @@ describe("http/v2 and httpHandler", () => {
     ]);
   });
 
-  test("README.md: httpHandler passes call.signal to the request", async () => {
+  // @doc docs/guides/http.md#requests
+  test("httpHandler passes call.signal to the request", async () => {
     const controller = new AbortController();
     const handler = httpHandler(
       (request) =>
@@ -1117,7 +1139,8 @@ describe("http/v2 and httpHandler", () => {
     expect(new TextDecoder().decode(output.body as Uint8Array)).toBe("aborted");
   });
 
-  test("README.md: a response body that ends at once within streamThreshold goes as bytes, moved, and any other streams", async () => {
+  // @doc docs/guides/http.md#requests
+  test("a response body that ends at once within streamThreshold goes as bytes, moved, and any other streams", async () => {
     const fetch = (request: Request) => {
       const size = Number(new URL(request.url).searchParams.get("size"));
       if (size > 0) return new Response(new Uint8Array(size));
@@ -1168,7 +1191,8 @@ describe("http/v2 and httpHandler", () => {
     }
   });
 
-  test("README.md: a request body that streams reaches fetch as request.body", async () => {
+  // @doc docs/guides/http.md#requests
+  test("a request body that streams reaches fetch as request.body", async () => {
     const handler = httpHandler(
       async (request) => new Response(String((await request.bytes()).length)),
     );
@@ -1186,7 +1210,8 @@ describe("http/v2 and httpHandler", () => {
     expect(new TextDecoder().decode(output.body as Uint8Array)).toBe("200000");
   });
 
-  test("README.md: an upgrade that fetch doesn't accept gets its response, and one without WebSocket handlers fails", async () => {
+  // @doc docs/guides/http.md#websocket
+  test("an upgrade that fetch doesn't accept gets its response, and one without WebSocket handlers fails", async () => {
     const request = {
       method: "GET",
       url: "http://rack.local/",
@@ -1204,7 +1229,8 @@ describe("http/v2 and httpHandler", () => {
     expect(error.code).toBe("RACK_INVALID_OUTPUT");
   });
 
-  test("README.md: sockets send and close through the port's events, and a message for an unknown socket closes it with 1011", async () => {
+  // @doc docs/guides/http.md#websocket
+  test("sockets send and close through the port's events, and a message for an unknown socket closes it with 1011", async () => {
     const { handler, open, sent, closed } = chatHandler();
     await open("p:1:1", "ann");
     await handler.message({ socket: "p:1:1", data: "hi" }, CALL);
@@ -1213,7 +1239,8 @@ describe("http/v2 and httpHandler", () => {
     expect(closed).toEqual([{ socket: "p:1:9", code: 1011, reason: "unknown socket" }]);
   });
 
-  test("README.md: sockets answers with the ids the device doesn't know, and drops a socket that two calls in a row left out", async () => {
+  // @doc docs/guides/http.md#the-httpv2-connector
+  test("sockets answers with the ids the device doesn't know, and drops a socket that two calls in a row left out", async () => {
     const { handler, open, closes } = chatHandler();
     await open("p:1:1");
     await open("p:1:2");
@@ -1227,7 +1254,8 @@ describe("http/v2 and httpHandler", () => {
     expect(handler.list().map((s) => s.socket)).toEqual(["p:1:1"]);
   });
 
-  test("README.md: a device forgets the sockets of a panel instance that made no call for 90 s", async () => {
+  // @doc docs/guides/http.md#websocket
+  test("a device forgets the sockets of a panel instance that made no call for 90 s", async () => {
     const { handler, open, closes } = chatHandler();
     const now = Date.now();
     await open("p:1:1");
@@ -1245,7 +1273,8 @@ describe("http/v2 and httpHandler", () => {
     expect(handler.list().map((s) => s.socket)).toEqual(["p:2:1"]);
   });
 
-  test("README.md: list() and restore() carry sockets and their data to a new instance, whose silence counts from restore", async () => {
+  // @doc docs/guides/http.md#websocket
+  test("list() and restore() carry sockets and their data to a new instance, whose silence counts from restore", async () => {
     const first = chatHandler();
     await first.open("p:1:1", "ann");
     const list = first.handler.list();
@@ -1265,7 +1294,8 @@ describe("http/v2 and httpHandler", () => {
     expect(second.closes).toEqual([["p:1:1", 1006]]);
   });
 
-  test("README.md: Http and httpHandler come from rack42u/std, not rack42u", async () => {
+  // @doc docs/guides/http.md#mounting-the-panel
+  test("Http and httpHandler come from rack42u/std, not rack42u", async () => {
     const core = await import("rack42u");
     expect("Http" in core).toBe(false);
     expect("httpHandler" in core).toBe(false);

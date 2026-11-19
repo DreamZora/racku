@@ -154,8 +154,8 @@ function stateOf(running: RackHandle, name: string): string | undefined {
 }
 
 describe("bounded calls", () => {
-  // README.md, "Overload".
-  test("README.md: a need at queueLimit refuses more calls at once with RACK_OVERLOADED, and takes calls again as others finish", async () => {
+  // @doc docs/guides/faults.md#overload
+  test("a need at queueLimit refuses more calls at once with RACK_OVERLOADED, and takes calls again as others finish", async () => {
     const created = await app();
     const { running } = await startRack(FANNED, { baseDir: created.dir, queueLimit: 3 });
     const first = await running.call("fan.fan", "fanout", { n: 5, ms: 300 });
@@ -178,7 +178,8 @@ describe("bounded calls", () => {
     expect(provider?.provides.slow?.wait).toMatchObject({ calls: 6, ok: 6 });
   });
 
-  test("README.md: calls from outside the rack are bounded per device, and the HTTP panel answers RACK_OVERLOADED with 503", async () => {
+  // @doc docs/guides/http.md#requests
+  test("calls from outside the rack are bounded per device, and the HTTP panel answers RACK_OVERLOADED with 503", async () => {
     const created = await app();
     const { running, rec } = await startRack(
       {
@@ -234,7 +235,7 @@ describe("bounded calls", () => {
     expect(after.outside.ports["web.http"]).toBeUndefined();
   });
 
-  test("README.md: calls held while their provider swaps count toward the limit, and the ones beyond it fail with RACK_OVERLOADED", async () => {
+  test("calls held while their provider swaps count toward the limit, and the ones beyond it fail with RACK_OVERLOADED", async () => {
     const cold = (ms: number) =>
       `\n  swap: "cold",\n  async selfTest() {\n    await Bun.sleep(${ms});\n  },`;
     const created = await app(slow(cold(600)));
@@ -261,7 +262,8 @@ describe("bounded calls", () => {
     expect(stateOf(running, "slow")).toBe("online");
   });
 
-  test("README.md: queueLimit is 10 000 by default", async () => {
+  // @doc docs/reference/api.md#start
+  test("queueLimit is 10 000 by default", async () => {
     const created = await app();
     const { running } = await startRack(FANNED, { baseDir: created.dir });
     const calls = Array.from({ length: 10_001 }, () =>
@@ -275,7 +277,7 @@ describe("bounded calls", () => {
     expect(results.at(-1)).toBe("RACK_OVERLOADED");
   });
 
-  test("README.md: the start option queueLimit is a positive integer", async () => {
+  test("the start option queueLimit is a positive integer", async () => {
     const created = await app();
     const error = await errorOf(startRack(FANNED, { baseDir: created.dir, queueLimit: 0 }));
     expect([error.code, error.message]).toEqual([
@@ -286,8 +288,8 @@ describe("bounded calls", () => {
 });
 
 describe("stale calls", () => {
-  // README.md, "Overload".
-  test("README.md: a provider answers a call whose deadline passed while it waited with RACK_TIMEOUT, without running it", async () => {
+  // @doc docs/guides/faults.md#overload
+  test("a provider answers a call whose deadline passed while it waited with RACK_TIMEOUT, without running it", async () => {
     const created = await app();
     const { running } = await startRack(FANNED, { baseDir: created.dir });
     const blocked = running.call("slow.slow", "block", 500);
@@ -305,8 +307,8 @@ describe("stale calls", () => {
 });
 
 describe("bounded events", () => {
-  // README.md, "Overload".
-  test("README.md: a subscriber queueLimit events behind misses the next ones, counted as dropped, while one that keeps up gets them all", async () => {
+  // @doc docs/guides/faults.md#overload
+  test("a subscriber queueLimit events behind misses the next ones, counted as dropped, while one that keeps up gets them all", async () => {
     const created = await app();
     const { running } = await startRack(
       {

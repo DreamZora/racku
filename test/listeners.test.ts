@@ -165,7 +165,8 @@ async function loop(url: URL, fresh: boolean, done: Promise<unknown>) {
 }
 
 describe("listeners", () => {
-  test("README.md: a device serves HTTP on a listener of its own, on 127.0.0.1 by default", async () => {
+  // @doc docs/guides/listeners.md#opening-a-listener
+  test("a device serves HTTP on a listener of its own, on 127.0.0.1 by default", async () => {
     const { running, rec } = await startRack(listenerRack());
     const url = await urlOf(running);
     expect(url.hostname).toBe("127.0.0.1");
@@ -184,7 +185,8 @@ describe("listeners", () => {
     );
   });
 
-  test("README.md: routes, static responses, methods, and an error handler serve as in Bun", async () => {
+  // @doc docs/guides/listeners.md#opening-a-listener
+  test("routes, static responses, methods, and an error handler serve as in Bun", async () => {
     const { running } = await startRack(listenerRack());
     const url = await urlOf(running);
     expect(await text(new URL("/route/abc", url))).toBe("v1 route abc");
@@ -195,7 +197,8 @@ describe("listeners", () => {
     expect(await text(new URL("/ip", url))).toBe("127.0.0.1");
   });
 
-  test("README.md: reload() replaces the handlers and the routes, and open WebSockets stay", async () => {
+  // @doc docs/guides/listeners.md#opening-a-listener
+  test("reload() replaces the handlers and the routes, and open WebSockets stay", async () => {
     const { running } = await startRack(listenerRack());
     const url = await urlOf(running);
     const socket = await socketTo(url);
@@ -207,7 +210,8 @@ describe("listeners", () => {
     await waitFor(() => socket.messages.some((m) => /^v2:\w+ after$/.test(m)));
   });
 
-  test("README.md: idleTimeout cuts a whole exchange, and timeout() lifts it for one request", async () => {
+  // @doc docs/guides/listeners.md#opening-a-listener
+  test("idleTimeout cuts a whole exchange, and timeout() lifts it for one request", async () => {
     const { running } = await startRack(listenerRack({ idleTimeout: 1 }));
     const url = await urlOf(running);
     const [cut, lifted] = await Promise.all([
@@ -221,12 +225,15 @@ describe("listeners", () => {
     expect(lifted).toMatch(/ long$/);
   }, 15_000);
 
-  test("README.md: ctx.serve can be called in powerOn only", async () => {
+  // @doc docs/guides/listeners.md#swaps-and-faults
+  // @doc docs/guides/devices.md#the-context
+  test("ctx.serve can be called in powerOn only", async () => {
     const { running } = await startRack(listenerRack({ lateServe: true }));
     expect((await stateOf(running)).label).toBe("v1 RACK_HOOK_FAILED");
   });
 
-  test("README.md: a hot swap keeps serving, finishes requests in flight, and closes WebSockets with 1012", async () => {
+  // @doc docs/guides/listeners.md#swaps-and-faults
+  test("a hot swap keeps serving, finishes requests in flight, and closes WebSockets with 1012", async () => {
     const { running, rec } = await startRack(listenerRack());
     const url = await urlOf(running);
     const before = (await text(new URL("/who", url))).split(" ")[0];
@@ -254,7 +261,8 @@ describe("listeners", () => {
     );
   });
 
-  test("README.md: requests during a state handover wait for the new instance and see the restored state", async () => {
+  // @doc docs/guides/listeners.md#swaps-and-faults
+  test("requests during a state handover wait for the new instance and see the restored state", async () => {
     // Bun's idle timeout, 4 s at the least, would cut a request that waits longer.
     const { running, rec } = await startRack(
       listenerRack({ snapshotMs: 5_000, idleTimeout: 1 }, "./devices/listener-state.ts"),
@@ -271,7 +279,8 @@ describe("listeners", () => {
     expect(answer).toMatch(/^v1:\w+ 4$/);
   }, 15_000);
 
-  test("README.md: a response that streams on the old instance doesn't hold a state handover", async () => {
+  // @doc docs/guides/listeners.md#swaps-and-faults
+  test("a response that streams on the old instance doesn't hold a state handover", async () => {
     const { running } = await startRack(listenerRack({}, "./devices/listener-state.ts"));
     const url = await urlOf(running, "listener-state");
     const old = (await text(new URL("/who", url))).split(" ")[0];
@@ -324,7 +333,8 @@ describe("listeners", () => {
   }
 
   for (const how of ["restart", "cold swap"]) {
-    test(`README.md: a ${how} refuses connections between the stop and the start, and listens on the same port again`, async () => {
+    // @doc docs/guides/listeners.md#swaps-and-faults
+    test(`a ${how} refuses connections between the stop and the start, and listens on the same port again`, async () => {
       const file = how === "restart" ? "./devices/listener.ts" : "./devices/listener-cold.ts";
       const { running, rec } = await startRack(listenerRack({}, file));
       const url = await urlOf(running);
@@ -342,7 +352,8 @@ describe("listeners", () => {
     });
   }
 
-  test("README.md: an unplug and stop() close the WebSockets with 1001", async () => {
+  // @doc docs/guides/listeners.md#swaps-and-faults
+  test("an unplug and stop() close the WebSockets with 1001", async () => {
     const { running } = await startRack({
       slots: { 1: slot("./devices/listener.ts"), 3: slot("./devices/listener-state.ts") },
     });
@@ -354,7 +365,8 @@ describe("listeners", () => {
     expect(await first.closed).toBe(1001);
   });
 
-  test("README.md: a crash and a watchdog bite end the connections, and the reset listens on the same port", async () => {
+  // @doc docs/guides/listeners.md#swaps-and-faults
+  test("a crash and a watchdog bite end the connections, and the reset listens on the same port", async () => {
     const { running, rec } = await startRack(listenerRack(), { watchdog: 1_000 });
     const url = await urlOf(running);
     const old = (await text(new URL("/who", url))).split(" ")[0];
@@ -383,7 +395,8 @@ describe("listeners", () => {
     }, 10_000);
   }, 20_000);
 
-  test("README.md: a listener on port 0 keeps its port through swaps, restarts, resets, and fallbacks", async () => {
+  // @doc docs/guides/listeners.md#swaps-and-faults
+  test("a listener on port 0 keeps its port through swaps, restarts, resets, and fallbacks", async () => {
     const { running } = await startRack(listenerRack({ port: 0 }));
     const url = (await urlOf(running)).href;
     await running.swap("listener");
@@ -405,7 +418,8 @@ describe("listeners", () => {
     expect((await urlOf(running)).href).toBe(url);
   }, 20_000);
 
-  test("README.md: a thread stuck in native code keeps its port, and status() lists its listeners", async () => {
+  // @doc docs/guides/listeners.md#swaps-and-faults
+  test("a thread stuck in native code keeps its port, and status() lists its listeners", async () => {
     const dir = await mkdtemp(join(tmpdir(), "rack42u-test-"));
     const pipe = await blockingPipe(dir);
     try {
@@ -438,8 +452,9 @@ describe("listeners", () => {
   }, 30_000);
 });
 
+// @doc docs/guides/listeners.md#conflicts
 describe("listener conflicts", () => {
-  test("README.md: two devices on one port fail with RACK_HOOK_FAILED and name the holder", async () => {
+  test("two devices on one port fail with RACK_HOOK_FAILED and name the holder", async () => {
     const port = await freePort();
     const error = await errorOf(
       startRack({
@@ -453,7 +468,7 @@ describe("listener conflicts", () => {
     expect(error.data).toMatchObject({ listener: `127.0.0.1:${port}`, holder: "listener" });
   });
 
-  test("README.md: one port on two hostnames conflicts in one rack", async () => {
+  test("one port on two hostnames conflicts in one rack", async () => {
     const port = await freePort();
     const error = await errorOf(
       startRack({
@@ -467,7 +482,7 @@ describe("listener conflicts", () => {
   });
 
   for (const reusePort of [false, true]) {
-    test(`README.md: a port that another process holds ${reusePort ? "with" : "without"} reusePort fails with the holder "another process"`, async () => {
+    test(`a port that another process holds ${reusePort ? "with" : "without"} reusePort fails with the holder "another process"`, async () => {
       const port = await freePort();
       const other = Bun.serve({
         hostname: "127.0.0.1",
@@ -489,7 +504,7 @@ describe("listener conflicts", () => {
     });
   }
 
-  test("README.md: a second rack on the same port is refused", async () => {
+  test("a second rack on the same port is refused", async () => {
     const port = await freePort();
     await startRack(listenerRack({ port }));
     const second = start(rack("second", listenerRack({ port })), {
@@ -499,7 +514,8 @@ describe("listener conflicts", () => {
     expect((await errorOf(second)).data).toMatchObject({ holder: "another process" });
   });
 
-  test("README.md: a device that catches a rejected serve() still fails its powerOn", async () => {
+  // @doc docs/guides/listeners.md#swaps-and-faults
+  test("a device that catches a rejected serve() still fails its powerOn", async () => {
     const port = await freePort();
     const other = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response() });
     try {
@@ -512,8 +528,9 @@ describe("listener conflicts", () => {
   });
 });
 
+// @doc docs/guides/listeners.md#opening-a-listener
 describe("listener defaults and limits", () => {
-  test("README.md: a loopback listener answers 403 for another host, WebSocket upgrades included", async () => {
+  test("a loopback listener answers 403 for another host, WebSocket upgrades included", async () => {
     const { running } = await startRack(listenerRack({ allowedHosts: ["app.test"] }));
     const { port } = await urlOf(running);
     const status = (host: string, path = "/who", extra: string[] = []) =>
@@ -536,7 +553,7 @@ describe("listener defaults and limits", () => {
     }
   });
 
-  test("README.md: a listener on 0.0.0.0 serves any host", async () => {
+  test("a listener on 0.0.0.0 serves any host", async () => {
     const { running } = await startRack(listenerRack({ hostname: "0.0.0.0" }));
     const { port } = await urlOf(running);
     expect(
@@ -548,7 +565,7 @@ describe("listener defaults and limits", () => {
     ).toStartWith("HTTP/1.1 200");
   });
 
-  test("README.md: a body over 1 MiB gets 413", async () => {
+  test("a body over 1 MiB gets 413", async () => {
     const { running } = await startRack(listenerRack());
     const { port } = await urlOf(running);
     const lines = (length: number) => [
@@ -564,14 +581,14 @@ describe("listener defaults and limits", () => {
     ).toBe(String(512 * 1024));
   });
 
-  test("README.md: a WebSocket message over 1 MiB closes the WebSocket with 1009", async () => {
+  test("a WebSocket message over 1 MiB closes the WebSocket with 1009", async () => {
     const { running } = await startRack(listenerRack());
     const socket = await socketTo(await urlOf(running));
     socket.ws.send(new Uint8Array(1.5 * 1024 * 1024));
     expect(await socket.closed).toBe(1009);
   });
 
-  test("README.md: a client that doesn't read is closed with 1013 once 1 MiB is unsent", async () => {
+  test("a client that doesn't read is closed with 1013 once 1 MiB is unsent", async () => {
     const { running } = await startRack(listenerRack());
     const { port } = await urlOf(running);
     const client = await new Promise<Socket>((resolve, reject) => {
@@ -611,7 +628,7 @@ describe("listener defaults and limits", () => {
     }
   });
 
-  test("README.md: an idle keep-alive connection closes after idleTimeout, within Bun's steps of 4 s", async () => {
+  test("an idle keep-alive connection closes after idleTimeout, within Bun's steps of 4 s", async () => {
     const { running } = await startRack(listenerRack({ idleTimeout: 1 }));
     const { port } = await urlOf(running);
     const started = performance.now();
@@ -629,7 +646,8 @@ describe("listener defaults and limits", () => {
 });
 
 describe("listener certificates", () => {
-  test("README.md: setTls() gives new connections the new certificate, and keeps the old ones open", async () => {
+  // @doc docs/guides/listeners.md#certificates
+  test("setTls() gives new connections the new certificate, and keeps the old ones open", async () => {
     const { running, rec } = await startRack(listenerRack({ tls: ONE }));
     const url = await urlOf(running);
     const port = Number(url.port);
@@ -660,7 +678,8 @@ describe("listener certificates", () => {
     expect(after.ws.readyState).toBe(WebSocket.OPEN);
   });
 
-  test("README.md: publish() reaches the WebSockets on both servers of a listener", async () => {
+  // @doc docs/guides/listeners.md#certificates
+  test("publish() reaches the WebSockets on both servers of a listener", async () => {
     const { running } = await startRack(listenerRack({ tls: ONE }));
     const url = await urlOf(running);
     const before = await socketTo(url);
@@ -670,7 +689,8 @@ describe("listener certificates", () => {
     await waitFor(() => before.messages.includes("hello") && after.messages.includes("hello"));
   });
 
-  test("README.md: with a list of certificates, a listener picks one by server name", async () => {
+  // @doc docs/guides/listeners.md#certificates
+  test("with a list of certificates, a listener picks one by server name", async () => {
     const { running } = await startRack(
       listenerRack({
         tls: [
@@ -685,7 +705,8 @@ describe("listener certificates", () => {
     expect(await certificateOf(port, "other.test")).toBe("one.test");
   });
 
-  test("README.md: an instance has at most 16 listeners", async () => {
+  // @doc docs/guides/listeners.md#swaps-and-faults
+  test("an instance has at most 16 listeners", async () => {
     const more = Array.from({ length: 16 }, () => ({ port: 0 }));
     const error = await errorOf(startRack(listenerRack({ more })));
     expect([error.code, error.message]).toEqual([
@@ -695,14 +716,16 @@ describe("listener certificates", () => {
     await startRack(listenerRack({ more: more.slice(1) }));
   });
 
-  test("README.md: a certificate that doesn't load fails powerOn", async () => {
+  // @doc docs/guides/listeners.md#certificates
+  test("a certificate that doesn't load fails powerOn", async () => {
     const error = await errorOf(startRack(listenerRack({ tls: { cert: ONE.cert, key: TWO.key } })));
     expect(error.code).toBe("RACK_HOOK_FAILED");
   });
 });
 
+// @doc docs/guides/listeners.md#observation
 describe("listener observation", () => {
-  test("README.md: status() reports the requests in flight and the open WebSockets", async () => {
+  test("status() reports the requests in flight and the open WebSockets", async () => {
     const { running } = await startRack(listenerRack());
     const url = await urlOf(running);
     const socket = await socketTo(url);
@@ -714,7 +737,7 @@ describe("listener observation", () => {
     await waitFor(() => statusOf(running).listeners[0]?.webSockets === 0);
   });
 
-  test("README.md: the log reports listener closed when a listener stops for good", async () => {
+  test("the log reports listener closed when a listener stops for good", async () => {
     const { running, rec } = await startRack({
       slots: { 1: slot("./devices/listener.ts"), 3: slot("./devices/listener-state.ts") },
     });
@@ -731,6 +754,48 @@ describe("listener observation", () => {
 });
 
 // @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#tests
+
+/** Sends "ping" to a TCP echo server, and resolves with what comes back. */
+function echo(port: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    Bun.connect({
+      hostname: "127.0.0.1",
+      port,
+      socket: {
+        open(socket) {
+          socket.write("ping");
+        },
+        data(socket, data) {
+          socket.end();
+          resolve(new TextDecoder().decode(data));
+        },
+        error(_socket, error) {
+          reject(error);
+        },
+      },
+    }).catch(reject);
+  });
+}
+
+// @doc docs/guides/listeners.md#other-sockets
+describe("other sockets", () => {
+  test("a socket that a device opens with Bun.listen closes with its instance, and the rack doesn't hand it over", async () => {
+    const { running } = await startRack({ slots: { 1: slot("./devices/raw-socket.ts") } });
+    const port = (await running.call("raw-socket.raw", "port", undefined)) as number;
+    expect(await echo(port)).toBe("ping");
+    expect(statusOf(running, "raw-socket").listeners).toEqual([]);
+
+    await running.swap("raw-socket");
+    const next = (await running.call("raw-socket.raw", "port", undefined)) as number;
+    expect(next).not.toBe(port);
+    expect(await echo(next)).toBe("ping");
+    expect(statusOf(running, "raw-socket").listeners).toEqual([]);
+    // The old instance's server closed with its Worker; nothing moved it to the new one.
+    await waitFor(async () => (await echo(port).catch(() => "refused")) === "refused");
+  });
+});
+
+// @doc docs/guides/listeners.md#bodies-in-memory
 describe("wholeResponse", () => {
   /** The head of a response, in lowercase, as a client gets it. */
   const headOf = async (port: number, method: string, path: string) =>
@@ -742,7 +807,7 @@ describe("wholeResponse", () => {
       ])
     ).toLowerCase();
 
-  test("README.md: a body in memory keeps its Content-Length at every size, from a handler that answers after an await", async () => {
+  test("a body in memory keeps its Content-Length at every size, from a handler that answers after an await", async () => {
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -804,7 +869,7 @@ describe("wholeResponse", () => {
     }
   });
 
-  test("README.md: a device that answers with ctx.serve after an await keeps its Content-Length", async () => {
+  test("a device that answers with ctx.serve after an await keeps its Content-Length", async () => {
     const { running } = await startRack(listenerRack());
     const url = await urlOf(running);
     const head = await headOf(Number(url.port), "GET", "/whole?size=20000");

@@ -56,6 +56,9 @@ async function greeting(url: string): Promise<string> {
 }
 
 describe("rack start", () => {
+  // @doc docs/guides/running.md#the-rack-command
+  // @doc docs/guides/running.md#windows
+  // @doc docs/reference/cli.md#commands
   test("starts the rack in rack.ts, serves the panel, and shuts down in order on SIGINT", async () => {
     const { dir } = await app();
     const cli = run(["start"], dir);
@@ -85,7 +88,7 @@ describe("rack start", () => {
   // README.md, "Running a rack" and "Windows". Only Windows sends SIGBREAK.
   // @decision .agents/decisions/261118_015204-windows.md#changes-to-the-rack
   test.skipIf(!WINDOWS)(
-    "README.md: on Windows, Ctrl-Break stops rack start and rack dev in order",
+    "on Windows, Ctrl-Break stops rack start and rack dev in order",
     async () => {
       const { dir } = await app();
       for (const command of ["start", "dev"]) {
@@ -98,6 +101,7 @@ describe("rack start", () => {
     },
   );
 
+  // @doc docs/reference/cli.md#exit-codes
   test("a second signal during shutdown exits at once with code 1", async () => {
     const created = await app(`import { rack, slot } from "rack42u";
 export default rack("slow", {
@@ -114,6 +118,7 @@ export default rack("slow", {
     expect(Date.now() - startedAt).toBeLessThan(4_000);
   });
 
+  // @doc docs/reference/cli.md#exit-codes
   test("exits with code 1 when the rack fails to start", async () => {
     const created = await app(`import { rack, slot } from "rack42u";
 export default rack("broken", { slots: { 1: slot("./devices/missing.ts") } });
@@ -123,6 +128,7 @@ export default rack("broken", { slots: { 1: slot("./devices/missing.ts") } });
     expect(cli.output).toContain("rack: RACK_MANIFEST:");
   });
 
+  // @doc docs/reference/cli.md#exit-codes
   test("exits with code 1 when the manifest cannot be loaded", async () => {
     const { dir } = await app();
     const cli = run(["start", "nowhere.ts"], dir);
@@ -130,6 +136,7 @@ export default rack("broken", { slots: { 1: slot("./devices/missing.ts") } });
     expect(cli.output).toContain("rack: cannot load");
   });
 
+  // @doc docs/reference/cli.md#exit-codes
   test("prints usage and exits with code 2 for an unknown command", async () => {
     const { dir } = await app();
     const cli = run(["launch"], dir);
@@ -177,7 +184,9 @@ export default device({
 
 // @decision .agents/decisions/261118_173838-running-under-another-program.md#tests
 describe("running under another program", () => {
-  test("README.md: with --stop-on-stdin-close, rack start and rack dev stop in order with code 0 when their input closes", async () => {
+  // @doc docs/guides/running.md#running-a-rack-from-another-program
+  // @doc docs/reference/cli.md#flags-of-rack-start-and-rack-dev
+  test("with --stop-on-stdin-close, rack start and rack dev stop in order with code 0 when their input closes", async () => {
     const { dir } = await app();
     for (const command of ["start", "dev"]) {
       const cli = run([command, "--stop-on-stdin-close"], dir);
@@ -192,7 +201,8 @@ describe("running under another program", () => {
   });
 
   // Starting a program that starts a rack takes longer than Bun's default 5 s on Windows.
-  test("README.md: a rack with --stop-on-stdin-close stops in order when the program that runs it is killed", async () => {
+  // @doc docs/guides/running.md#running-a-rack-from-another-program
+  test("a rack with --stop-on-stdin-close stops in order when the program that runs it is killed", async () => {
     const { dir } = await app();
     const cli = join(ROOT, "src", "cli.ts");
     const host = new Cli([], dir, {}, [
@@ -221,6 +231,7 @@ describe("running under another program", () => {
     }
   }, 30_000);
 
+  // @doc docs/reference/cli.md#flags-of-rack-start-and-rack-dev
   test("without --stop-on-stdin-close, closing standard input changes nothing", async () => {
     const { dir } = await app();
     const cli = new Cli(["start"], dir, {}, undefined, "pipe");
@@ -232,7 +243,9 @@ describe("running under another program", () => {
     expect(cli.process.exitCode).toBeNull();
   });
 
-  test("README.md: --log json writes each entry as one line of JSON on stdout, warnings included", async () => {
+  // @doc docs/guides/running.md#running-a-rack-from-another-program
+  // @doc docs/reference/cli.md#flags-of-rack-start-and-rack-dev
+  test("--log json writes each entry as one line of JSON on stdout, warnings included", async () => {
     const created = await app(
       MANIFEST.replace("4: httpPanel", '2: slot("./devices/noisy.ts"),\n    4: httpPanel'),
     );
@@ -275,6 +288,7 @@ describe("running under another program", () => {
     expect(entries).toContainEqual(expect.objectContaining({ message: "rack cli stopped" }));
   });
 
+  // @doc docs/reference/cli.md#exit-codes
   test("an unknown --log format is a usage error, with code 2", async () => {
     const { dir } = await app();
     const cli = run(["start", "--log", "xml"], dir);
@@ -283,7 +297,9 @@ describe("running under another program", () => {
     expect(cli.stdout).toBe("");
   });
 
-  test("README.md: a stop during a shutdown that rack ctl stop began ends it at once with code 1", async () => {
+  // @doc docs/reference/cli.md#flags-of-rack-start-and-rack-dev
+  // @doc docs/reference/cli.md#exit-codes
+  test("a stop during a shutdown that rack ctl stop began ends it at once with code 1", async () => {
     const created = await app(`import { rack, slot } from "rack42u";
 export default rack("slow", {
   slots: { 1: slot("./devices/lifecycle.ts", { config: { slowDeactivateMs: 5000 } }) },
@@ -305,8 +321,9 @@ export default rack("slow", {
 });
 
 describe("the rack bin", () => {
-  // README.md: in an app that depends on rack42u, the package's `rack` command runs the CLI.
+  // In an app that depends on rack42u, the package's `rack` command runs the CLI.
   // @decision .agents/decisions/261118_015204-windows.md#changes-to-the-repository-and-the-tests
+  // @doc README.md#try-the-example
   test("runs the CLI through what bun link writes to node_modules/.bin", async () => {
     const created = await app();
     // bun link records the package in Bun's global directory: one inside the app spares the
@@ -346,6 +363,7 @@ describe("the rack bin", () => {
   });
 });
 
+// @doc docs/guides/running.md#hot-reload-with-rack-dev
 describe("rack dev", () => {
   test("swaps a device after its file changes", async () => {
     const created = await app();
@@ -363,7 +381,8 @@ describe("rack dev", () => {
 
   // README.md, "Running a rack": rack dev applies an edited manifest without a restart.
   // @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
-  test("README.md: applies an edited manifest without a restart", async () => {
+  // @doc docs/guides/updates.md#changed-plans-and-edited-manifests
+  test("applies an edited manifest without a restart", async () => {
     const created = await app();
     const cli = run(["dev"], created.dir);
     const url = await cli.panelUrl();

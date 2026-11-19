@@ -14,6 +14,7 @@ import {
 } from "../src/errors.ts";
 
 describe("RackError", () => {
+  // @doc docs/reference/errors.md#rackerror
   test("is an Error with a code and data", () => {
     const error = new RackError("RACK_TIMEOUT", "took too long", { ms: 30_000 });
     expect(error).toBeInstanceOf(Error);

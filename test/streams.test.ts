@@ -144,9 +144,10 @@ async function deviceMetrics(running: RackHandle, device: string) {
   return entry;
 }
 
+// @doc docs/guides/data.md#streams
 describe("streams in calls", () => {
   // README.md, "Streams": a request body streams to a device and a response body streams back.
-  test("README.md: rack.call() streams an input to a device, and a result back", async () => {
+  test("rack.call() streams an input to a device, and a result back", async () => {
     const { running } = await startRack(RACK);
     const upload = new Blob([new Uint8Array(3 * MiB).fill(2)]).stream();
     const consumed = await consume(running, { bytes: upload });
@@ -166,13 +167,13 @@ describe("streams in calls", () => {
     expect(sum((await readAll(echoed as ReadableStream<Uint8Array>)).sizes)).toBe(MiB);
   });
 
-  test("README.md: a connector of another schema library declares a stream as a ReadableStream instance", async () => {
+  test("a connector of another schema library declares a stream as a ReadableStream instance", async () => {
     const { running } = await startRack({ slots: { 1: slot("./devices/zod-counter.ts") } });
     const bytes = new Blob([new Uint8Array(2 * MiB)]).stream();
     expect(await running.call("zod-counter.zod", "count", { bytes })).toBe(2 * MiB);
   });
 
-  test("README.md: a call between devices streams its input, and its result streams back", async () => {
+  test("a call between devices streams its input, and its result streams back", async () => {
     const { running } = await startRack(RACK);
     const id = await client(running, "upload", { size: 2 * MiB, chunk: 100 * KiB });
     expect(await client(running, "finished", id)).toEqual({
@@ -193,7 +194,7 @@ describe("streams in calls", () => {
     });
   });
 
-  test("README.md: a slow reader slows the source, with at most the window in flight", async () => {
+  test("a slow reader slows the source, with at most the window in flight", async () => {
     const { running } = await startRack(RACK);
     const chunk = 64 * KiB;
     const { bytes } = await produce(running, { size: 16 * MiB, chunk });
@@ -271,7 +272,7 @@ describe("streams in calls", () => {
     );
   });
 
-  test("README.md: the call's signal cancels its streams, also after the result has arrived", async () => {
+  test("the call's signal cancels its streams, also after the result has arrived", async () => {
     const { running } = await startRack(RACK);
     const controller = new AbortController();
     const { bytes } = await produce(
@@ -314,7 +315,7 @@ describe("streams in calls", () => {
     expect(junk.seen.cancelled).toBe("RACK_INVALID_INPUT");
   });
 
-  test("README.md: a stream that moves nothing for streamTimeout fails with RACK_TIMEOUT at both ends", async () => {
+  test("a stream that moves nothing for streamTimeout fails with RACK_TIMEOUT at both ends", async () => {
     const { running } = await startRack(RACK);
     const stalled = await produce(
       running,
@@ -344,7 +345,7 @@ describe("streams in calls", () => {
     expect(await client(running, "read", { id: opened })).toMatchObject({ code: "RACK_TIMEOUT" });
   });
 
-  test("README.md: a call with an input stream times out from the end of that stream", async () => {
+  test("a call with an input stream times out from the end of that stream", async () => {
     const { running } = await startRack(RACK);
     // 10 chunks 60 ms apart take longer than the timeout, which runs once they have all gone.
     const slow = await client(running, "upload", {
@@ -448,7 +449,7 @@ describe("streams in calls", () => {
     );
   });
 
-  test("README.md: the streams counters, and active and pending while a stream is open", async () => {
+  test("the streams counters, and active and pending while a stream is open", async () => {
     const { running } = await startRack(RACK);
     const opened = await client(running, "open", { args: { size: MiB, chunk: 64 * KiB } });
     await Bun.sleep(100);
@@ -507,6 +508,7 @@ describe("streams in calls", () => {
   });
 });
 
+// @doc docs/guides/data.md#streams
 describe("streams through swaps, faults, and holds", () => {
   test("a call held during a swap reads nothing of its input stream until it goes out", async () => {
     const { running, rec } = await startRack(RACK);
@@ -569,7 +571,7 @@ describe("streams through swaps, faults, and holds", () => {
     expect(await client(running, "read", { id: opened })).toMatchObject({ code: "RACK_LINK_DOWN" });
   });
 
-  test("README.md: a cold swap cuts the open streams once the calls have returned", async () => {
+  test("a cold swap cuts the open streams once the calls have returned", async () => {
     const { running } = await startRack(
       { slots: { 1: slot("./devices/streamer-cold.ts"), 3: slot("./devices/stream-client.ts") } },
       { drainTimeout: 5_000 },

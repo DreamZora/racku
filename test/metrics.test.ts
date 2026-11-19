@@ -33,8 +33,9 @@ async function device(running: RackHandle, name: string): Promise<DeviceMetrics>
   return found;
 }
 
+// @doc docs/reference/reports.md#metrics
 describe("rack.metrics()", () => {
-  test("README.md: counts the calls each device served and made, with errors by code", async () => {
+  test("counts the calls each device served and made, with errors by code", async () => {
     const { running, relay } = await pair();
     await relay("double", 21);
     await relay("fail", { code: "ORDER_NOT_FOUND", message: "no order 7" });
@@ -74,7 +75,7 @@ describe("rack.metrics()", () => {
     expect(made?.kind === "rpc" && made.timeMs > 0).toBe(true);
   });
 
-  test("README.md: timeouts and cancellations count as errors of the calls made", async () => {
+  test("timeouts and cancellations count as errors of the calls made", async () => {
     const { running, relay } = await pair();
     await relay("wait", { ms: 5_000 }, { timeout: 50 });
     await relay("wait", { ms: 5_000 }, { cancelAfter: 30 });
@@ -87,7 +88,7 @@ describe("rack.metrics()", () => {
     });
   });
 
-  test("README.md: active and pending count calls in flight, which status() counts as well", async () => {
+  test("active and pending count calls in flight, which status() counts as well", async () => {
     const { running, relay } = await pair();
     const pending = relay("wait", { ms: 300 });
     const probe = await waitFor(async () => {
@@ -110,7 +111,7 @@ describe("rack.metrics()", () => {
     expect(running.status().map((s) => s.inFlight)).toEqual([0, 0]);
   });
 
-  test("README.md: events count as emitted where they start and received where they arrive", async () => {
+  test("events count as emitted where they start and received where they arrive", async () => {
     const { running } = await pair();
     for (const n of [1, 2, 3]) await running.call("probe.probe", "ping", { n });
     await waitFor(async () => {
@@ -128,7 +129,7 @@ describe("rack.metrics()", () => {
     });
   });
 
-  test("README.md: an event emitted before the instance is installed counts as dropped", async () => {
+  test("an event emitted before the instance is installed counts as dropped", async () => {
     const app = await tempApp(["connectors.ts", "devices"], FIXTURES);
     apps.push(app);
     const source = await app.read("devices/probe.ts");
@@ -155,7 +156,8 @@ describe("rack.metrics()", () => {
   });
 
   // @decision .agents/decisions/261118_071513-http-panel-device.md#observation
-  test("README.md: calls from the HTTP panel count among the calls served, and under the panel's need for each route target", async () => {
+  // @doc docs/guides/http.md#observation
+  test("calls from the HTTP panel count among the calls served, and under the panel's need for each route target", async () => {
     const { running, rec } = await startRack({
       slots: {
         1: slot("./devices/web.ts"),
@@ -178,7 +180,7 @@ describe("rack.metrics()", () => {
     expect((await running.metrics()).outside.ports).toEqual({});
   });
 
-  test("README.md: counters restart when a device swaps or resets", async () => {
+  test("counters restart when a device swaps or resets", async () => {
     const { running, rec } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
     await running.call("probe.probe", "echo", 1);
     const before = await device(running, "probe");
@@ -195,7 +197,7 @@ describe("rack.metrics()", () => {
     expect((await device(running, "probe")).provides.probe?.echo).toMatchObject({ calls: 0 });
   });
 
-  test("README.md: a device that does not answer within hookTimeout is left out", async () => {
+  test("a device that does not answer within hookTimeout is left out", async () => {
     const { running } = await startRack(
       {
         slots: {
@@ -218,7 +220,7 @@ describe("rack.metrics()", () => {
     ]);
   });
 
-  test("README.md: resolves with no devices and no counters of calls from outside the rack after stop()", async () => {
+  test("resolves with no devices and no counters of calls from outside the rack after stop()", async () => {
     const { running } = await pair();
     await running.call("probe.probe", "echo", 1);
     await running.stop();
@@ -245,9 +247,10 @@ export default device({
 `;
 }
 
+// @doc docs/reference/reports.md#metrics
 describe("calls from outside the rack", () => {
   // README.md, "Running a rack".
-  test("README.md: metrics().outside counts the calls from outside the rack by port and member", async () => {
+  test("metrics().outside counts the calls from outside the rack by port and member", async () => {
     const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
     await running.call("probe.probe", "echo", 1);
     const failure = { code: "ORDER_NOT_FOUND", message: "no order 7" };
@@ -287,7 +290,7 @@ describe("calls from outside the rack", () => {
     expect(outside.ports["probe.probe"]?.wait?.timeMs).toBeGreaterThanOrEqual(290);
   });
 
-  test("README.md: a call from outside the rack refused at queueLimit counts under RACK_OVERLOADED", async () => {
+  test("a call from outside the rack refused at queueLimit counts under RACK_OVERLOADED", async () => {
     const { running } = await startRack(
       { slots: { 1: slot("./devices/probe.ts") } },
       { queueLimit: 1 },
@@ -303,7 +306,7 @@ describe("calls from outside the rack", () => {
     });
   });
 
-  test("README.md: calls held while their device swaps count in queued, and under RACK_TIMEOUT once their deadline passes", async () => {
+  test("calls held while their device swaps count in queued, and under RACK_TIMEOUT once their deadline passes", async () => {
     const app = await tempApp();
     apps.push(app);
     await app.write("devices/cold.ts", cold(800));
@@ -342,7 +345,7 @@ describe("calls from outside the rack", () => {
     });
   });
 
-  test("README.md: a swap that removes a member drops the member's counters", async () => {
+  test("a swap that removes a member drops the member's counters", async () => {
     const app = await tempApp();
     apps.push(app);
     const two = (members: string[]) => `import { connector, device, rpc } from "rack42u";
@@ -376,7 +379,7 @@ export default device({
     });
   });
 
-  test("README.md: a call to a faulted device counts under RACK_LINK_DOWN, and calls to no address or member count in unrouted", async () => {
+  test("a call to a faulted device counts under RACK_LINK_DOWN, and calls to no address or member count in unrouted", async () => {
     const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
     // A fourth crash within the window leaves the device faulted.
     for (let crash = 0; crash < 4; crash++) {
@@ -406,7 +409,7 @@ export default device({
     expect(outside.unrouted).toBe(3);
   });
 
-  test("README.md: the counters of calls from outside the rack last across swaps, and go away when the device is unplugged", async () => {
+  test("the counters of calls from outside the rack last across swaps, and go away when the device is unplugged", async () => {
     const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
     await running.call("probe.probe", "echo", 1);
     await running.swap("probe");

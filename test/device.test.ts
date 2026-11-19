@@ -55,7 +55,8 @@ describe("device", () => {
     expect(rejectionCode(() => device(spec as never))).toBe("RACK_MANIFEST");
   });
 
-  test("README.md: own() marks a need for a copy, and priority defaults to 0", () => {
+  // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  test("own() marks a need for a copy, and priority defaults to 0", () => {
     const def = device({
       model: "owner",
       needs: { cache: own(Store), shared: Store },
