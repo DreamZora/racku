@@ -69,3 +69,9 @@ A need without a stub, a stub of another connector, and a stub for a need the de
 - The bench writes its stub and probe device files into a directory under `.rack/bench/` in the base directory, and deletes it when it stops. `status()` lists them as `stub-<need>` and `probe`.
 - A device's [listeners](listeners.md) work as in any rack, and `status()` shows their URLs.
 - One device per bench. A test of several real devices together starts a rack.
+
+## Crashes and hangs
+
+rack42u has no way to make a device crash or hang on demand. A device crashes when its own code lets an exception or a rejection go uncaught, or calls `process.exit()`, and it hangs when its event loop stays blocked, as [Faults and overload](faults.md) describes; the bench records either in `faults`. A test reaches what follows them in two ways:
+- **Starting again without state.** `restart()` starts the device again from scratch, without its in-memory state, as the reset after a crash does. So it tests how the device gets its state back, such as from a storage device.
+- **A need that fails.** A stub throws what a crashed provider gives its callers, such as `new RackError("RACK_LINK_DOWN", …)` while the provider resets, or never settles, as a provider that hangs never answers, so that the device's call times out.

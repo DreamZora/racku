@@ -185,6 +185,7 @@ describe("the bench", () => {
   });
 
   // @doc docs/guides/testing.md#stubs
+  // @doc docs/guides/testing.md#crashes-and-hangs
   test("the device gets a stub's errors, bad output, and silence as a rack would give them", async () => {
     let aborted: unknown;
     const kv = stub(Kv, {
@@ -239,6 +240,7 @@ describe("the bench", () => {
   });
 
   // @doc docs/guides/testing.md#members-of-a-bench
+  // @doc docs/guides/testing.md#crashes-and-hangs
   test("a hot swap carries the state, a restart doesn't, and a crash resets the device", async () => {
     await using orders = await bench(ORDERS, {
       baseDir: FIXTURES,
