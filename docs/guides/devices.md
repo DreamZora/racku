@@ -49,6 +49,8 @@ export default device({
 });
 ```
 
+Each instance of a device runs in a Worker of its own, with its own copy of the device file's modules, so the file's module scope belongs to one instance, as the greeter's `greetings` does. The old and the new instance of a hot swap each have their own, and so does each device that one file makes under several names. Module scope is where the hooks share state: `snapshot` and `restore` get the context, but not what `powerOn` returned or keeps in its closures, so the state they hand over lives in module variables.
+
 A device file runs as firmware, a bundle in `.rack/firmware/`, but its `import.meta.url`, `dir`, `dirname`, `path`, and `filename` keep naming the device file, and those of a helper it imports name the helper. So a device reads a file it ships with next to its source, such as `readFileSync(new URL("./template.html", import.meta.url))`. The build rewrites only those members; `import.meta` used whole, such as when destructured, names the bundle.
 
 ## Hooks

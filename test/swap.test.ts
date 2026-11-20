@@ -62,6 +62,27 @@ describe("swap", () => {
   });
 
   // @doc docs/reference/api.md#the-rack-handle
+  // @doc docs/guides/devices.md#a-device-file
+  test("module state belongs to one instance: two devices of one file count apart", async () => {
+    const { running } = await startRack({
+      slots: {
+        1: slot("./devices/counter.ts", { name: "a" }),
+        2: slot("./devices/counter.ts", { name: "b" }),
+      },
+    });
+    const count = async (name: string) =>
+      ((await running.call(`${name}.counter`, "get", undefined)) as Count).n;
+    for (let i = 0; i < 3; i++) await running.call("a.counter", "inc", undefined);
+    await running.call("b.counter", "inc", undefined);
+    expect([await count("a"), await count("b")]).toEqual([3, 1]);
+    // The new instance of a hot swap has a module of its own, which restore fills...
+    await running.swap("a");
+    expect(await count("a")).toBe(3);
+    // ...and one that starts without a snapshot starts it anew.
+    await running.restart("a");
+    expect([await count("a"), await count("b")]).toEqual([0, 1]);
+  });
+
   test("swaps to another device file under the same name", async () => {
     const app = await fixtureApp();
     await app.write(
