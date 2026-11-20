@@ -1,6 +1,6 @@
 # Decision: A rack in one executable, which runs devices from files beside it and falls back to the ones inside
 
-Status: proposed
+Status: accepted
 
 ## Background
 
@@ -141,3 +141,7 @@ Measured on 2026-11-20 with Bun 1.4.4 on Linux x64, with probe scripts outside t
 - Documentation: a section of "Running a rack" on executables; `rack compile` and the executable's command line in the reference of the `rack` command; `packaged` in the reports; the limits; and the README's Status, without single executables in "Not supported yet".
 - Not in this decision: installers, code signing, and net-tool's sidecar; `rack dev` and `rack plan` in an executable; and updating the executable itself.
 - Follow-up: net-tool as a sidecar of its Tauri shell, with its installers, in a decision of its own.
+
+## Confirmation
+
+- The user accepted this decision on 2026-11-20, after the Agent's report pointed out three of its choices: the executable's own directory as the default base directory, outside files that replace packaged devices but add none, and no option to refuse outside files. The user's words: "Approve, and merge into main."
