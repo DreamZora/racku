@@ -41,6 +41,8 @@ test("greeter greets and remembers the last name", async () => {
 
 A need without a stub, a stub of another connector, and a stub for a need the device doesn't have fail with `RACK_MANIFEST`. Otherwise `bench()` fails as `start()` does.
 
+A test that gives the bench a base directory of its own, such as for the files that the device writes, makes it inside the app, such as in a folder that git ignores: firmware imports rack42u and the app's packages from the base directory, and a base directory outside the app fails with `RACK_MANIFEST`, whose message says so.
+
 ## Stubs
 
 `stub(connector, implementation)` takes functions for some or all of the connector's RPC members, with the arguments a port's functions get.

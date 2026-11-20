@@ -34,7 +34,7 @@ import type { ConnectorInfo } from "./connector.ts";
 import { type Control, openControl } from "./control.ts";
 import type { CallOptions } from "./device.ts";
 import { RackError, toWireError, type WireError } from "./errors.ts";
-import { buildFirmware as buildBundle, type Firmware } from "./firmware.ts";
+import { buildFirmware as buildBundle, explainMissingPackage, type Firmware } from "./firmware.ts";
 import {
   Instance,
   type InstanceHost,
@@ -1110,7 +1110,9 @@ class Rack implements InstanceHost {
       if (keep !== undefined) this.#described.set(keep, fru);
       return fru;
     } catch (error) {
-      throw new RackError("RACK_MANIFEST", `${firmware.source}: ${asRackError(error).message}`);
+      const { message } = asRackError(error);
+      const why = explainMissingPackage(message, firmware, this.#baseDir);
+      throw new RackError("RACK_MANIFEST", `${firmware.source}: ${message}${why}`);
     } finally {
       await this.#end(instance, undefined);
     }
@@ -2973,7 +2975,8 @@ class Rack implements InstanceHost {
       await this.#end(instance, name);
       const failure = asRackError(error);
       if (failure.code === "RACK_INVALID_CONFIG") throw failure;
-      throw new RackError(code, `${firmware.source}: ${failure.message}`, {
+      const why = explainMissingPackage(failure.message, firmware, this.#baseDir);
+      throw new RackError(code, `${firmware.source}: ${failure.message}${why}`, {
         cause: toWireError(failure),
       });
     }

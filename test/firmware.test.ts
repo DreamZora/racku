@@ -5,12 +5,14 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { realpathSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rack, slot, start } from "rack42u";
 import { bench } from "rack42u/bench";
-import { buildFirmware, importFirmware } from "../src/firmware.ts";
-import { FIXTURES, ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
+import { buildFirmware, explainMissingPackage, importFirmware } from "../src/firmware.ts";
+import { errorOf, FIXTURES, ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
 
 const apps: TempApp[] = [];
 afterEach(async () => {
@@ -98,6 +100,62 @@ describe("buildFirmware", () => {
     await expect(buildFirmware(source, created.dir)).rejects.toThrow(
       `firmware build failed for ${source}`,
     );
+  });
+});
+
+// @doc docs/reference/api.md#start
+// @doc docs/guides/running.md#running-a-rack-from-code
+// @doc docs/guides/testing.md#the-bench
+describe("a base directory outside the app", () => {
+  const counter = join(FIXTURES, "devices", "counter.ts");
+  const outside: string[] = [];
+  afterEach(async () => {
+    await Promise.all(outside.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+  async function outsideDir(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "rack42u-outside-"));
+    outside.push(dir);
+    return dir;
+  }
+  function expectExplained(error: { code: string; message: string }, baseDir: string): void {
+    expect(error.code).toBe("RACK_MANIFEST");
+    expect(error.message).toMatch(/Cannot find package '(rack42u|valibot)'/);
+    expect(error.message).toContain(
+      `so the base directory, ${baseDir}, must lie inside the app, below the node_modules`,
+    );
+  }
+
+  test("fails to start a rack with RACK_MANIFEST, whose message says why", async () => {
+    const baseDir = await outsideDir();
+    const manifest = rack("outside", { slots: { 1: slot(counter) } });
+    expectExplained(await errorOf(start(manifest, { baseDir, logger: () => {} })), baseDir);
+  });
+
+  test("fails to start a bench the same way", async () => {
+    const baseDir = await outsideDir();
+    expectExplained(await errorOf(bench(counter, { baseDir })), baseDir);
+  });
+
+  test("explains a missing package only when the device file finds it", () => {
+    const firmware = {
+      path: "/elsewhere/.rack/firmware/counter-0000.js",
+      url: "file:///elsewhere/.rack/firmware/counter-0000.js",
+      hash: "0000",
+      source: counter,
+    };
+    const missing = (name: string) =>
+      `Cannot find package '${name}' imported from /elsewhere/.rack/firmware/counter-0000.js`;
+    expect(explainMissingPackage(missing("valibot"), firmware, "/elsewhere")).toContain(
+      "below the node_modules that holds valibot",
+    );
+    expect(explainMissingPackage(missing("rack42u"), firmware, "/elsewhere")).toContain(
+      "below the node_modules that holds rack42u",
+    );
+    // A package that the device file can't import either is missing from the app.
+    expect(explainMissingPackage(missing("not-installed-anywhere"), firmware, "/elsewhere")).toBe(
+      "",
+    );
+    expect(explainMissingPackage("boom", firmware, "/elsewhere")).toBe("");
   });
 });
 

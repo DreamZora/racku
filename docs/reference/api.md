@@ -104,7 +104,7 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 
 | `start` option | Default | Meaning |
 |---|---|---|
-| `baseDir` | working directory | Where relative paths resolve and `.rack/` is written. |
+| `baseDir` | working directory | Where relative paths resolve and `.rack/` is written. It lies inside the app, below the `node_modules` that holds rack42u: firmware in `.rack/firmware/` imports rack42u and the app's packages from there, and one outside the app fails to load with `RACK_MANIFEST`. |
 | `logger` | one line per entry on the console | Receives every log entry. |
 | `callTimeout` | 30 000 ms | Timeout of calls that set none. |
 | `hookTimeout` | 30 000 ms | Timeout of boot, each lifecycle hook, and each `metrics()` request. |

@@ -106,6 +106,38 @@ export async function buildFirmware(source: string, baseDir: string): Promise<Fi
   return { path: entry.path, url: Bun.pathToFileURL(entry.path).href, hash, source };
 }
 
+/**
+ * Says why a bundle can't import a package that it keeps external, when the bundle's location is
+ * the cause. A bundle imports those packages from its own directory, `<baseDir>/.rack/firmware/`,
+ * so a base directory outside the app finds none of them, though the device file finds them all.
+ *
+ * Only the failure path resolves the package, from the device file's directory: the directory of
+ * the bundles is left to the Workers, whose imports work around Bun's cache of directory entries.
+ *
+ * @param message The message of the error that loading the bundle threw.
+ * @param firmware The bundle.
+ * @param baseDir The rack's base directory, which holds the bundle.
+ * @returns A clause to append to the message: `""` when the message is about something else, or
+ *   when the device file can't import the package either, as when the app lacks it. rack42u runs
+ *   this code, so an app has it.
+ */
+export function explainMissingPackage(
+  message: string,
+  firmware: Firmware,
+  baseDir: string,
+): string {
+  const name = /Cannot find package '([^']+)'/.exec(message)?.[1];
+  if (name === undefined) return "";
+  if (name !== "rack42u") {
+    try {
+      Bun.resolveSync(name, dirname(firmware.source));
+    } catch {
+      return ""; // The device file can't import it either: the app lacks the package.
+    }
+  }
+  return `; firmware imports its packages from .rack/firmware/ under the base directory, so the base directory, ${baseDir}, must lie inside the app, below the node_modules that holds ${name}`;
+}
+
 /** Attempts in all at importing a bundle that Bun reports missing while it is on disk. */
 const IMPORT_ATTEMPTS = 4;
 /** Milliseconds between two of those attempts. */
