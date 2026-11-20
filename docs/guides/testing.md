@@ -49,6 +49,7 @@ A need without a stub, a stub of another connector, and a stub for a need the de
 - `stub.calls` records each call the stub got, invalid ones included, as `{ member, input, at }`.
 - `stub.emit.<event>(payload)` emits one of the connector's events to the device. The schema validates the payload, which fails with `RACK_INVALID_OUTPUT`, and the promise resolves once the stub has emitted it.
 - Calls to a stub copy their data, and `call.transfer()` does nothing. A stream in a call's input or result crosses read whole, up to 16 MiB, and `calls` records it as its bytes, a `Uint8Array`. A larger one fails the call with `RACK_INVALID_INPUT` or `RACK_INVALID_OUTPUT`.
+- So a limit of a device above 16 MiB, such as the largest upload it takes, can't be reached through a stub. Such a device takes the limit from its configuration, so that a test on the bench sets a small one, and a test of the real limit starts a rack with the devices that the device needs, whose streams flow as [Streams](data.md#streams) describes.
 - A stub serves one running bench at a time.
 
 ## Members of a bench
