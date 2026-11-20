@@ -36,6 +36,7 @@ The documentation ships with the package, and this skill names each document by 
 - **`bun run rack …` runs `rack.ts`**, the manifest, rather than the `rack` command, and prints nothing. Run the command through the scripts of `package.json`, such as `bun run start`: `node_modules/rack42u/docs/guides/running.md#running-a-rack-from-another-program`.
 - **Every file in a scanned directory** must default-export a device; helpers go in files or folders whose names start with `_`: `node_modules/rack42u/docs/guides/racks.md#scanned-racks`.
 - **A scanned rack under `rack start`** follows its plan file, and refuses to start when the plan no longer fits; `rack plan --write` updates it: `node_modules/rack42u/docs/guides/racks.md#the-plan-file`.
+- **A rack whose devices follow a data file**, such as one device for each entry of a list, runs from a program of the app's own, which calls `reload(manifest)` when the file changes: `rack start` and `rack dev` don't read the manifest again when a file it reads changes: `node_modules/rack42u/docs/guides/running.md#a-layout-that-follows-data`.
 - **An event emitted before an instance is installed is dropped**, such as one from `powerOn` during a swap: `node_modules/rack42u/docs/guides/testing.md#members-of-a-bench`.
 - **`ctx.serve()` works in `powerOn` only**, and the listener binds once the instance goes into service: `node_modules/rack42u/docs/guides/listeners.md#swaps-and-faults`.
 - **A response body of 15 KiB or more**, from a listener's handler that answers after an `await`, goes out faster and with its `Content-Length` through `wholeResponse()`: `node_modules/rack42u/docs/guides/listeners.md#bodies-in-memory`.
@@ -59,6 +60,7 @@ The documentation ships with the package, and this skill names each document by 
 | How do I store data? | `node_modules/rack42u/docs/guides/storage.md` |
 | What happens when a device crashes, hangs, or falls behind? | `node_modules/rack42u/docs/guides/faults.md` |
 | How do swaps, reloads, fallback, and rollback work? | `node_modules/rack42u/docs/guides/updates.md` |
+| How do a running rack's devices follow data, such as one per entry of a file? | `node_modules/rack42u/docs/guides/running.md#a-layout-that-follows-data` |
 | Which exports, options, and types are there? | `node_modules/rack42u/docs/reference/api.md` |
 | Which commands, flags, and environment variables does `rack` take? | `node_modules/rack42u/docs/reference/cli.md` |
 | What does an error code mean? | `node_modules/rack42u/docs/reference/errors.md` |
