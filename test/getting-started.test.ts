@@ -229,6 +229,10 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
   });
   const skill = join(skills, "rack42u", "SKILL.md");
   expect(await Bun.file(skill).text()).toStartWith("---\nname: rack42u\n");
+  // The skill adds rack42u with the guide's command, at a tag of the agent's choice.
+  expect(await Bun.file(skill).text()).toContain(
+    `\`${command("bun add ").replace(/#v\d+\.\d+\.\d+ /, "#<tag> ")}\``,
+  );
   const { followed, lost } = await follow(app, skill);
   expect(followed).toContain("node_modules/rack42u/docs/getting-started.md");
   expect(followed).toContain("node_modules/rack42u/docs/guides/devices.md#the-context");
@@ -283,6 +287,30 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
   expect(dev.output).not.toContain("web swapped");
   expect(await dev.stop()).toBe(0);
 }, 120_000);
+
+// @doc docs/getting-started.md#add-rack42u
+test("bun add, in a directory without a package.json, changes the nearest one above it", async () => {
+  const outer = join(WORK, "outer");
+  const app = join(outer, "app");
+  const tiny = join(WORK, "tiny");
+  await mkdir(app, { recursive: true });
+  await mkdir(tiny, { recursive: true });
+  await Bun.write(join(outer, "package.json"), JSON.stringify({ name: "outer", private: true }));
+  await Bun.write(join(tiny, "package.json"), JSON.stringify({ name: "tiny", version: "1.0.0" }));
+
+  const added = await exec(
+    [process.execPath, "add", "../../tiny", `--cache-dir=${join(WORK, "cache")}`],
+    app,
+  );
+  expect({ code: added.code, output: added.code === 0 ? "" : added.output }).toEqual({
+    code: 0,
+    output: "",
+  });
+  expect(added.output.toLowerCase()).not.toContain("warn");
+  expect(await exists(join(app, "package.json"))).toBe(false);
+  const changed = await Bun.file(join(outer, "package.json")).json();
+  expect(Object.keys(changed.dependencies ?? {})).toEqual(["tiny"]);
+}, 60_000);
 
 // @doc docs/getting-started.md
 test("the files of the getting-started guide type-check", async () => {

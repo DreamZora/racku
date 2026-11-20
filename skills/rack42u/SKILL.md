@@ -11,7 +11,7 @@ The documentation ships with the package, and this skill names each document by 
 
 ## The workflow of an app
 
-1. **Add rack42u** through git, at a tag or a commit: `node_modules/rack42u/docs/getting-started.md#add-rack42u`.
+1. **Add rack42u** in the app's directory, once its `package.json` exists, through git at a tag or a commit: `bun add git+ssh://git@github.com/DreamZora/rack42u.git#<tag> valibot`. In a directory without a `package.json`, `bun add` changes the nearest one above it, another project's, without a warning. Once rack42u is installed, `node_modules/rack42u/docs/getting-started.md#add-rack42u` says more.
 2. **Define the connectors** between the devices, with a schema for every input, output, and event: `node_modules/rack42u/docs/guides/connectors.md`.
 3. **Write the devices**, one file each, which provide some connectors and need others: `node_modules/rack42u/docs/guides/devices.md`.
 4. **Mount them in a rack**, in a manifest, `rack.ts` by default: by hand in slots, or scanned from directories: `node_modules/rack42u/docs/guides/racks.md`.

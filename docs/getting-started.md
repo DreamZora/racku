@@ -6,7 +6,7 @@ You need [Bun](https://bun.sh) 1.4.4 or later, git, and access to the rack42u re
 
 ## Create the app
 
-Make a directory for the app, with a `package.json` whose scripts run the `rack` command:
+Make a directory for the app, and write this `package.json` in it, whose scripts run the `rack` command. The app needs no other file to begin with, so there's no need for `bun init`:
 
 ```json
 {
@@ -23,12 +23,13 @@ Make a directory for the app, with a `package.json` whose scripts run the `rack`
 
 ## Add rack42u
 
-rack42u isn't published to a registry; an app depends on it through git, at a tag of its repository. Add it, and valibot for the schemas:
+rack42u isn't published to a registry; an app depends on it through git, at a tag of its repository. In the app's directory, add it, and valibot for the schemas:
 
 ```sh
 bun add git+ssh://git@github.com/DreamZora/rack42u.git#v0.5.0 valibot
 ```
 
+- Run `bun add` in the app's directory, next to its `package.json`. In a directory without one, Bun adds the packages to the nearest `package.json` above it, another project's, without a warning.
 - Bun clones the repository with git, over HTTPS first and then over SSH, so git's credentials for GitHub or an SSH key with access to the repository will do. A `git+https://github.com/...` URL doesn't work for a private repository, since Bun downloads those from GitHub's API without credentials.
 - Pin a tag or a commit: until rack42u's first formal release, any version may break the API.
 - To use a local clone of rack42u instead, give its path as a URL, such as `git+file:///home/you/rack42u#v0.5.0`.
