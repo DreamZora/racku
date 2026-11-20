@@ -68,6 +68,34 @@ The first argument of every hook, `ctx`, provides:
 | `ctx.signal` | Aborts after `powerOff`. |
 | `ctx.slot`, `ctx.firmware`, `ctx.baseDir` | `{ name, u }`, the firmware hash, and the rack base directory. |
 
+A helper that takes `ctx` gives it the type `DeviceContext<Needs, Provides, Config>`, from the device's needs, provided ports, and configuration. Declared as constants, they have types to name:
+
+```ts
+// In devices/greeter.ts:
+const needs = { cache: Kv };
+const provides = { greeter: Greeter };
+const Config = v.object({ prefix: v.string() });
+
+/** The context of the greeter's hooks, for the helpers that take it. */
+type Context = DeviceContext<typeof needs, typeof provides, v.InferOutput<typeof Config>>;
+
+async function greet(ctx: Context, name: string): Promise<string> {
+  await ctx.ports.cache.set({ key: "last", value: name });
+  await ctx.emit.greeter.greeted({ name });
+  return `${ctx.config.prefix} ${name}`;
+}
+
+export default device({
+  model: "greeter",
+  needs,
+  provides,
+  config: Config,
+  powerOn: (ctx) => ({ greeter: { greet: ({ name }) => greet(ctx, name) } }),
+});
+```
+
+The state that `restore` receives is `unknown`, since an older instance gave it, which may run another version of the device: `restore` checks it with a schema, as the greeter of [A device file](#a-device-file) does.
+
 ## Background work
 
 `activate` also receives `scope`. `scope.every(ms, task)` and `scope.after(ms, task)` schedule timers that stop on `deactivate`, and each returns a function that cancels its timer; `scope.signal` aborts on `deactivate`. Errors thrown by timer tasks and event handlers are logged; they do not crash the device. `scope.watchdog(ms, name?)` arms a watchdog for a work loop, as [Hangs and watchdogs](faults.md#hangs-and-watchdogs) describes.

@@ -185,6 +185,28 @@ test("the layout program of the running guide plugs and unplugs greeters as writ
   expect(stdout.match(/greeter-fr powered on/g)).toHaveLength(1);
 }, 60_000);
 
+/** The greeter of "The context", whose helper takes a `DeviceContext`, as a whole device file. */
+function typedGreeter(): string {
+  const guide = GUIDES.find(({ name }) => name === "devices.md")?.text ?? "";
+  const code = /```ts\n\/\/ In devices\/greeter\.ts:\n([\s\S]*?)```/.exec(guide)?.[1];
+  if (code === undefined) throw new Error("the devices guide has no greeter with a typed helper");
+  return [
+    'import { type DeviceContext, device } from "rack42u";',
+    'import { Kv } from "rack42u/std";',
+    'import * as v from "valibot";',
+    'import { Greeter } from "../connectors.ts";',
+    "",
+    code,
+  ].join("\n");
+}
+
+// @doc docs/guides/devices.md#the-context
+test("the greeter whose helper takes a DeviceContext type-checks", async () => {
+  const sources = files();
+  sources.set("devices/greeter.ts", typedGreeter());
+  expect(await typecheck(sources)).toBe("");
+}, 60_000);
+
 /** The chat room of the HTTP panel guide, in a device file of its own. */
 function chatRoom(): string {
   const guide = GUIDES.find(({ name }) => name === "http.md")?.text ?? "";
