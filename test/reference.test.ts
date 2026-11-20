@@ -220,9 +220,11 @@ test("the reference of the rack command lists every command, flag, and operation
   expect(listedFlags("Flags of rack plan")).toEqual(flagsOf("plan"));
   expect(listedFlags("Flags of rack ctl")).toEqual(flagsOf("ctl"));
 
-  const body = source.slice(
-    source.indexOf("function ctlArgs"),
-    source.indexOf("default:", source.indexOf("function ctlArgs")),
+  // The operations of rack ctl are in commands.ts, which an executable will share.
+  const shared = await read("src/commands.ts");
+  const body = shared.slice(
+    shared.indexOf("function ctlArgs"),
+    shared.indexOf("default:", shared.indexOf("function ctlArgs")),
   );
   const operations = [...body.matchAll(/case "(\w+)":/g)].map((match) => match[1] ?? "").sort();
   const listedOperations = rows(section("Operations of rack ctl"), "| Operation | Runs |").map(
