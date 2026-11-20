@@ -1,62 +1,143 @@
 {
   "issues": [
     {
-      "title": "Adding devices to a running rack from the app has no documented recipe",
+      "title": "bun add of #HEAD leaves #HEAD in package.json and the docs don't say how to pin the commit",
       "kind": "documentation",
-      "apps": ["watcher"],
-      "commit": "fe584eb1318282dcf4a19ab463ef08e71881ad0a",
-      "doing": "Finding how a URL added to watch.json while the app runs gets a checker of its own, without restarting the others",
-      "happened": "The docs show plug/unplug in the handle table and say reload(manifest) moves a running rack to a new layout, but not how an app built on rack start does this (a device cannot reach the handle). I concluded the app needs its own main.ts that calls start() and reload(manifest), with stable slot numbers per URL and a size large enough. No guide shows that.",
-      "expected": "A guide section on a rack whose set of devices changes while it runs: who calls plug or reload, how slot numbers and names stay stable, how many slots there are",
+      "apps": ["links", "chat", "watcher"],
+      "commit": "6c958991d3f135c41977795751f09e773615902d",
+      "doing": "Adding rack42u as the instructions say: bun add git+file://<repository>#HEAD",
+      "happened": "links: package.json got \"rack42u\": \"git+file:///...rack42u#HEAD\"; the commit shows only in bun's output. chat: the skill says bun add git+ssh://...#<tag>, the trial uses git+file://<repo>#HEAD; Bun saved #HEAD in package.json, which had to be edited to the commit by hand. watcher: bun add --cwd <app> git+file:///…/rack42u#HEAD valibot -> package.json got \"rack42u\": \"git+file:///home/zmmfly/prjs/rack42u#HEAD\"; the commit appears only in the output.",
+      "expected": "The resolved commit pinned automatically, or the documentation saying that Bun keeps the typed ref and how to pin a commit",
       "fellShort": "documentation",
-      "where": "Racks and Running a rack: 'Running a rack from code' shows only a static manifest; the 42U default and the size option appear only in Concepts and in a type row of the API table; the API table has one line on reload(manifest?)",
-      "workaround": "main.ts polls watch.json, builds a new placed manifest (size 200, checker in slot n, name checker-<slot>) and calls running.reload(manifest); unchanged checkers kept their firmware. Did not need to read source, only grepped once for the size check.",
-      "readSource": false,
-      "cost": "slowed",
-      "sources": [
-        { "app": "watcher", "title": "Adding devices to a running rack from the app has no documented recipe" }
-      ]
-    },
-    {
-      "title": "status() is async and crashes is a number, not stated where looked",
-      "kind": "documentation",
-      "apps": ["watcher"],
-      "commit": "fe584eb1318282dcf4a19ab463ef08e71881ad0a",
-      "doing": "Reading status() in check.ts to prove a checker crashed",
-      "happened": "The API table lists status() without saying it returns a promise; Reports says crashes is 'the crashes within the last 60 seconds', which could be a list. A probe (scratch/probe.ts) showed a promise of an array with crashes: 0.",
-      "expected": "Return types spelled out (Promise<SlotStatus[]>, crashes: number)",
-      "fellShort": "documentation",
-      "where": "API, 'The rack handle'; Reports, status() table",
-      "workaround": "Ran a probe and printed the JSON; no source read",
+      "where": "getting-started.md#add-rack42u says to pin a tag or commit but gives no way to get the commit into package.json, and does not say that Bun keeps the typed ref",
+      "workaround": "Edited package.json by hand with the commit Bun reported. Did not read source.",
       "readSource": false,
       "cost": "minor",
       "sources": [
-        { "app": "watcher", "title": "status() is async and crashes is a number, not stated where looked" }
+        { "app": "links", "title": "`bun add ...#HEAD` leaves #HEAD in package.json" },
+        { "app": "chat", "title": "The skill's install command does not match the trial's" },
+        { "app": "watcher", "title": "bun add writes #HEAD into package.json" }
       ]
     },
     {
-      "title": "Hang and crash need a cause from inside the device",
+      "title": "Per-instance in-memory state must be module-level for snapshot/restore, and the docs don't say why",
       "kind": "documentation",
-      "apps": ["watcher"],
-      "commit": "fe584eb1318282dcf4a19ab463ef08e71881ad0a",
-      "doing": "Making check.ts cause a hang and a crash of a checker through what a test server answers",
-      "happened": "Nothing in the docs says how a test provokes either. A throw inside setTimeout crashes the device ('checker-7 crashed: exited with code 1'); an endless for(;;) is bitten by the event-loop watchdog after 10 s (12.4 s to recover). A checker that hangs after every reset would reach the crash limit and be faulted, so the test server hangs only once. The chaos hook behind WATCHER_CHAOS is test code in a production device.",
-      "expected": "A documented way to provoke a crash or a hang in a device on the bench or in a test rack",
+      "apps": ["chat", "watcher"],
+      "commit": "6c958991d3f135c41977795751f09e773615902d",
+      "doing": "chat: handing the sockets to the new instance (handler.list() in snapshot, handler.restore() in restore). watcher: keeping a checker's last result and the store's reports across a hot swap.",
+      "happened": "chat: snapshot and restore get no access to what powerOn built, so the handler and the history map live in module variables (let handler). watcher: snapshot/restore can't reach closures made in powerOn; the agent first wrote an awkward indirection before using module-level variables.",
+      "expected": "Documentation saying that module-level state is the pattern and why it is safe (one Worker per instance), or a documented place for per-instance state, such as powerOn's return value or a member of ctx",
       "fellShort": "documentation",
-      "where": "Testing a device and Faults and overload: the bench has faults but no way to cause one",
-      "workaround": "An env flag read in the device, since Workers copy process.env when they start",
+      "where": "guides/devices.md 'Hooks' and '#a-device-file' (the greeter example): module-level state is shown without saying why it is safe or that snapshot/restore cannot reach powerOn's closures",
+      "workaround": "Module-level variables; worked in the swap. Did not read source.",
       "readSource": false,
       "cost": "minor",
       "sources": [
-        { "app": "watcher", "title": "Hang and crash need a cause from inside the device" }
+        { "app": "chat", "title": "Module-level variable needed to reach the handler from snapshot" },
+        { "app": "watcher", "title": "Per-instance in-memory state must be module-level for snapshot/restore" }
+      ]
+    },
+    {
+      "title": "The rack-from-code example doesn't mention the logger option to silence the log",
+      "kind": "documentation",
+      "apps": ["chat"],
+      "commit": "6c958991d3f135c41977795751f09e773615902d",
+      "doing": "Silencing the rack's console log in check.ts",
+      "happened": "Guessed log: \"silent\", which needed `as any` and was ignored; logs still printed. The agent found logger only by grepping reference/api.md.",
+      "expected": "An obvious option, mentioned next to the start() example",
+      "fellShort": "documentation",
+      "where": "guides/running.md 'Running a rack from code' shows start(manifest, { baseDir }) and never mentions logger",
+      "workaround": "logger: () => {}",
+      "readSource": false,
+      "cost": "minor",
+      "sources": [
+        { "app": "chat", "title": "start() has no quiet option documented near the example" }
+      ]
+    },
+    {
+      "title": "No recipe for a check that changes a device with swap() while the rack runs",
+      "kind": "documentation",
+      "apps": ["chat"],
+      "commit": "6c958991d3f135c41977795751f09e773615902d",
+      "doing": "The check must change the handling device while the app runs",
+      "happened": "Docs show rack dev edits and swap(name, source?), but not whether swap(name) of an unchanged file does anything, or how a check changes a device. The agent wrote a modified copy into scratch/ and swapped to it (its relative imports must still resolve).",
+      "expected": "A recipe for tests of a hot swap",
+      "fellShort": "documentation",
+      "where": "guides/updates.md and the swap() row of reference/api.md",
+      "workaround": "Copy with a changed line, running.swap('chat','./scratch/chat-next.ts'), then running.history('chat')[0] to confirm. Did not read source.",
+      "readSource": false,
+      "cost": "minor",
+      "sources": [
+        { "app": "chat", "title": "No example of a swap that changes the file under start()" }
+      ]
+    },
+    {
+      "title": "The skill doesn't lead to the pattern for a layout that follows a data file",
+      "kind": "documentation",
+      "apps": ["watcher"],
+      "commit": "6c958991d3f135c41977795751f09e773615902d",
+      "doing": "A URL added to watch.json must get a checker without restarting the others",
+      "happened": "rack start/rack dev don't re-read the manifest when a file it reads changes. The skill's steps 4 and 6 don't mention running.md#a-layout-that-follows-data, which holds the pattern (start() + reload(manifest)).",
+      "expected": "A documented way, easy to find from the skill",
+      "fellShort": "skill",
+      "where": "The skill's steps 4 and 6; guides/running.md#a-layout-that-follows-data",
+      "workaround": "Wrote watcher.ts that runs start(), watches watch.json with fs.watch and calls reload(layout(...)); the app runs with `bun watcher.ts`. Did not read source.",
+      "readSource": false,
+      "cost": "minor",
+      "sources": [
+        { "app": "watcher", "title": "No documented watch mode for a layout that follows a data file under rack start" }
+      ]
+    },
+    {
+      "title": "The update record of a plug done by reload() has cause reload, which the docs don't say",
+      "kind": "documentation",
+      "apps": ["watcher"],
+      "commit": "6c958991d3f135c41977795751f09e773615902d",
+      "doing": "Checking via history() that only the new checker was plugged",
+      "happened": "The record was { mode: \"plug\", cause: \"reload\" }; the agent expected cause: \"plug\".",
+      "expected": "cause: \"plug\", or documentation saying which cause a plug done by reload() has",
+      "fellShort": "documentation",
+      "where": "guides/updates.md#history lists plug as a cause and as a mode without saying that a plug done by reload() has cause reload",
+      "workaround": "Checked mode instead of cause. Did not read source.",
+      "readSource": false,
+      "cost": "minor",
+      "sources": [
+        { "app": "watcher", "title": "Update record cause for a plug during reload() is reload, not plug" }
+      ]
+    },
+    {
+      "title": "A baseDir outside the app can't resolve the device's packages, and the docs and error don't say so",
+      "kind": "documentation",
+      "apps": ["files"],
+      "commit": "6c958991d3f135c41977795751f09e773615902d",
+      "doing": "Testing the device on the bench with a temporary directory in os.tmpdir() as baseDir",
+      "happened": "RackError: .../devices/files.ts: Cannot find package 'rack42u' imported from /tmp/files-test-iaMNfd/.rack/firmware/files-wrgg5nxe.js (code RACK_MANIFEST)",
+      "expected": "baseDir only says where relative paths resolve and where data goes; the docs say nothing of module resolution. Expected either that to work or the docs/error to say baseDir must lie inside the app.",
+      "fellShort": "documentation",
+      "where": "reference/api.md start options (baseDir) and guides/testing.md bench options: neither says firmware is written under <baseDir>/.rack/firmware/ and resolves imported packages from there, so baseDir must lie inside the app",
+      "workaround": "Used a temporary folder inside the app's scratch/ as baseDir; guessed the cause from the message and the firmware path. Did not read source.",
+      "readSource": false,
+      "cost": "minor",
+      "sources": [
+        { "app": "files", "title": "A bench or rack with a baseDir outside the app can't resolve the device's packages" }
       ]
     }
   ],
   "leftOut": [
     {
+      "app": "links",
+      "title": "Shell commands with redirection, mkdir, timeout, and compound commands are denied",
+      "why": "The agent ran commands outside the list that the trials CLAUDE.md allows. A matter of the trial setup and the agent's own choice, not of rack42u's skill or documentation."
+    },
+    {
+      "app": "chat",
+      "title": "Compound shell commands denied",
+      "why": "Heredocs, mkdir and for loops are outside the allowed commands; the agent's own mistake, which no rack42u skill or documentation could have prevented."
+    },
+    {
       "app": "watcher",
-      "title": "A denied command (trial setup)",
-      "why": "The agent ran a compound command ('cd ../../.. ; cat ...') and a shell heredoc, both outside the commands the trials CLAUDE.md allows. This is a trial-setup matter, not a rack42u skill or documentation gap, so no rack42u issue."
+      "title": "Some shell forms were denied",
+      "why": "cd chains, timeout, env prefixes, redirection and echo $? are outside the allowed commands; trial setup, not a rack42u gap."
     }
   ]
 }
