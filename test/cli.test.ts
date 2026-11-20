@@ -5,8 +5,10 @@
  * @decision .agents/decisions/261115_222025-p0-api-details.md#command-line
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
 import { lstat, rmdir, unlink } from "node:fs/promises";
 import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   Cli,
   FIXTURES,
@@ -416,6 +418,63 @@ describe("rack dev", () => {
       { code: "RACK_NO_ROUTE", message: "no route matches" },
     ]);
     expect(cli.output).not.toMatch(/(web|counter) swapped/);
+  });
+
+  // An edited manifest is bundled before rack dev imports it again, and keeps the import.meta of
+  // its own file, as it had when the rack started.
+  test("applies an edited manifest that reads a file next to it", async () => {
+    const manifest = (comment: string) => `import { readFileSync } from "node:fs";
+import { rack, slot } from "rack42u";
+import { httpPanel } from "rack42u/std";
+${comment}
+const routes = JSON.parse(readFileSync(new URL("./routes.json", import.meta.url), "utf8"));
+const { url, dir, dirname, path, filename } = {
+  url: import.meta.url,
+  dir: import.meta.dir,
+  dirname: import.meta.dirname,
+  path: import.meta.path,
+  filename: import.meta.filename,
+};
+console.log("import.meta", JSON.stringify({ url, dir, dirname, path, filename }));
+
+export default rack("cli", {
+  slots: {
+    1: slot("./devices/counter.ts"),
+    3: slot("./devices/web.ts"),
+    4: httpPanel({ port: 0, routes: { [routes.web]: "web.http" } }),
+  },
+});
+`;
+    const created = await app(manifest(""));
+    await created.write("routes.json", JSON.stringify({ web: "/web/*" }));
+    const cli = run(["dev"], created.dir);
+    const url = await cli.panelUrl();
+    await cli.waitFor(/watching /);
+    expect((await fetch(new URL("/web/echo", url))).status).toBe(200);
+
+    await created.write("routes.json", JSON.stringify({ web: "/web/greeting" }));
+    await created.write("rack.ts", manifest("// Edited: the routes come from routes.json."));
+    await cli.waitFor(/\[rack\] info http-panel swapped|reload failed/);
+    expect(cli.output).not.toContain("reload failed");
+    expect((await fetch(new URL("/web/echo", url))).status).toBe(404);
+    expect(await greeting(url)).toBe("hello");
+
+    // The paths of the manifest's own file, at the start and after the edit. Compared as real
+    // paths, since a temporary directory can lie behind a symlink, as on macOS.
+    const source = realpathSync(join(created.dir, "rack.ts"));
+    const here = [source, dirname(source), dirname(source), source, source];
+    const seen = [...cli.output.matchAll(/^import\.meta (.*)$/gm)].map(([, json = ""]) => {
+      const meta = JSON.parse(json) as Record<string, string>;
+      const paths = [
+        fileURLToPath(meta.url ?? ""),
+        meta.dir,
+        meta.dirname,
+        meta.path,
+        meta.filename,
+      ];
+      return paths.map((path) => realpathSync(path ?? ""));
+    });
+    expect(seen).toEqual([here, here]);
   });
 
   // @doc docs/guides/running.md#a-layout-that-follows-data

@@ -35,10 +35,16 @@ const DEPENDENCY_FIELDS = [
  *
  * @param source Absolute path of the device file.
  * @param baseDir Rack base directory; firmware must live inside the app directory.
+ * @param plugins Bun build plugins for the build, such as the one with which `rack dev` builds an
+ *   edited manifest.
  * @returns The bundle and its hash.
  * @throws Error with the build messages when the build fails.
  */
-export async function buildFirmware(source: string, baseDir: string): Promise<Firmware> {
+export async function buildFirmware(
+  source: string,
+  baseDir: string,
+  plugins: Bun.BunPlugin[] = [],
+): Promise<Firmware> {
   // Bundles keep bare imports for externals and resolve them from their own location.
   // @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
   const outdir = join(baseDir, ".rack", "firmware");
@@ -52,6 +58,7 @@ export async function buildFirmware(source: string, baseDir: string): Promise<Fi
       sourcemap: "inline",
       naming: "[name]-[hash].[ext]",
       external,
+      plugins,
     });
   } catch (error) {
     throw new Error(`firmware build failed for ${source}: ${describeBuildError(error)}`);
