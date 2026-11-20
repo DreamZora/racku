@@ -7,7 +7,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
+import { rack, slot, start } from "rack42u";
+import { httpPanel } from "rack42u/std";
+import { ROOT, type TempApp, tempApp, waitFor } from "./fixtures/app.ts";
 import { typecheck } from "./fixtures/typecheck.ts";
 
 /** The guides, in the order of their file names. */
@@ -131,3 +133,75 @@ test("the greeter app of the guides type-checks", async () => {
   sources.set("main.ts", program());
   expect(await typecheck(sources)).toBe("");
 }, 60_000);
+
+/** The chat room of the HTTP panel guide, in a device file of its own. */
+function chatRoom(): string {
+  const guide = GUIDES.find(({ name }) => name === "http.md")?.text ?? "";
+  const code = /```ts\n(powerOn\(ctx\) \{\n {2}const handler: HttpHandler[\s\S]*?)```/.exec(
+    guide,
+  )?.[1];
+  if (code === undefined) throw new Error("the HTTP panel guide has no chat room");
+  return [
+    'import { device } from "rack42u";',
+    'import { Http, type HttpHandler, httpHandler } from "rack42u/std";',
+    "",
+    'export default device({ model: "room", provides: { http: Http },',
+    code,
+    "});",
+    "",
+  ].join("\n");
+}
+
+/** A WebSocket client, once it is open, with the messages it got and the code it closed with. */
+async function member(url: string) {
+  const ws = new WebSocket(url);
+  const messages: string[] = [];
+  ws.addEventListener("message", (event) => messages.push(String(event.data)));
+  const closed = new Promise<number>((resolve) =>
+    ws.addEventListener("close", (event) => resolve(event.code)),
+  );
+  await new Promise((resolve, reject) => {
+    ws.addEventListener("open", resolve, { once: true });
+    ws.addEventListener("error", reject, { once: true });
+  });
+  /** Sends a message, and waits for it to come back, as every member of a room gets it. */
+  const say = async (text: string) => {
+    ws.send(text);
+    await waitFor(() => messages.includes(text));
+  };
+  return { ws, messages, closed, say };
+}
+
+// @doc docs/guides/http.md#websocket
+test("the chat room of the HTTP panel guide sends each message to the sender's room", async () => {
+  expect(await typecheck(new Map([["devices/room.ts", chatRoom()]]))).toBe("");
+  const app = await tempApp();
+  apps.push(app);
+  await app.write("devices/room.ts", chatRoom());
+  const port = await freePort();
+  const routes = { "/chat": "room.http" };
+  const running = await start(
+    rack("rooms", { slots: { 1: slot("./devices/room.ts"), 2: httpPanel({ port, routes }) } }),
+    { baseDir: app.dir, logger: () => {} },
+  );
+  try {
+    // Each member's own message comes back once the device knows the member.
+    const ann = await member(`ws://127.0.0.1:${port}/chat?room=a`);
+    await ann.say("ann is here");
+    const bob = await member(`ws://127.0.0.1:${port}/chat?room=a`);
+    await bob.say("bob is here");
+    const cat = await member(`ws://127.0.0.1:${port}/chat`);
+    await cat.say("cat is in the lobby");
+    await ann.say("hello, room a");
+    await waitFor(() => bob.messages.includes("hello, room a"));
+    expect(ann.messages).toEqual(["ann is here", "bob is here", "hello, room a"]);
+    expect(bob.messages).toEqual(["bob is here", "hello, room a"]);
+    expect(cat.messages).toEqual(["cat is in the lobby"]);
+
+    bob.ws.send(new Uint8Array([1, 2, 3]));
+    expect(await bob.closed).toBe(1003);
+    for (const { ws } of [ann, cat]) ws.close();
+  } finally {
+    await running.stop();
+  }
+}, 30_000);

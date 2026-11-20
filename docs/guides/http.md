@@ -107,10 +107,41 @@ powerOn: (ctx) => ({
 
 - **Upgrades.** An upgrade request reaches `fetch` like any request. `server.upgrade(request, { headers?, data?, protocol? })` accepts it, and `fetch` then returns nothing; without `protocol`, the client gets the first subprotocol it offered. Any response refuses it.
 - **Messages.** Text arrives as a string, and binary as a `Uint8Array`. Each message is a call, and a socket has at most 16 unfinished: beyond that, the panel stops reading the socket, so the client sees backpressure, and the calls start in the order the messages arrived. A failed `open` or `message` closes the socket, with 1013 for the codes that give 503, and 1011 for the others.
-- **Sockets.** Each socket has an `id`, `<panel>:<instance>:<n>`, its `data`, and `send()` and `close()`, which travel as the port's `send` and `close` events. A device can emit those events itself too, to one id or a list. Each panel takes the events for its own sockets and ignores the others, so several panels can share one port.
+- **Sockets.** Each socket has an `id`, `<panel>:<instance>:<n>`, its `data`, the value that `server.upgrade()` gave it, and `send()` and `close()`, which travel as the port's `send` and `close` events. `handler.list()` returns the sockets that the instance knows, each as `{ socket, data }`, its id and its data. A device can emit `send` and `close` itself too, to one id or a list, as the example below does. Each panel takes the events for its own sockets and ignores the others, so several panels can share one port.
 - **Swaps.** A hot swap of the device keeps its sockets open. Return `handler.list()` in the state of `snapshot`, and pass it to `handler.restore(list)` in `restore`, so that the new instance knows them. Without that, the new instance doesn't know them, and the next message of each closes it with 1011. A reset or a restart of the device loses them: their sockets close with 1011, at their next message, or at the panel's second check of its sockets, which runs every 30 s. Swapping the panel closes its WebSockets with 1012, once the messages in flight on them are handled; clients must reconnect.
 - **Limits.** A client that reads too slowly, with more than 1 MiB unsent, is closed with 1013. When the panel crashes, its clients' connections end, and each device behind it runs its `close` handler with 1006, "abnormal closure", for the panel's sockets, at its first call after 90 s without a call from that panel.
 - **Origins.** Browsers apply no CORS to WebSockets, and any web page can send requests to `127.0.0.1`. A panel on loopback refuses other `Host` names, which stops a page that points its own domain at `127.0.0.1`, but not one that uses the address itself. So a device behind a panel checks the `Origin` of WebSocket upgrades, and of requests that change state, itself.
+
+A chat room, for example, sends each message to every socket in the sender's room. The room is each socket's data, and the list of the sockets is the room's members:
+
+```ts
+powerOn(ctx) {
+  const handler: HttpHandler<{ room: string }> = httpHandler(
+    {
+      fetch(request, server) {
+        const room = new URL(request.url).searchParams.get("room") ?? "lobby";
+        if (server.upgrade(request, { data: { room } })) return;
+        return new Response("this room needs a WebSocket", { status: 426 });
+      },
+      websocket: {
+        // Each message goes to every socket in the sender's room, the sender's own included.
+        message(ws, data) {
+          if (typeof data !== "string") {
+            ws.close(1003, "this room takes text");
+            return;
+          }
+          const members = handler.list().filter((member) => member.data.room === ws.data.room);
+          return ctx.emit.http.send({ socket: members.map((member) => member.socket), data });
+        },
+      },
+    },
+    ctx.emit.http,
+  );
+  return { http: handler };
+},
+```
+
+In a hot swap, the rooms move to the new instance with the list, when `snapshot` and `restore` hand it over as **Swaps** says.
 
 ## Certificates
 
