@@ -144,8 +144,14 @@ Each step is a change of its own.
 - The README is the front page: what rack42u is, the problem, how rack42u solves it, why it is built this way, a quick start with the example of the repository, the status, the documentation, and the requirements. Its status no longer speaks in phases.
 - The reference is complete:
   - `api.md` lists every export of the three entry points, types included, in a table per topic; `cli.md` every command, flag, operation of `rack ctl`, and environment variable; `errors.md` the codes of the rack and of the standard devices; `reports.md` `status()`, `metrics()`, `history()`, and the entries of the log that programs may look for; and `limits.md` every bound, timeout, and default.
-  - `test/reference.test.ts` holds them to the code, in both directions: the exports of the entry points, the codes in `src/`, the commands, flags, and operations of `src/cli.ts`, the defaults of `start()`, and the messages of the log entries.
+  - `test/reference.test.ts` holds them to the code, in both directions: the exports of the entry points, the codes in `src/`, the commands, flags, and operations of `src/cli.ts`, the defaults of `start()`, the messages of the log entries, and the methods of the rack handle with the types they return.
   - Writing it found three claims without a test, which now have one: `rack plan` refuses `--write` with `--check`, and both for a rack placed by hand, in `test/assembly.test.ts`; and `XDG_STATE_HOME` moves the management endpoint's directory, in `test/control.test.ts`, whose check of the default directory no longer depends on the environment it runs in.
+
+- The issues that the trials of [A skill for rack42u, trial apps built by independent agents, and their problems filed as GitHub issues](261119_074252-trial-apps.md) filed on 2026-11-19 filled gaps in the documentation:
+  - getting started says to run `bun add` in the app's directory, where Bun would otherwise change another project's `package.json`, and that the app needs no `bun init`;
+  - the guides say what a caller catches from a port, how a helper types `ctx` with `DeviceContext`, the shape of the HTTP handler's socket list and how a device sends to several sockets, how a program moves a rack to a layout that follows its data, how a program runs `rack`, configures it, and changes a device while it runs, how to test a limit above what a stub takes, and what a test can do about crashes and hangs;
+  - the reference gives the rack handle's return types, and `crashes` as a count with its window.
+  - `test/guides.test.ts` runs or type-checks each new example, `test/getting-started.test.ts` shows what `bun add` and `bun run rack` do in the wrong place, and `test/cli.test.ts` what `rack ctl reload` and `rack dev` read again.
 
 ## Confirmation
 
