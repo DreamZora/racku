@@ -52,7 +52,7 @@ A device may depend only on devices in lower slots. So the rack powers devices o
 
 ## Firmware
 
-The rack builds each device file into one bundle, its firmware, with the content hash in its file name. The hash is the firmware's version: a rebuild that gives a device the same hash leaves it running, and one that gives it a new hash replaces it. The framework and the app's declared dependencies stay outside the bundle, so firmware stays small, and every device loads them from the app's `node_modules`. The rack keeps the firmware of earlier versions while it can still go back to them, as [Updates](guides/updates.md#history) describes.
+The rack builds each device file into one bundle, its firmware, with the content hash in its file name. The hash is the firmware's version: a rebuild that gives a device the same hash leaves it running, and one that gives it a new hash replaces it. The framework and the app's declared dependencies stay outside the bundle, so firmware stays small, and every device loads them from the app's `node_modules`. In the bundle, `import.meta` keeps naming each file's source, as [A device file](guides/devices.md#a-device-file) describes. The rack keeps the firmware of earlier versions while it can still go back to them, as [Updates](guides/updates.md#history) describes.
 
 ## The lifecycle
 

@@ -4,8 +4,10 @@
  *
  * @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
  * @decision .agents/decisions/261112_035943-hot-swap.md#firmware
+ * @decision .agents/decisions/261119_213017-firmware-import-meta.md
  */
 import { basename, dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 /** A built firmware bundle. */
 export interface Firmware {
@@ -18,6 +20,40 @@ export interface Firmware {
   /** Absolute path of the device file it was built from. */
   source: string;
 }
+
+/** The `import.meta` paths that a bundle would otherwise give its own location. */
+const IMPORT_META = /\bimport\.meta\.(url|dirname|dir|filename|path)\b/g;
+const LOADERS: Record<string, Bun.Loader> = { ts: "ts", tsx: "tsx", js: "js", jsx: "jsx" };
+
+/**
+ * Gives each file of a bundle the `import.meta` paths of its own source: `url`, `path`,
+ * `filename`, `dir`, and `dirname`. It rewrites those member accesses in the text, so the words
+ * `import.meta.url` in a string or a comment change too, and `import.meta` used whole, such as
+ * when destructured, keeps the bundle's.
+ *
+ * @decision .agents/decisions/261119_213017-firmware-import-meta.md#decision
+ */
+const SOURCE_IMPORT_META: Bun.BunPlugin = {
+  name: "rack42u-source-import-meta",
+  setup(build) {
+    build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
+      const dir = dirname(path);
+      const values: Record<string, string> = {
+        url: pathToFileURL(path).href,
+        path,
+        filename: path,
+        dir,
+        dirname: dir,
+      };
+      const text = await Bun.file(path).text();
+      const extension = /\.[cm]?([jt]sx?)$/.exec(path)?.[1] ?? "ts";
+      return {
+        contents: text.replace(IMPORT_META, (_match, key: string) => JSON.stringify(values[key])),
+        loader: LOADERS[extension] ?? "ts",
+      };
+    });
+  },
+};
 
 const DEPENDENCY_FIELDS = [
   "dependencies",
@@ -33,18 +69,15 @@ const DEPENDENCY_FIELDS = [
  * stay external, so they resolve through the app's `node_modules`; everything else, including
  * files reached through tsconfig path aliases, is bundled and therefore hot-reloadable.
  *
+ * Each file of the bundle keeps the `import.meta` paths of its own source, so a device reads a
+ * file next to its source as it would unbundled.
+ *
  * @param source Absolute path of the device file.
  * @param baseDir Rack base directory; firmware must live inside the app directory.
- * @param plugins Bun build plugins for the build, such as the one with which `rack dev` builds an
- *   edited manifest.
  * @returns The bundle and its hash.
  * @throws Error with the build messages when the build fails.
  */
-export async function buildFirmware(
-  source: string,
-  baseDir: string,
-  plugins: Bun.BunPlugin[] = [],
-): Promise<Firmware> {
+export async function buildFirmware(source: string, baseDir: string): Promise<Firmware> {
   // Bundles keep bare imports for externals and resolve them from their own location.
   // @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
   const outdir = join(baseDir, ".rack", "firmware");
@@ -58,7 +91,7 @@ export async function buildFirmware(
       sourcemap: "inline",
       naming: "[name]-[hash].[ext]",
       external,
-      plugins,
+      plugins: [SOURCE_IMPORT_META],
     });
   } catch (error) {
     throw new Error(`firmware build failed for ${source}: ${describeBuildError(error)}`);

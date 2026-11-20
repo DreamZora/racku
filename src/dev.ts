@@ -10,44 +10,11 @@
  * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
  */
 import { type FSWatcher, watch } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { resolve, sep } from "node:path";
 import { buildFirmware } from "./firmware.ts";
 import type { LogEntry } from "./log.ts";
 import { isRackManifest, type RackManifest } from "./manifest.ts";
 import type { RackHandle } from "./rack.ts";
-
-/** The `import.meta` paths that a bundle would otherwise give its own location. */
-const IMPORT_META = /\bimport\.meta\.(url|dirname|dir|filename|path)\b/g;
-const LOADERS: Record<string, Bun.Loader> = { ts: "ts", tsx: "tsx", js: "js", jsx: "jsx" };
-
-/**
- * Gives each file of a bundle the `import.meta` paths of its own source: `url`, `path`,
- * `filename`, `dir`, and `dirname`. It rewrites those member accesses in the text, so the words
- * `import.meta.url` in a string or a comment change too, and `import.meta` used whole, such as
- * when destructured, keeps the bundle's.
- */
-const SOURCE_IMPORT_META: Bun.BunPlugin = {
-  name: "rack42u-source-import-meta",
-  setup(build) {
-    build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
-      const dir = dirname(path);
-      const values: Record<string, string> = {
-        url: pathToFileURL(path).href,
-        path,
-        filename: path,
-        dir,
-        dirname: dir,
-      };
-      const text = await Bun.file(path).text();
-      const extension = /\.[cm]?([jt]sx?)$/.exec(path)?.[1] ?? "ts";
-      return {
-        contents: text.replace(IMPORT_META, (_match, key: string) => JSON.stringify(values[key])),
-        loader: LOADERS[extension] ?? "ts",
-      };
-    });
-  },
-};
 
 /** Milliseconds of quiet after the last change before a reload starts. */
 export const DEBOUNCE_MS = 100;
@@ -131,13 +98,13 @@ export function watchAndReload(running: RackHandle, options: WatchOptions): () =
  * Imports an edited manifest file. Bun 1.4.4 keeps returning its first copy of a module, even
  * for a URL with a new query, so the manifest is bundled like firmware: an edit gives the bundle
  * a new content hash, and with it a new module, helpers included. Each of its files keeps the
- * `import.meta` paths of its own source, as when the rack started, so a manifest that reads a
- * file next to it reads the same file again.
+ * `import.meta` paths of its own source, as firmware does, so a manifest that reads a file next
+ * to it reads the same file as when the rack started.
  *
  * @throws Error when the file does not build or does not default-export a rack().
  */
 async function importManifest(manifestPath: string, baseDir: string): Promise<RackManifest> {
-  const bundle = await buildFirmware(manifestPath, baseDir, [SOURCE_IMPORT_META]);
+  const bundle = await buildFirmware(manifestPath, baseDir);
   const manifest = ((await import(bundle.url)) as { default?: unknown }).default;
   if (!isRackManifest(manifest))
     throw new Error(`${manifestPath} does not default-export a rack()`);

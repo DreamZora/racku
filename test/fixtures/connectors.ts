@@ -427,3 +427,22 @@ export const Blobs = connector("test.blobs/v1", {
   put: rpc(v.object({ name: v.string(), bytes: stream() }), v.number()),
   get: rpc(v.string(), v.object({ size: v.number(), bytes: stream() })),
 });
+
+const ImportMetaPaths = v.object({
+  url: v.string(),
+  dir: v.string(),
+  dirname: v.string(),
+  path: v.string(),
+  filename: v.string(),
+});
+
+/**
+ * The `import.meta` paths of a device file and of a helper in a subdirectory, which firmware
+ * keeps, and a file that the device reads next to its source.
+ */
+export const Located = connector("test.located/v1", {
+  where: rpc(
+    v.undefined(),
+    v.object({ device: ImportMetaPaths, helper: ImportMetaPaths, text: v.string() }),
+  ),
+});

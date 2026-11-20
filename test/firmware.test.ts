@@ -4,7 +4,11 @@
  * @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { rack, slot, start } from "rack42u";
+import { bench } from "rack42u/bench";
 import { buildFirmware, importFirmware } from "../src/firmware.ts";
 import { FIXTURES, ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
 
@@ -191,4 +195,52 @@ describe("importFirmware", () => {
       for (const worker of workers) worker.terminate();
     }
   }, 30_000);
+});
+
+// @doc docs/guides/devices.md#a-device-file
+// @doc docs/concepts.md#firmware
+// @decision .agents/decisions/261119_213017-firmware-import-meta.md#tests
+describe("import.meta in firmware", () => {
+  type Paths = { url: string; dir: string; dirname: string; path: string; filename: string };
+  type Where = { device: Paths; helper: Paths; text: string };
+
+  /** The paths as real paths, since a temporary directory can lie behind a symlink. */
+  const real = ({ device, helper, text }: Where) => {
+    const paths = (p: Paths) =>
+      [fileURLToPath(p.url), p.dir, p.dirname, p.path, p.filename].map((path) =>
+        realpathSync(path),
+      );
+    return { device: paths(device), helper: paths(helper), text };
+  };
+  /** What a file reports when its import.meta names it: its path, its directory twice, itself. */
+  const of = (file: string) => {
+    const path = realpathSync(file);
+    return [path, dirname(path), dirname(path), path, path];
+  };
+
+  test("a device's firmware keeps the import.meta paths of its sources, on the bench, after a swap, and in a rack", async () => {
+    const created = await app();
+    const expected = {
+      device: of(join(created.dir, "devices", "located.ts")),
+      helper: of(join(created.dir, "devices", "_located", "where.ts")),
+      text: "read next to the device's source\n",
+    };
+    {
+      await using located = await bench("./devices/located.ts", { baseDir: created.dir });
+      expect(real(await located.call<Where>("located", "where", undefined))).toEqual(expected);
+      await located.swap();
+      expect(real(await located.call<Where>("located", "where", undefined))).toEqual(expected);
+    }
+    const running = await start(rack("located", { slots: { 1: slot("./devices/located.ts") } }), {
+      baseDir: created.dir,
+      logger: () => {},
+    });
+    try {
+      expect(real((await running.call("located.located", "where", undefined)) as Where)).toEqual(
+        expected,
+      );
+    } finally {
+      await running.stop();
+    }
+  });
 });

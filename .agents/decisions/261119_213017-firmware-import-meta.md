@@ -43,6 +43,12 @@ Status: accepted
 - Costs: the firmware of a file that uses those paths depends on where the app lies, and the build reads each source file through the plugin.
 - Follow-up: none.
 
+## Implementation
+
+- `SOURCE_IMPORT_META` in `src/firmware.ts`, which `buildFirmware()` passes to every build. `rack dev` builds an edited manifest with `buildFirmware()` too, in `src/dev.ts`, which lost the plugin and `buildFirmware()` the parameter that took it.
+- Tests: "import.meta in firmware" in `test/firmware.test.ts`, with the fixture device `located` and its helper `devices/_located/where.ts`, on the bench, after a hot swap, and in a rack. Without the plugin, the device's read fails with `ENOENT` in `.rack/firmware/`.
+- The documentation: "A device file" in `docs/guides/devices.md`, and "Firmware" in `docs/concepts.md`.
+
 ## Confirmation
 
 - The user approved this change on 2026-11-19, as the Agent's report put it: "A device file's `import.meta` points at its firmware bundle, not its source, so a device can't read a file next to its source. The `rack dev` fix only covered manifests. Giving device firmware the same treatment would change what firmware does, so it needs a decision." The user's words: "All approved — handle them in order."
