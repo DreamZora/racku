@@ -287,6 +287,8 @@ export default device({
   });
 
   // @doc docs/guides/racks.md#shared-instances-and-own-copies
+  // @doc docs/reference/api.md#the-rack-handle
+  // @doc docs/guides/testing.md#swaps
   test("a scanned rack refuses plug, unplug, and swap from another file, and swaps from its own", async () => {
     const app = await exampleApp();
     const { running } = await startRack(SPEC, { baseDir: app.dir });

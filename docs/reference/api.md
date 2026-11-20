@@ -130,7 +130,7 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 |---|---|---|
 | `status()` | `SlotStatus[]` | Each device's slot, height, state, firmware and known-good hashes, probation, calls in flight, recent crashes, watchdogs, stuck threads, and, for a copy, its `owner`. |
 | `call(address, method, input, options?)` | `Promise<unknown>` | Call a port from outside the rack; the promise resolves with the member's output. |
-| `swap(name, source?)` | `Promise<void>` | Replace a device now, optionally with another device file, a path relative to the base directory. The promise resolves once the new instance serves. When the swap fails, it rejects, and the device keeps its old firmware. |
+| `swap(name, source?)` | `Promise<void>` | Replace a device now: with a new build of its own file, even when that hasn't changed, or, in a rack placed by hand, with another device file, a path relative to the base directory. The promise resolves once the new instance serves. When the swap fails, it rejects, and the device keeps its old firmware. |
 | `restart(name, { cascade? })` | `Promise<ReloadResult[]>` | Stop a device and start it again from scratch; its direct consumers then reload. |
 | `reload(manifest?)` | `Promise<ReloadResult[]>` | Rebuild all firmware and replace the devices whose hash changed; with a manifest, also move to its layout. |
 | `rollback(name, { to? })` | `Promise<ReloadResult[]>` | Go back to earlier firmware that the history keeps. |

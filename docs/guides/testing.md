@@ -60,7 +60,7 @@ A need without a stub, a stub of another connector, and a stub for a need the de
 | `events` | The events the device emitted, as `{ port, event, payload, at }`. They come through the probe's Worker, so one can arrive just after the call that emitted it returns. |
 | `logs` | The rack's log entries, the device's included. |
 | `faults` | The device's crashes and watchdog bites, as `{ firmware, error, reset, at }`. |
-| `swap(source?)`, `restart()`, `reload()` | Replace the device, as the rack handle's methods do. |
+| `swap(source?)`, `restart()`, `reload()` | Replace the device, as the rack handle's methods do; see [Swaps](#swaps). |
 | `injectFault(kind)` | Make the device crash or hang on purpose, as [Crashes and hangs](#crashes-and-hangs) describes. |
 | `rack` | The rack handle, for `status()`, `metrics()`, `history()`, and the rest. |
 | `stop()` | Stop the rack and delete the bench's files; `await using` calls it at the end of the scope. |
@@ -70,6 +70,46 @@ A need without a stub, a stub of another connector, and a stub for a need the de
 - The bench writes its stub and probe device files into a directory under `.rack/bench/` in the base directory, and deletes it when it stops. `status()` lists them as `stub-<need>` and `probe`.
 - A device's [listeners](listeners.md) work as in any rack, and `status()` shows their URLs.
 - One device per bench. A test of several real devices together starts a rack.
+
+## Swaps
+
+A swap hands the device's in-memory state from its old instance to its new one, through `snapshot` and `restore`, so a test swaps the device and checks what it kept, and what changed:
+
+```ts
+// devices/greeter-swap.test.ts
+import { expect, test } from "bun:test";
+import { rm } from "node:fs/promises";
+import { bench, stub } from "rack42u/bench";
+import { Kv } from "rack42u/std";
+
+test("greeter greets on across swaps", async () => {
+  await using greeter = await bench(new URL("./greeter.ts", import.meta.url), {
+    config: { prefix: "Hello," },
+    needs: { cache: stub(Kv, { set: () => {} }) },
+  });
+
+  // The same file: a new instance, whose restore gets the old one's snapshot.
+  await greeter.swap();
+  const [swapped] = greeter.rack.history();
+  expect(swapped).toMatchObject({ mode: "hot", cause: "swap", ok: true });
+  expect(swapped?.to).toBe(swapped?.from ?? ""); // the same firmware
+
+  // A changed copy, next to the device, so that its imports resolve.
+  const next = new URL("./greeter-next.ts", import.meta.url);
+  const source = await Bun.file(new URL("./greeter.ts", import.meta.url)).text();
+  await Bun.write(next, source.replace("${name}`", "${name}!`"));
+  try {
+    await greeter.swap(next);
+    expect(await greeter.call("greeter", "greet", { name: "Ada" })).toBe("Hello, Ada!");
+  } finally {
+    await rm(next);
+  }
+});
+```
+
+- **The same file.** `swap()` replaces the device even when its file hasn't changed, so a test of the handover needs no other file. In a rack, the handle's `swap(name)` does the same.
+- **A changed device.** `swap(source)` takes another device file, such as a changed copy of the device, written next to it so that its relative imports resolve; a path is relative to the base directory. A scanned rack refuses another file with `RACK_SWAP_REJECTED`; there, a test changes the device's own file, and swaps it.
+- **What happened.** `history()` lists the swap's record first. Its `mode` and `cause` say how and why, and its `from` and `to` are the old and the new firmware hash, the same when the file didn't change, as [History](updates.md#history) describes.
 
 ## Crashes and hangs
 

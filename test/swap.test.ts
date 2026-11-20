@@ -48,11 +48,17 @@ interface Count {
 
 // @doc docs/guides/updates.md#the-swap-sequence
 describe("swap", () => {
+  // @doc docs/reference/api.md#the-rack-handle
+  // @doc docs/guides/testing.md#swaps
   test("replaces the instance and hands in-memory state over", async () => {
     const { running, rec } = await startRack({ slots: { 1: slot("./devices/counter.ts") } });
     for (let i = 0; i < 3; i++) await running.call("counter.counter", "inc", undefined);
     await running.swap("counter");
     expect(((await running.call("counter.counter", "get", undefined)) as Count).n).toBe(3);
+    // The file didn't change, and the swap replaced the instance all the same.
+    const [record] = running.history("counter");
+    expect(record).toMatchObject({ mode: "hot", cause: "swap", ok: true });
+    expect(record?.to).toBe(record?.from ?? "");
     expect(rec.events.map((e) => (e.type === "power" ? `${e.type}:${e.state}` : e.type))).toEqual([
       "power:on",
       "power:off",
