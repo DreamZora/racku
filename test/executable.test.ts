@@ -135,8 +135,13 @@ beforeAll(async () => {
   }
 }, 120_000);
 
-afterEach(async () => {
+/** Stops the executables that the test ran: Windows deletes no executable while it runs. */
+async function stopRunning(): Promise<void> {
   await Promise.all(running.splice(0).map((cli) => cli.stop()));
+}
+
+afterEach(async () => {
+  await stopRunning();
   await Promise.all(bases.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -477,6 +482,8 @@ export default rack("scanned", {
       // The executable writes no plan file.
       expect(existsSync(join(dir, "scanned.plan"))).toBe(false);
     } finally {
+      // It runs from the app's directory, which goes with it.
+      await stopRunning();
       await scanned.remove();
     }
   }, 120_000);
