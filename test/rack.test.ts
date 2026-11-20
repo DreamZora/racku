@@ -348,4 +348,17 @@ describe("device context", () => {
     await running.stop();
     expect(seen).toContain("hook");
   });
+
+  // @doc docs/reference/api.md#the-rack-handle
+  test("subscribe() returns the function that ends the subscription", async () => {
+    const { running } = await startRack({ slots: { 1: slot("./devices/lifecycle.ts") } });
+    const seen: string[] = [];
+    const unsubscribe = running.subscribe((event) => {
+      if (event.type === "log") seen.push(event.message);
+    });
+    expect(unsubscribe).toBeInstanceOf(Function);
+    unsubscribe();
+    await running.stop();
+    expect(seen).toEqual([]);
+  });
 });

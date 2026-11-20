@@ -77,6 +77,7 @@ describe("crash resets", () => {
   });
 
   // @doc docs/reference/limits.md#supervision-and-history
+  // @doc docs/reference/reports.md#status
   test("more than 3 crashes within 60 seconds mark the slot faulted until a swap succeeds", async () => {
     const { running, rec } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
     for (let n = 1; n <= 3; n++) {

@@ -4,7 +4,7 @@ A running rack reports what it does in four ways: `status()`, `metrics()`, `hist
 
 ## status()
 
-`status()` returns one entry per device, bottom slot first, of the type `SlotStatus`:
+`status()` returns one entry per device, bottom slot first, of the type `SlotStatus`. It answers at once, not with a promise:
 
 | Field | What it holds |
 |---|---|
@@ -16,7 +16,7 @@ A running rack reports what it does in four ways: `status()`, `metrics()`, `hist
 | `probationUntil` | While the installed instance is on probation, when probation ends, a millisecond timestamp. |
 | `source` | The absolute path of the device file. |
 | `inFlight` | The calls the installed instance is serving, from other devices and from outside the rack. |
-| `crashes` | The crashes within the last 60 seconds. |
+| `crashes` | How many times the device crashed within the crash window, watchdog bites included: a number. The window is 60 seconds, or four times the device's longest watchdog timeout when that is longer than 15 seconds, as [Crashes](../guides/faults.md#crashes) describes. A swap that succeeds sets it back to 0. |
 | `error` | The last failed swap or crash, as `{ code, message, data? }`. |
 | `watchdogs` | The installed instance's watchdogs, the event loop's first, each with its `name`, `timeout`, and `lastFed`. |
 | `stuck` | The threads of earlier instances that are stuck in native code, each with its `firmware`, `since`, and the `listeners` it kept. |

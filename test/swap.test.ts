@@ -74,7 +74,8 @@ describe("swap", () => {
     );
     await running.call("counter.counter", "inc", undefined);
     const before = running.status()[0]?.firmware;
-    await running.swap("counter", "./devices/counter-v2.ts");
+    // A relative path names a file of the base directory, and the promise resolves with nothing.
+    expect(await running.swap("counter", "./devices/counter-v2.ts")).toBeUndefined();
     const after = (await running.call("counter.counter", "get", undefined)) as Count;
     expect(after).toMatchObject({ n: 1, version: "v2" });
     expect(after.firmware).not.toBe(before as string);
@@ -90,6 +91,7 @@ describe("swap", () => {
     });
   });
 
+  // @doc docs/reference/api.md#the-rack-handle
   test("a failing selfTest rolls back: the old instance keeps serving and the slot is degraded", async () => {
     const app = await fixtureApp();
     const broken = (await app.read("devices/counter.ts")).replace(

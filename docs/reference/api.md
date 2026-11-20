@@ -122,21 +122,21 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 
 ### The rack handle
 
-`start()` resolves with a `RackHandle`, whose methods are these:
+`start()` resolves with a `RackHandle`, whose methods are these. `status()`, `history()`, and `subscribe()` answer at once, and the others return promises:
 
-| Method | Purpose |
-|---|---|
-| `status()` | Each device's slot, height, state, firmware and known-good hashes, probation, calls in flight, recent crashes, watchdogs, stuck threads, and, for a copy, its `owner`. |
-| `call(address, method, input, options?)` | Call a port from outside the rack. |
-| `swap(name, source?)` | Replace a device now, optionally with another device file. |
-| `restart(name, { cascade? })` | Stop a device and start it again from scratch; its direct consumers then reload. |
-| `reload(manifest?)` | Rebuild all firmware and replace the devices whose hash changed; with a manifest, also move to its layout. |
-| `rollback(name, { to? })` | Go back to earlier firmware that the history keeps. |
-| `history(name?)` | List the updates, newest first. |
-| `plug(u, slot(...))` / `unplug(name)` | Add a device to a free slot, or remove one that nothing uses. |
-| `subscribe(listener)` | Receive power, swap, fault, and log events. |
-| `metrics()` | Read each device's call and event counters, and the rack's counters of calls from outside the rack. |
-| `stop()` | Shut down from the top down. |
+| Method | Returns | Purpose |
+|---|---|---|
+| `status()` | `SlotStatus[]` | Each device's slot, height, state, firmware and known-good hashes, probation, calls in flight, recent crashes, watchdogs, stuck threads, and, for a copy, its `owner`. |
+| `call(address, method, input, options?)` | `Promise<unknown>` | Call a port from outside the rack; the promise resolves with the member's output. |
+| `swap(name, source?)` | `Promise<void>` | Replace a device now, optionally with another device file, a path relative to the base directory. The promise resolves once the new instance serves. When the swap fails, it rejects, and the device keeps its old firmware. |
+| `restart(name, { cascade? })` | `Promise<ReloadResult[]>` | Stop a device and start it again from scratch; its direct consumers then reload. |
+| `reload(manifest?)` | `Promise<ReloadResult[]>` | Rebuild all firmware and replace the devices whose hash changed; with a manifest, also move to its layout. |
+| `rollback(name, { to? })` | `Promise<ReloadResult[]>` | Go back to earlier firmware that the history keeps. |
+| `history(name?)` | `UpdateRecord[]` | List the updates, newest first. |
+| `plug(u, slot(...))` / `unplug(name)` | `Promise<void>` | Add a device to a free slot, or remove one that nothing uses. |
+| `subscribe(listener)` | `() => void` | Receive power, swap, fault, and log events, until the function it returns is called. |
+| `metrics()` | `Promise<RackMetrics>` | Read each device's call and event counters, and the rack's counters of calls from outside the rack. |
+| `stop()` | `Promise<void>` | Shut down from the top down. |
 
 The types of what the methods take and return:
 

@@ -141,6 +141,25 @@ test("the defaults of start() in the reference are the ones the code has", async
   ]);
 });
 
+// @doc docs/reference/api.md#the-rack-handle
+test("the rack handle's table lists every method of RackHandle, with the type it returns", async () => {
+  const source = await read("src/rack.ts");
+  const from = source.indexOf("export interface RackHandle {");
+  const body = source.slice(from, source.indexOf("\n}\n", from));
+  const methods: Record<string, string> = {};
+  for (const [, name = "", returns = ""] of body.matchAll(/^ {2}(\w+)\(.*\): (.+);$/gm)) {
+    methods[name] = returns;
+  }
+  expect(Object.keys(methods)).toHaveLength(12);
+
+  const api = await read("docs/reference/api.md");
+  const listed: Record<string, string> = {};
+  for (const [method = "", returns = ""] of rows(api, "| Method | Returns | Purpose |")) {
+    for (const name of names(method)) listed[name] = spans(returns).join(" ");
+  }
+  expect(listed).toEqual(methods);
+});
+
 // @doc docs/reference/errors.md#codes
 // @doc docs/reference/errors.md#codes-of-the-standard-devices
 test("the error codes reference lists every code that the rack and the standard devices raise", async () => {

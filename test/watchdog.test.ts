@@ -349,6 +349,7 @@ describe("biting", () => {
   }, 15_000);
 
   // @doc docs/guides/faults.md#crashes
+  // @doc docs/reference/reports.md#status
   test("the window of the crash limit is 60 s, or four times the longest watchdog timeout", () => {
     expect([crashWindow(0), crashWindow(10_000), crashWindow(15_000)]).toEqual([
       60_000, 60_000, 60_000,
