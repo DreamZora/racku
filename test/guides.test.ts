@@ -138,6 +138,52 @@ test("the bench example of the guides tests the greeter as written", async () =>
 });
 
 // @doc docs/guides/running.md#running-a-rack-from-code
+test("the rack's log goes to the console, unless the program's logger takes it", async () => {
+  const app = await tempApp();
+  apps.push(app);
+  const port = String(await freePort());
+  for (const [path, code] of files()) await app.write(path, code.replaceAll("3000", port));
+  /** Runs a program that starts the greeter app with more `options`, swaps it, and stops it. */
+  const run = async (options: string): Promise<string[]> => {
+    await app.write(
+      "main.ts",
+      [
+        'import { type LogEntry, start } from "rack42u";',
+        'import manifest from "./rack.ts";',
+        "const entries: LogEntry[] = [];",
+        `const running = await start(manifest, { baseDir: import.meta.dir${options} });`,
+        'await running.swap("greeter");',
+        "await running.stop();",
+        "console.log(JSON.stringify(entries.map((entry) => entry.message)));",
+      ].join("\n"),
+    );
+    const child = Bun.spawn([process.execPath, "main.ts"], {
+      cwd: app.dir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect({ code, stderr: code === 0 ? "" : stderr }).toEqual({ code: 0, stderr: "" });
+    return `${stdout}${stderr}`.trim().split("\n");
+  };
+
+  // Without a logger, each entry is a line on the console, and the program gets none.
+  const printed = await run("");
+  expect(printed.filter((line) => /^\[rack\] info greeter swapped\b/.test(line))).toHaveLength(1);
+  expect(printed.at(-1)).toBe("[]");
+  // With one, the console stays quiet, and the program has every entry.
+  const quiet = await run(", logger: (entry) => entries.push(entry)");
+  expect(quiet).toHaveLength(1);
+  const messages = JSON.parse(quiet[0] ?? "[]") as string[];
+  expect(messages).toContain("greeter swapped");
+  expect(messages.length).toBeGreaterThan(3);
+}, 60_000);
+
+// @doc docs/guides/running.md#running-a-rack-from-code
 // @doc docs/guides/running.md#a-layout-that-follows-data
 test("the greeter app of the guides type-checks", async () => {
   const sources = files();

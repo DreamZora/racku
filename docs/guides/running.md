@@ -45,6 +45,8 @@ await running.stop();
 
 [`start()`](../reference/api.md#start) takes the options, and returns the handle, that the [API reference](../reference/api.md) lists. Management operations run one at a time, in the order they were called. Firmware is written to `.rack/firmware/` under the base directory; keep `.rack/` out of version control.
 
+The rack prints its log on the console, one line per entry, unless the `logger` option of `start()` takes the entries: `logger: () => {}` keeps the console quiet, and `logger: (entry) => entries.push(entry)` collects them, so that a check can look for one, such as `<device> swapped`. [The log](../reference/reports.md#the-log) lists what the rack writes.
+
 ### A layout that follows data
 
 `reload(manifest)` moves a running rack to another manifest, as [Changed plans and edited manifests](updates.md#changed-plans-and-edited-manifests) describes, so a program can change which devices run as its data changes, such as one device for each entry of a file. The rack tells devices apart by name: a device whose name stays keeps running, even in another slot, unless its firmware or configuration changed. A new name is plugged, and a name that left is unplugged. This program runs one greeter of the guides' app for each language:
