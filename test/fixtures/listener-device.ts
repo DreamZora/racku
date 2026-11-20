@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   device,
+  fileResponse,
   type Listener,
   type ListenerHandlers,
   type ListenerTls,
@@ -133,6 +134,10 @@ function handlers(): ListenerHandlers<Data> {
           const size = Number(url.searchParams.get("size") ?? 20_000);
           return wholeResponse(request, new Uint8Array(size).fill(7));
         }
+        case "/file":
+          // The file that the query names, answered after an await.
+          await Bun.sleep(1);
+          return fileResponse(url.searchParams.get("path") ?? "");
         case "/ws": {
           const id = nextSocket++;
           if (listener.upgrade(request, { data: { id } })) return undefined;

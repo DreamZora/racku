@@ -23,10 +23,11 @@ import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   type CallContext,
   type DeviceMetrics,
+  fileResponse,
   type PortEmitter,
   type RackHandle,
   rack,
@@ -502,6 +503,74 @@ describe("http-panel streams", () => {
 
 // @doc docs/guides/http.md#configuration
 // @doc docs/guides/http.md#requests
+// @doc docs/guides/http.md#requests
+// @decision .agents/decisions/261119_205344-file-responses.md#tests
+describe("http-panel files", () => {
+  const head = async (port: number, method: string, path: string) =>
+    (
+      await rawHead(port, [
+        `${method} ${path} HTTP/1.1`,
+        `Host: 127.0.0.1:${port}`,
+        "Connection: close",
+      ])
+    ).toLowerCase();
+
+  test("a file that a device answers with goes out from disk with its Content-Length, above streamThreshold", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "rack42u-files-"));
+    try {
+      // Above httpHandler's streamThreshold of 16 MiB, where a stream would go out chunked.
+      const size = 20 * MiB;
+      const path = join(dir, "video.bin");
+      await Bun.write(path, new Uint8Array(size).fill(5));
+      const { port, get } = await panelRack();
+      const query = `/web/file?path=${encodeURIComponent(path)}`;
+      const lines = await head(port, "GET", query);
+      expect(lines).toContain(`content-length: ${size}`);
+      expect(lines).toContain("content-disposition: inline");
+      expect(lines).not.toContain("video.bin");
+      expect(lines).not.toContain("transfer-encoding");
+      expect(await head(port, "HEAD", query)).toContain(`content-length: ${size}`);
+      const body = new Uint8Array(await (await get(query)).arrayBuffer());
+      expect([body.byteLength, body.every((byte) => byte === 5)]).toEqual([size, true]);
+      expect(await head(port, "GET", `${query}&disposition=attachment`)).toContain(
+        "content-disposition: attachment",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a file that can't be read gets 502 with RACK_DEVICE_FAULT, and its path goes to the log only", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "rack42u-files-"));
+    try {
+      const { rec, get } = await panelRack();
+      const unreadable = [join(dir, "gone.bin"), dir];
+      for (const path of unreadable) {
+        const response = await get(`/web/file?path=${encodeURIComponent(path)}`);
+        expect([response.status, await response.json()]).toEqual([
+          502,
+          { code: "RACK_DEVICE_FAULT", message: "the file of the response can't be read" },
+        ]);
+      }
+      const logged = rec.logs.filter(
+        (e) => e.device === "http-panel" && e.message === "the file of a response can't be read",
+      );
+      expect(logged.map((e) => (e.data as { path: string }).path)).toEqual(unreadable);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a file body with a relative path gets 502 with RACK_INVALID_OUTPUT", async () => {
+    const { get } = await panelRack();
+    const response = await get("/web/relative-file");
+    expect([response.status, ((await response.json()) as { code: string }).code]).toEqual([
+      502,
+      "RACK_INVALID_OUTPUT",
+    ]);
+  });
+});
+
 describe("http-panel hosts", () => {
   test("a panel on loopback answers 403 for another host, and serves localhost and allowedHosts", async () => {
     const { port } = await panelRack({ allowedHosts: ["app.test"] });
@@ -1078,6 +1147,20 @@ function chatHandler() {
 const SILENCE = 90_000;
 
 describe("http/v2 and httpHandler", () => {
+  // @doc docs/guides/http.md#requests
+  // @decision .agents/decisions/261119_205344-file-responses.md#tests
+  test("httpHandler sends a file response by its absolute path, without reading the file", async () => {
+    const handler = httpHandler(() => fileResponse("no-such-file.bin"));
+    const input = { method: "GET", url: "http://rack.local/", headers: [], params: {}, body: null };
+    const output = (await handler.handle(input, CALL)) as {
+      status: number;
+      headers: [string, string][];
+      body: unknown;
+    };
+    expect([output.status, output.body]).toEqual([200, { file: resolve("no-such-file.bin") }]);
+    expect(output.headers).toContainEqual(["content-disposition", "inline"]);
+  });
+
   // @doc docs/guides/http.md#the-httpv2-connector
   test("http/v2 has the members handle, opened, message, closed, sockets, send, and close", () => {
     expect(describeConnector(Http)).toEqual({

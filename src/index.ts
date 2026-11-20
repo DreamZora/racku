@@ -59,6 +59,7 @@ export {
 } from "./errors.ts";
 export type { ListenerState, WatchdogStatus } from "./instance.ts";
 export {
+  fileResponse,
   type Listener,
   type ListenerHandler,
   type ListenerHandlers,

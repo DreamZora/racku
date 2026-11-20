@@ -78,6 +78,14 @@ Measured on 2026-11-19 with Bun 1.4.4 on Linux, with probe scripts outside the r
 - Costs: `http/v2` gains a body form that every panel must handle, and the panel opens files that devices name.
 - Follow-up: range requests, `206 Partial Content`, for file bodies, which a decision of its own can add.
 
+## Implementation
+
+- `fileResponse` in `src/listeners.ts`, exported from `rack42u` beside `wholeResponse`. It keeps the responses it makes in a `WeakMap`, which `fileOf()` reads for `httpHandler`.
+- `httpHandler` in `src/std/http.ts` answers such a response with `{ file }`, and the body of `HttpResponse` takes that form.
+- The panel, in `src/std/http-panel.ts`: `fileAnswer()` checks that the path is absolute, or answers 502 with `RACK_INVALID_OUTPUT`, and that it names a file the panel can read, or answers 502 with `RACK_DEVICE_FAULT` and logs the path; then it answers `new Response(Bun.file(path))`. Its listener's `error` handler gives the same answer for a file that Bun can't open after that check.
+- Tests: "http-panel files" in `test/http-panel.test.ts`, with a file of 20 MiB, above `streamThreshold`, its `HEAD`, `inline` and a device's own `Content-Disposition`, files that can't be read, and a relative path, beside a test of `httpHandler` alone; and "fileResponse" in `test/listeners.test.ts`. A file that goes away between the panel's check and Bun's opening of it has no test, since a test can't time it.
+- The documentation: "Files" in `docs/guides/listeners.md`, "Requests" in `docs/guides/http.md`, the API reference, and the skill's pitfalls.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-19, with the answers it proposed to its open questions: `fileResponse` in `rack42u`, beside `wholeResponse`, and `Content-Disposition: inline` by default. The user's words: "All approved — handle them in order."

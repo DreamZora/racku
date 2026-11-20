@@ -14,8 +14,10 @@
  * @decision .agents/decisions/261118_070617-panels-as-devices.md#when-listeners-listen
  * @decision .agents/decisions/261118_070617-panels-as-devices.md#port-0
  * @decision .agents/decisions/261118_070617-panels-as-devices.md#conflicts
+ * @decision .agents/decisions/261119_205344-file-responses.md#fileresponse
  */
 import { X509Certificate } from "node:crypto";
+import { resolve } from "node:path";
 import type { LogLevel } from "./device.ts";
 import { fromWireError, RackError, toWireError, type WireError } from "./errors.ts";
 import {
@@ -244,6 +246,52 @@ export function wholeResponse(
   const headers = new Headers(init?.headers as ConstructorParameters<typeof Headers>[0]);
   if (!headers.has("content-type")) headers.set("content-type", text ? TEXT_TYPE : BYTES_TYPE);
   return new Response(stream, { ...init, headers });
+}
+
+/** The absolute path of each response that {@link fileResponse} made, for `httpHandler`. */
+const files = new WeakMap<Response, string>();
+
+/**
+ * Builds a `Response` whose body is a file, which Bun sends from disk as the client reads it,
+ * with its `Content-Length` at every size, from a device's own listener or through the HTTP
+ * panel: `httpHandler` sends such a response to the panel by its path, without reading the file,
+ * and the panel answers with the file itself.
+ *
+ * Its `Content-Disposition` is `inline` unless `init` names one, so that a client doesn't see
+ * the file's name on disk, which Bun would send.
+ *
+ * @param file The file: a path, which resolves against the working directory of the process as
+ *   `Bun.file()` resolves it, or a file of `Bun.file()`.
+ * @param init The status and headers, as `new Response()` takes them.
+ * @returns The response. The file is opened only when the response goes out.
+ * @throws RackError `RACK_INVALID_INPUT` for a file without a path, such as one of
+ *   `Bun.file(fd)`.
+ * @decision .agents/decisions/261119_205344-file-responses.md#fileresponse
+ */
+export function fileResponse(file: string | Bun.BunFile, init?: ResponseInit): Response {
+  const name = typeof file === "string" ? file : file.name;
+  if (typeof name !== "string" || name === "") {
+    throw new RackError("RACK_INVALID_INPUT", "fileResponse needs a file with a path");
+  }
+  const path = resolve(name);
+  // Bun's ResponseInit types its headers apart from the Headers constructor's.
+  const headers = new Headers(init?.headers as ConstructorParameters<typeof Headers>[0]);
+  if (!headers.has("content-disposition")) headers.set("content-disposition", "inline");
+  const response = new Response(typeof file === "string" ? Bun.file(path) : file, {
+    ...init,
+    headers,
+  });
+  files.set(response, path);
+  return response;
+}
+
+/**
+ * The absolute path of a response that {@link fileResponse} made.
+ *
+ * @returns The path, or `undefined` for any other response.
+ */
+export function fileOf(response: Response): string | undefined {
+  return files.get(response);
 }
 
 /** A pair as it goes to Bun: PEM text. */

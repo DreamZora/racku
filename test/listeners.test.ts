@@ -23,7 +23,16 @@ import { connect as netConnect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect as tlsConnect } from "node:tls";
-import { type RackHandle, rack, type SlotStatus, slot, start, wholeResponse } from "rack42u";
+import {
+  fileResponse,
+  type RackError,
+  type RackHandle,
+  rack,
+  type SlotStatus,
+  slot,
+  start,
+  wholeResponse,
+} from "rack42u";
 import { errorOf, FIXTURES, useRacks, waitFor } from "./fixtures/app.ts";
 import { rawHead } from "./fixtures/net.ts";
 import { blockingPipe } from "./fixtures/pipe.ts";
@@ -886,5 +895,51 @@ describe("wholeResponse", () => {
       await (await fetch(new URL("/whole?size=20000", url))).arrayBuffer(),
     );
     expect([body.byteLength, body.every((byte) => byte === 7)]).toEqual([20_000, true]);
+  });
+});
+
+// @doc docs/guides/listeners.md#files
+// @decision .agents/decisions/261119_205344-file-responses.md#tests
+describe("fileResponse", () => {
+  const headOf = async (port: number, method: string, path: string) =>
+    (
+      await rawHead(port, [
+        `${method} ${path} HTTP/1.1`,
+        `Host: 127.0.0.1:${port}`,
+        "Connection: close",
+      ])
+    ).toLowerCase();
+
+  test("a device that answers a file through its own listener sends it from disk, with its Content-Length", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "rack42u-files-"));
+    try {
+      const size = 3 * 1024 * 1024;
+      const path = join(dir, "photo.bin");
+      await Bun.write(path, new Uint8Array(size).fill(9));
+      const { running } = await startRack(listenerRack());
+      const url = await urlOf(running);
+      const query = `/file?path=${encodeURIComponent(path)}`;
+      const head = await headOf(Number(url.port), "GET", query);
+      expect(head).toContain(`content-length: ${size}`);
+      // Bun would name the file on disk; fileResponse keeps the name private.
+      expect(head).toContain("content-disposition: inline");
+      expect(head).not.toContain("photo.bin");
+      expect(head).not.toContain("transfer-encoding");
+      expect(await headOf(Number(url.port), "HEAD", query)).toContain(`content-length: ${size}`);
+      const body = new Uint8Array(await (await fetch(new URL(query, url))).arrayBuffer());
+      expect([body.byteLength, body.every((byte) => byte === 9)]).toEqual([size, true]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fileResponse refuses a file without a path", () => {
+    let code: string | undefined;
+    try {
+      fileResponse(Bun.file(0));
+    } catch (error) {
+      code = (error as RackError).code;
+    }
+    expect(code).toBe("RACK_INVALID_INPUT");
   });
 });

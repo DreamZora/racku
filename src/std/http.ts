@@ -5,14 +5,23 @@
  *
  * @decision .agents/decisions/261118_071513-http-panel-device.md#the-connector
  * @decision .agents/decisions/261118_071513-http-panel-device.md#websocket
+ * @decision .agents/decisions/261119_205344-file-responses.md#fileresponse
  */
 import * as v from "valibot";
 import { connector, event, rpc, stream } from "../connector.ts";
 import type { CallContext, PortEmitter, PortImpl } from "../device.ts";
 import { RackError } from "../errors.ts";
+import { fileOf } from "../listeners.ts";
 
 const Header = v.tuple([v.string(), v.string()]);
 const Body = v.nullable(v.union([v.instance(Uint8Array), stream()]));
+/**
+ * A file that the panel sends from disk, by its absolute path, as `fileResponse()` answers.
+ *
+ * @decision .agents/decisions/261119_205344-file-responses.md#fileresponse
+ */
+const FileBody = v.object({ file: v.string() });
+const ResponseBody = v.nullable(v.union([v.instance(Uint8Array), stream(), FileBody]));
 const Data = v.union([v.string(), v.instance(Uint8Array)]);
 const Targets = v.union([v.string(), v.array(v.string())]);
 
@@ -35,7 +44,8 @@ export const HttpResponse = v.union([
     // `Response` accepts only these statuses.
     status: v.pipe(v.number(), v.integer(), v.minValue(200), v.maxValue(599)),
     headers: v.array(Header),
-    body: Body,
+    /** `null`, the bytes, a stream of them, or a file by its absolute path. */
+    body: ResponseBody,
   }),
   v.object({
     upgrade: v.object({ protocol: v.optional(v.string()), headers: v.optional(v.array(Header)) }),
@@ -429,6 +439,11 @@ export function httpHandler<T = unknown>(
       }
       if (response === undefined) {
         throw new RackError("RACK_INVALID_OUTPUT", "fetch returned no response");
+      }
+      // A file goes to the panel by its path, unread, and the panel sends it from disk.
+      const file = fileOf(response);
+      if (file !== undefined) {
+        return { status: response.status, headers: pairsOf(response.headers), body: { file } };
       }
       const body = await bodyOf(response, threshold);
       if (body instanceof Uint8Array && body.byteLength >= MOVE_FROM) call.transfer(body.buffer);

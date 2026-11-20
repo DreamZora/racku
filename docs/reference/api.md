@@ -73,6 +73,7 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 | Export | Kind | What it is |
 |---|---|---|
 | `wholeResponse(request, body, init?)` | function | A `Response` for a body in memory, in the form that Bun sends in one write, with its `Content-Length`. See [Bodies in memory](../guides/listeners.md#bodies-in-memory). |
+| `fileResponse(file, init?)` | function | A `Response` for a file, which Bun sends from disk with its `Content-Length`, from a listener or through the HTTP panel. See [Files](../guides/listeners.md#files). |
 | `ServeOptions` | type | The options of `ctx.serve()`: those of `Bun.serve` that a device needs, and `allowedHosts`. See [Listeners](../guides/listeners.md). |
 | `Listener` | type | A listener, as `ctx.serve()` resolves with it and as its handlers receive it, with `url`, `hostname`, `port`, `upgrade()`, `timeout()`, `requestIP()`, `reload()`, `setTls()`, and `publish()`. |
 | `ListenerHandlers` | type | The handlers of a listener: `fetch`, `routes`, `error`, and `websocket`, which `reload()` replaces. |

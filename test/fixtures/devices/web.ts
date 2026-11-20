@@ -1,4 +1,4 @@
-import { device } from "rack42u";
+import { device, fileResponse } from "rack42u";
 import { Http, httpHandler } from "rack42u/std";
 
 // Tests that exercise `rack dev` edit this line in a copy of the file.
@@ -83,6 +83,12 @@ const app = httpHandler(async (request) => {
     }
     case "/web/produced":
       return new Response(String(produced));
+    case "/web/file": {
+      // The file that the query names, with the Content-Disposition it names, if any.
+      const disposition = url.searchParams.get("disposition");
+      const init = disposition === null ? {} : { headers: { "content-disposition": disposition } };
+      return fileResponse(url.searchParams.get("path") ?? "", init);
+    }
     case "/web/ignore-body":
       // Never reads the body, so the panel's stream of it stalls.
       return new Promise<Response>((_resolve, reject) => {
@@ -159,6 +165,9 @@ export default device({
         if (input.url.includes("/bad-header")) {
           const headers: [string, string][] = [["bad header", "x"]];
           return { status: 200, headers, body: null };
+        }
+        if (input.url.includes("/relative-file")) {
+          return { status: 200, headers: [], body: { file: "relative.bin" } };
         }
         return app.handle(input, call);
       },

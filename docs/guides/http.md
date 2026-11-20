@@ -64,6 +64,8 @@ The panel's call carries the method, URL, headers, route parameters, and body. `
   A body sent whole moves in one message, which is faster, while it holds all of its bytes until the other side takes them; a body that streams holds at most a stream's window in flight, and the slower side slows the other. `streamThreshold` is an integer of 0 or more, and 0 streams every body that has bytes.
 
   A response body sent whole keeps its `Content-Length` at every size, as [`wholeResponse()`](listeners.md) builds it. A body that streams goes out with chunked encoding, without `Content-Length`, even when the device names one: Bun can't send a stream with its length.
+
+  A file goes out with its `Content-Length` at every size when the device answers with [`fileResponse()`](listeners.md#files): `httpHandler` sends the panel the file's absolute path, without reading the file, and the panel sends it from disk as the client reads it. A file that is gone or can't be read when the panel opens it gets 502 with `RACK_DEVICE_FAULT`, and its path goes to the panel's log, not to the client.
 - **Timeouts.** The call's timeout, `callTimeout`, runs from the end of the request body to the response head. A body sent whole must arrive within `idleTimeout`, so a client must send at least `streamThreshold / idleTimeout` on average, 25.6 KiB/s with the defaults, for the largest; raise `idleTimeout`, or lower `streamThreshold`, for slower clients. A body that streams fails once it moves nothing for `idleTimeout`, in either direction. Bun's own timer, which would cut a whole exchange, doesn't run while a request is under way.
 - **Statuses.** Where the panel writes the body, it is JSON, `{ code, message }`:
 

@@ -15,7 +15,9 @@
  * @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#wholeresponse
  */
 import { createPrivateKey, X509Certificate } from "node:crypto";
-import { resolve } from "node:path";
+import { constants } from "node:fs";
+import { access, stat } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 import {
   type CallOptions,
   type DeviceContext,
@@ -581,6 +583,11 @@ async function handle(
     server.timeout(request, idle);
     return json(400, "RACK_INVALID_INPUT", "the request can't be upgraded");
   }
+  const answer = output.body;
+  if (answer !== null && !(answer instanceof Uint8Array) && !(answer instanceof ReadableStream)) {
+    server.timeout(request, idle);
+    return fileAnswer(ctx, answer.file, output.status, output.headers);
+  }
   const streamed = output.body instanceof ReadableStream;
   try {
     if (streamed) {
@@ -603,6 +610,42 @@ async function handle(
     server.timeout(request, idle);
     return json(502, "RACK_INVALID_OUTPUT", messageOf(error));
   }
+}
+
+/**
+ * Answers with a file that a device names by its path, from disk, with its `Content-Length` at
+ * every size. A file that can't be read gets 502, and its path goes to the log, not to the client.
+ *
+ * @decision .agents/decisions/261119_205344-file-responses.md#fileresponse
+ */
+async function fileAnswer(
+  ctx: Ctx,
+  path: string,
+  status: number,
+  headers: [string, string][],
+): Promise<Response> {
+  if (!isAbsolute(path)) {
+    return json(502, "RACK_INVALID_OUTPUT", "the file of a response must have an absolute path");
+  }
+  try {
+    const info = await stat(path);
+    if (!info.isFile()) throw new Error(`${path} is not a file`);
+    await access(path, constants.R_OK);
+  } catch (error) {
+    return unreadableFile(ctx, path, error);
+  }
+  try {
+    return new Response(Bun.file(path), { status, headers });
+  } catch (error) {
+    // The device returned headers that `Response` rejects, such as an invalid header name.
+    return json(502, "RACK_INVALID_OUTPUT", messageOf(error));
+  }
+}
+
+/** The answer for a file of a response that can't be read, with the cause in the log. */
+function unreadableFile(ctx: Ctx, path: string, error: unknown): Response {
+  ctx.log.warn("the file of a response can't be read", { path, cause: messageOf(error) });
+  return json(502, "RACK_DEVICE_FAULT", "the file of the response can't be read");
 }
 
 /** Closes a socket for a call of its device that failed. */
@@ -766,6 +809,15 @@ export default device({
       ...(loaded.length === 0 ? {} : { tls: tlsOf(loaded) }),
       routes,
       fetch: () => json(404, "RACK_NO_ROUTE", "no route matches"),
+      // Bun opens a file body once the handler has returned, and reports here a file that went
+      // away after fileAnswer() checked it.
+      // @decision .agents/decisions/261119_205344-file-responses.md#failure-modes
+      error(error) {
+        const path = (error as { path?: unknown }).path;
+        if (typeof path === "string") return unreadableFile(ctx, path, error);
+        ctx.log.error("a request handler failed", { error: messageOf(error) });
+        return new Response("Internal Server Error", { status: 500 });
+      },
       websocket: {
         maxPayloadLength: config.webSocket.maxMessageSize,
         open(ws) {

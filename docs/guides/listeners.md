@@ -57,6 +57,14 @@ A device may still open sockets with `Bun.listen`, `Bun.connect`, `Bun.udpSocket
 
 When a handler answers after an `await`, Bun 1.4.4 writes the head of a body of 15 KiB or more in many small writes, several times slower than a smaller one. `wholeResponse(request, body, init?)` from `rack42u` builds the `Response` for a body of bytes or text in the form Bun sends in one write, with its `Content-Length` at every size, its answer to `HEAD` included, and the `Content-Type` Bun would give the body; use it in place of `new Response(body, init)`. A stream goes out chunked either way.
 
+## Files
+
+`fileResponse(file, init?)` from `rack42u` builds the `Response` of a file, a path or a file of `Bun.file()`, which Bun sends from disk as the client reads it, with its `Content-Length` at every size, its answer to `HEAD` included. A relative path resolves against the working directory of the process, as `Bun.file()` resolves it.
+
+- **Its name stays private.** Its `Content-Disposition` is `inline` unless `init` names one, since Bun would send the file's name on disk.
+- **Through the HTTP panel.** `httpHandler` sends the panel the file's path, not its bytes, and the panel sends the file itself, as [Requests](http.md#requests) says.
+- **A file that can't be read.** A file that is gone or can't be read when the response goes out fails it, as any error of the handler does.
+
 ## Observation
 
 `status()` lists each listener of the installed instance under `listeners`: its `url`, its `certificates`, with `subject`, `serverName`, and `notAfter`, its `requests` in flight, and its open `webSockets`. The log reports `listening`, `listener handed over`, and `listener closed`, with `data.url`, and `certificates replaced` and `certificates rejected`.
