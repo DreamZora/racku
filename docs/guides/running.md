@@ -42,6 +42,40 @@ await running.stop();
 
 [`start()`](../reference/api.md#start) takes the options, and returns the handle, that the [API reference](../reference/api.md) lists. Management operations run one at a time, in the order they were called. Firmware is written to `.rack/firmware/` under the base directory; keep `.rack/` out of version control.
 
+### A layout that follows data
+
+`reload(manifest)` moves a running rack to another manifest, as [Changed plans and edited manifests](updates.md#changed-plans-and-edited-manifests) describes, so a program can change which devices run as its data changes, such as one device for each entry of a file. The rack tells devices apart by name: a device whose name stays keeps running, even in another slot, unless its firmware or configuration changed. A new name is plugged, and a name that left is unplugged. This program runs one greeter of the guides' app for each language:
+
+```ts
+import { rack, slot, start } from "rack42u";
+import { memkv } from "rack42u/std";
+
+/** One greeter per language, named after its language, above the store they share. */
+function layout(greetings: Record<string, string>) {
+  const slots: Record<number, ReturnType<typeof slot>> = { 1: memkv() };
+  let u = 2;
+  for (const [language, prefix] of Object.entries(greetings)) {
+    slots[u++] = slot("./devices/greeter.ts", { name: `greeter-${language}`, config: { prefix } });
+  }
+  return rack("greeters", { slots });
+}
+
+const running = await start(layout({ en: "Hello," }), { baseDir: import.meta.dir });
+
+const added = await running.reload(layout({ en: "Hello,", fr: "Bonjour," }));
+added.map((result) => `${result.device}: ${result.mode}`); // ["greeter-fr: plug"]
+await running.call("greeter-fr.greeter", "greet", { name: "Ada" }); // "Bonjour, Ada"
+
+const removed = await running.reload(layout({ fr: "Bonjour," }));
+removed.map((result) => `${result.device}: ${result.mode}`); // ["greeter-en: unplug"]
+running.status().map((device) => `${device.name} in U${device.u}`); // ["memkv in U1","greeter-fr in U2"]
+await running.stop();
+```
+
+- `greeter-fr` moved down to U2 without a restart, so `reload()` reports nothing for it.
+- A rack has 42 slots unless its manifest sets more with `size`, such as `rack("greeters", { size: 100, slots })`.
+- `rack start` and `rack ctl reload` don't read the manifest again, and `rack dev` reads it again only when the manifest file itself changes, not when a file that it reads does. So a rack whose devices follow a data file runs from a program of its own, such as this one, which also watches the file.
+
 ## Windows
 
 rack42u runs on Windows as it does on Linux and macOS, with these differences:

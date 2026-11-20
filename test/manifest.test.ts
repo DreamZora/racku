@@ -50,6 +50,14 @@ describe("rack", () => {
     expect(isRackManifest({ name: "shop" })).toBe(false);
   });
 
+  // @doc docs/guides/running.md#a-layout-that-follows-data
+  test("size gives a rack more slots than 42", () => {
+    expect(rack("greeters", { size: 100, slots: { 99: slot("./a.ts") } }).size).toBe(100);
+    expect(rejectionCode(() => rack("greeters", { slots: { 43: slot("./a.ts") } }))).toBe(
+      "RACK_MANIFEST",
+    );
+  });
+
   test.each([
     ["an empty name", () => rack("", { slots: {} })],
     ["a non-integer size", () => rack("r", { size: 1.5, slots: {} })],

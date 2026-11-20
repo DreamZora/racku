@@ -75,6 +75,20 @@ describe("rack start", () => {
     expect(cli.output).toContain("[rack] info rack cli stopped");
   });
 
+  // @doc docs/guides/running.md#a-layout-that-follows-data
+  test("rack ctl reload doesn't read an edited manifest", async () => {
+    const created = await app();
+    const cli = run(["start"], created.dir);
+    const url = await cli.panelUrl();
+    await cli.waitFor(/control listening/);
+    await created.write("rack.ts", MANIFEST.replace('"/web/*"', '"/web/greeting"'));
+    const reload = run(["ctl", "reload"], created.dir);
+    expect(await reload.exited()).toBe(0);
+    expect(JSON.parse(reload.output)).toEqual([]);
+    // The panel still routes all of /web, as the manifest the rack started with says.
+    expect((await fetch(new URL("/web/echo", url))).status).toBe(200);
+  });
+
   // Windows has no SIGTERM.
   // @decision .agents/decisions/261118_015204-windows.md#differences-the-readme-states
   test.skipIf(WINDOWS)("shuts down on SIGTERM too", async () => {
@@ -402,6 +416,33 @@ describe("rack dev", () => {
       { code: "RACK_NO_ROUTE", message: "no route matches" },
     ]);
     expect(cli.output).not.toMatch(/(web|counter) swapped/);
+  });
+
+  // @doc docs/guides/running.md#a-layout-that-follows-data
+  test("doesn't read the manifest again when only a file that it reads changes", async () => {
+    const created = await app(`import { readFileSync } from "node:fs";
+import { rack, slot } from "rack42u";
+import { httpPanel } from "rack42u/std";
+
+const routes = JSON.parse(readFileSync(new URL("./routes.json", import.meta.url), "utf8"));
+
+export default rack("cli", {
+  slots: {
+    1: slot("./devices/counter.ts"),
+    3: slot("./devices/web.ts"),
+    4: httpPanel({ port: 0, routes: { [routes.web]: "web.http" } }),
+  },
+});
+`);
+    await created.write("routes.json", JSON.stringify({ web: "/web/*" }));
+    const cli = run(["dev"], created.dir);
+    const url = await cli.panelUrl();
+    await cli.waitFor(/watching /);
+    expect((await fetch(new URL("/web/echo", url))).status).toBe(200);
+    await created.write("routes.json", JSON.stringify({ web: "/web/greeting" }));
+    await cli.waitFor(/reload: no firmware changed/);
+    expect(cli.output).not.toContain("the manifest changed");
+    expect((await fetch(new URL("/web/echo", url))).status).toBe(200);
   });
 
   test("ignores changes under node_modules and dot directories", async () => {

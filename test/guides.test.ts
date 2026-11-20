@@ -50,6 +50,16 @@ function program(): string {
   throw new Error("no guide has a program that starts the rack");
 }
 
+/** The program of "A layout that follows data", which reloads the rack with new manifests. */
+function layoutProgram(): string {
+  for (const { text } of GUIDES) {
+    for (const [, code = ""] of text.matchAll(/```ts\n([\s\S]*?)```/g)) {
+      if (code.includes("function layout(")) return code;
+    }
+  }
+  throw new Error("no guide has a program with a layout");
+}
+
 async function freePort(): Promise<number> {
   const server = Bun.serve({ port: 0, fetch: () => new Response() });
   const { port } = server;
@@ -128,10 +138,51 @@ test("the bench example of the guides tests the greeter as written", async () =>
 });
 
 // @doc docs/guides/running.md#running-a-rack-from-code
+// @doc docs/guides/running.md#a-layout-that-follows-data
 test("the greeter app of the guides type-checks", async () => {
   const sources = files();
   sources.set("main.ts", program());
+  sources.set("layout.ts", layoutProgram());
   expect(await typecheck(sources)).toBe("");
+}, 60_000);
+
+// @doc docs/guides/running.md#a-layout-that-follows-data
+test("the layout program of the running guide plugs and unplugs greeters as written", async () => {
+  const app = await tempApp();
+  apps.push(app);
+  for (const [path, code] of files()) await app.write(path, code);
+  // Each `<expression>; // <JSON>` line prints the expression's value, to compare with the JSON.
+  const expected: unknown[] = [];
+  const main = layoutProgram()
+    .split("\n")
+    .map((line) => {
+      const match = /^(\S.*); \/\/ ([["].*)$/.exec(line);
+      if (match === null) return line;
+      expected.push(JSON.parse(match[2] as string));
+      return `console.log(JSON.stringify(${match[1]}));`;
+    })
+    .join("\n");
+  expect(expected).toHaveLength(4);
+  await app.write("layout.ts", main);
+
+  const run = Bun.spawn([process.execPath, "layout.ts"], {
+    cwd: app.dir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [code, stdout, stderr] = await Promise.all([
+    run.exited,
+    new Response(run.stdout).text(),
+    new Response(run.stderr).text(),
+  ]);
+  expect({ code, stderr: stderr.includes("error") ? stderr : "" }).toEqual({ code: 0, stderr: "" });
+  const printed = stdout
+    .split("\n")
+    .filter((line) => /^[["]/.test(line) && !line.startsWith("[rack]"))
+    .map((line) => JSON.parse(line) as unknown);
+  expect(printed).toEqual(expected);
+  // greeter-fr moved from U3 to U2 without a restart: it powered on once.
+  expect(stdout.match(/greeter-fr powered on/g)).toHaveLength(1);
 }, 60_000);
 
 /** The chat room of the HTTP panel guide, in a device file of its own. */
