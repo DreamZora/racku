@@ -72,12 +72,22 @@ See [The HTTP panel](../guides/http.md).
 |---|---|---|
 | Crashes, watchdog bites included | more than 3 within 60 s, or within four times the longest watchdog timeout when that is longer than 15 s | The slot is `faulted` until a swap succeeds. |
 | Armed watchdogs of a device | 16 | `scope.watchdog()` throws a `RangeError`. |
-| Fallbacks per update | 1 | |
+| Fallbacks per update, a start in an executable included | 1 | |
 | `historyLimit`, a `start()` option: update records | 256 | The oldest records go. |
 | Firmware bundles under `.rack/firmware/` | those that an instance, a known-good firmware, or a kept record needs | The rack deletes the others. |
 | Imports of a firmware bundle that Bun reports missing while it is on disk | 4 attempts, 10 ms apart | The error of the last one. |
 
 See [Faults and overload](../guides/faults.md) and [Updates](../guides/updates.md#history).
+
+## Executables
+
+| Bound | Value | Beyond it |
+|---|---|---|
+| Starts of a rack in an executable | One, and one more for each outside file that fails while the rack starts, which then starts from its packaged firmware | The rack fails to start, as under `rack start`, when a packaged firmware fails. |
+| Builds of outside files | One per device at start, and at each `reload()` or `swap(name)`, with no timeout of its own, as under `rack start` | |
+| The executable's size | About 100 MiB on Linux x64, most of it Bun's runtime | |
+
+See [A rack in one executable](../guides/running.md#a-rack-in-one-executable).
 
 ## The bench
 

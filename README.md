@@ -84,7 +84,8 @@ What works, on Linux, macOS, and Windows:
 - racks placed by hand, and racks scanned from directories of device files, with a plan file to review;
 - crash resets, watchdogs, bounded backlogs, and the handling of threads stuck in native code;
 - listeners that devices open, and the standard HTTP panel, with WebSocket, files sent from disk with their length, and certificates that change without a restart;
-- the standard `memkv` and `sqlite` devices, the `rack` command, a test bench for one device, crashes and hangs that tests inject, counters, and logs that other programs can read.
+- the standard `memkv` and `sqlite` devices, the `rack` command, a test bench for one device, crashes and hangs that tests inject, counters, and logs that other programs can read;
+- a rack packaged into one executable with `rack compile`, whose devices a file beside it can replace, with the packaged one to fall back to.
 
 rack42u has no formal release yet: any version until the first one may break the API. An app depends on rack42u through git, at a tag or a commit of its repository, as [Getting started](docs/getting-started.md#add-rack42u) shows.
 
@@ -92,7 +93,7 @@ rack42u has no formal release yet: any version until the first one may break the
 
 - Devices run only in Workers, one each. Running a device in a child process is planned; no device ever runs on the rack's main thread.
 - A management dashboard.
-- Connecting several racks, and packaging a rack into one executable with `bun build --compile`.
+- Connecting several racks.
 
 ## Documentation
 

@@ -19,7 +19,7 @@ Each guide covers one part of rack42u. Together they build one small app, a gree
 - [Devices](guides/devices.md): device files, hooks, the context, background work, errors, the environment, and needs from configuration.
 - [Racks](guides/racks.md): manifests, scanned racks, shared instances and own copies, and the plan file.
 - [The HTTP panel](guides/http.md): routes, requests, WebSocket, certificates, and the `http/v2` connector.
-- [Running a rack](guides/running.md): the `rack` command, running a rack from another program, `rack dev`, running a rack from code, and Windows.
+- [Running a rack](guides/running.md): the `rack` command, running a rack from another program, `rack dev`, running a rack from code, a rack in one executable, and Windows.
 - [Testing a device](guides/testing.md): the bench, its stubs, swaps, and crashes and hangs.
 - [Binary data and streams](guides/data.md): moving and sharing buffers, and streaming bytes in calls.
 - [Listeners](guides/listeners.md): HTTP and WebSocket servers that devices open, which the rack hands over across swaps, and the bodies and files they answer with.

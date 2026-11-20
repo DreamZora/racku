@@ -64,6 +64,7 @@ import type {
   ServedRpcMetrics,
   StreamMetrics,
 } from "./metrics.ts";
+import { setBaseDir } from "./packaged.ts";
 import {
   type AnswerMessage,
   type AttachRequest,
@@ -470,6 +471,9 @@ function injectFault(kind: InjectedFault): undefined {
 
 async function boot(request: BootRequest): Promise<Fru> {
   if (booted !== undefined) throw new RackError("RACK_MANIFEST", "the instance is already booted");
+  // Firmware of an executable names its files under the base directory, from the time it loads.
+  // @decision .agents/decisions/261120_011627-single-executables.md#running-an-executable
+  setBaseDir(request.baseDir);
   const module = (await importFirmware(request.firmware)) as { default?: unknown };
   const def = module.default;
   if (!isDevice(def)) {
@@ -516,6 +520,7 @@ async function boot(request: BootRequest): Promise<Fru> {
 }
 
 async function describe(request: DescribeRequest): Promise<Fru> {
+  setBaseDir(request.baseDir);
   const module = (await importFirmware(request.firmware)) as { default?: unknown };
   const def = module.default;
   if (!isDevice(def)) {

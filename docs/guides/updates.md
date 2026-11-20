@@ -62,7 +62,7 @@ When a scanned rack's plan changes, or `rack dev` sees the manifest change, the 
 
 An update can pass `selfTest` and still be defective. The rack guards against that in two ways.
 
-- **Known-good firmware.** Each device has one: the firmware it started with at cold start, or the last firmware that got through probation.
+- **Known-good firmware.** Each device has one: the firmware it started with at cold start, or the last firmware that got through probation. In an executable, a device's first known-good firmware is the one packaged inside it, so a device that starts from an outside file starts on probation, as [A rack in one executable](running.md#a-rack-in-one-executable) describes.
 - **Probation.** After an update, the new instance is on probation for `probation` milliseconds, 60 000 by default.
 - **Falling back.** If the instance crashes on probation, or a watchdog bites, the rack does not reset it from the same firmware. It starts the known-good firmware instead, fresh, and the slot reports `degraded` with the crash as its error. A group replaced together for a contract change falls back together, so providers and consumers keep matching contracts.
 - **Limits.** A device falls back at most once per update. Setting `probation: 0` turns fallback off.

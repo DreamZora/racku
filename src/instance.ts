@@ -13,6 +13,7 @@ import type { HookName } from "./device.ts";
 import { fromWireError, RackError, toWireError } from "./errors.ts";
 import type { Firmware } from "./firmware.ts";
 import type { InstanceMetrics } from "./metrics.ts";
+import { packaged } from "./packaged.ts";
 import {
   type AnswerMessage,
   type AskNotice,
@@ -168,7 +169,11 @@ export class Instance {
     this.#host = host;
     // Bun Workers otherwise see the environment of process start, not of this moment.
     // @decision .agents/decisions/261112_043034-device-api.md#device-context
-    this.#worker = new Worker(WORKER_URL, { env: { ...process.env } as Record<string, string> });
+    // In an executable, the Worker host is the one packaged inside it.
+    // @decision .agents/decisions/261120_011627-single-executables.md#running-an-executable
+    this.#worker = new Worker(packaged()?.workerUrl ?? WORKER_URL, {
+      env: { ...process.env } as Record<string, string>,
+    });
     const channel = new MessageChannel();
     this.#data = channel.port1;
     this.#bootPort = channel.port2;
@@ -268,14 +273,21 @@ export class Instance {
    * The instance can only be terminated afterwards.
    *
    * @decision .agents/decisions/261116_233919-automatic-assembly.md#scanned-manifests
+   * @param baseDir The rack's base directory.
    * @param config For needs computed from the configuration, the configuration to compute them
    *   from.
    * @throws RackError `RACK_MANIFEST` when the firmware does not default-export a device, or
    *   `RACK_HOOK_FAILED` when the Worker does not answer within `timeout` ms.
    */
-  async describe(timeout: number, config?: unknown): Promise<Fru> {
+  async describe(timeout: number, baseDir: string, config?: unknown): Promise<Fru> {
     return (await this.request(
-      { op: "describe", firmware: this.firmware.url, source: this.firmware.source, config },
+      {
+        op: "describe",
+        firmware: this.firmware.url,
+        source: this.firmware.source,
+        baseDir,
+        config,
+      },
       timeout,
       "describe",
     )) as Fru;

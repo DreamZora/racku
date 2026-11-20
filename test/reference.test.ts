@@ -191,6 +191,8 @@ test("the error codes reference lists every code that the rack and the standard 
 // @doc docs/reference/cli.md#flags-of-rack-plan
 // @doc docs/reference/cli.md#operations-of-rack-ctl
 // @doc docs/reference/cli.md#flags-of-rack-ctl
+// @doc docs/reference/cli.md#flags-of-rack-compile
+// @doc docs/reference/cli.md#the-command-line-of-an-executable
 test("the reference of the rack command lists every command, flag, and operation", async () => {
   const cli = await read("docs/reference/cli.md");
   const source = await read("src/cli.ts");
@@ -214,13 +216,30 @@ test("the reference of the rack command lists every command, flag, and operation
   const commands = rows(section("Commands"), "| Command | Does |").map(
     ([cell = ""]) => /`rack (\w+)/.exec(cell)?.[1] ?? "",
   );
-  expect(commands.sort()).toEqual(["ctl", "dev", "plan", "start"]);
+  expect(commands.sort()).toEqual(["compile", "ctl", "dev", "plan", "start"]);
   expect(flagsOf("start")).toEqual(flagsOf("dev"));
   expect(listedFlags("Flags of rack start and rack dev")).toEqual(flagsOf("start"));
   expect(listedFlags("Flags of rack plan")).toEqual(flagsOf("plan"));
+  expect(listedFlags("Flags of rack compile")).toEqual(flagsOf("compile"));
   expect(listedFlags("Flags of rack ctl")).toEqual(flagsOf("ctl"));
 
-  // The operations of rack ctl are in commands.ts, which an executable will share.
+  // An executable takes the flags of rack start, and those of rack ctl with --base-dir for --dir.
+  const executable = await read("src/executable.ts");
+  const listOf = (name: string) =>
+    (new RegExp(`const ${name} = \\[([^\\]]*)\\]`).exec(executable)?.[1] ?? "")
+      .split(",")
+      .map((flag) => flag.trim().replace(/^"|"$/g, ""))
+      .filter(Boolean)
+      .sort();
+  expect(listedFlags("The command line of an executable")).toEqual(["--base-dir"]);
+  expect(listOf("START_FLAGS")).toEqual([...flagsOf("start"), "--base-dir"].sort());
+  expect(listOf("CTL_FLAGS")).toEqual(
+    flagsOf("ctl")
+      .map((flag) => (flag === "--dir" ? "--base-dir" : flag))
+      .sort(),
+  );
+
+  // The operations of rack ctl, which an executable's ctl shares, are in commands.ts.
   const shared = await read("src/commands.ts");
   const body = shared.slice(
     shared.indexOf("function ctlArgs"),

@@ -24,17 +24,24 @@
  * @decision .agents/decisions/261117_185131-ending-instances.md#stuck-threads
  * @decision .agents/decisions/261117_185131-ending-instances.md#failed-hot-swaps
  * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision
+ * @decision .agents/decisions/261120_011627-single-executables.md
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dirent } from "node:fs";
 import { readdir, unlink } from "node:fs/promises";
 import { basename, join, resolve as resolvePath } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Backplane, type Slot, type SlotState } from "./backplane.ts";
 import type { ConnectorInfo } from "./connector.ts";
 import { type Control, openControl } from "./control.ts";
 import type { CallOptions } from "./device.ts";
 import { RackError, toWireError, type WireError } from "./errors.ts";
-import { buildFirmware as buildBundle, explainMissingPackage, type Firmware } from "./firmware.ts";
+import {
+  buildFirmware as buildBundle,
+  explainMissingPackage,
+  type Firmware,
+  type PackagedBuild,
+} from "./firmware.ts";
 import {
   Instance,
   type InstanceHost,
@@ -55,6 +62,7 @@ import {
   type SlotSpec,
 } from "./manifest.ts";
 import type { DeviceMetrics, RackMetrics } from "./metrics.ts";
+import { hasOutsideFile, keyOfSource, type Packaged, packaged, sourceOfKey } from "./packaged.ts";
 import {
   fitPlan,
   formatPlan,
@@ -90,8 +98,16 @@ export interface SlotStatus {
   state: SlotState;
   /** Firmware hash of the installed instance; `null` when none is installed. */
   firmware: string | null;
-  /** Absolute path of the device file. */
+  /**
+   * Absolute path of the device file. In an executable, a device of the app names the path of
+   * its outside file under the base directory, whether or not that file exists.
+   */
   source: string;
+  /**
+   * In an executable, `true` while the device runs the firmware packaged inside it; absent
+   * otherwise.
+   */
+  packaged?: true;
   /** Calls the installed instance is processing, from other devices and from outside the rack. */
   inFlight: number;
   /** Crashes within the last 60 seconds. */
@@ -495,7 +511,24 @@ class Rack implements InstanceHost {
   readonly #controlOption: StartOptions["control"];
   #control: Control | undefined;
   #startFault: RackError | undefined;
+  /** The firmware of the instance whose crash made {@link #startFault}. */
+  #startFaultFirmware: Firmware | undefined;
   #operations: Promise<unknown> = Promise.resolve();
+  /**
+   * What the executable that runs this rack packaged; `undefined` outside an executable.
+   *
+   * @decision .agents/decisions/261120_011627-single-executables.md#devices-from-outside-files
+   */
+  readonly #packaged: Packaged | undefined = packaged();
+  /** The packaged firmware of each device file, by source, once asked for. */
+  readonly #packagedFirmware = new Map<string, Firmware>();
+  /**
+   * In an executable, while the rack starts: the device files whose outside file failed, which
+   * start from their packaged firmware.
+   */
+  readonly #fellBack = new Map<string, Fallen>();
+  /** While the rack starts: what the firmware of each outside file declared, and with what. */
+  readonly #outsideFrus = new Map<string, { fru: Fru; config: unknown; hash: string }>();
 
   constructor(manifest: RackManifest, options: StartOptions) {
     this.#manifest = manifest;
@@ -722,7 +755,10 @@ class Rack implements InstanceHost {
       firmware: instance.firmware.hash,
     });
     if (this.#phase === "starting") {
-      this.#startFault ??= new RackError("RACK_DEVICE_FAULT", message);
+      if (this.#startFault === undefined) {
+        this.#startFault = new RackError("RACK_DEVICE_FAULT", message);
+        this.#startFaultFirmware = instance.firmware;
+      }
       return;
     }
     const slot = this.#slots.get(instance.slot);
@@ -826,20 +862,8 @@ class Rack implements InstanceHost {
 
   async start(): Promise<void> {
     try {
-      const planText = await this.#prepare();
-      if (planText !== undefined) await Bun.write(this.#planPath(), planText);
-      for (const slot of this.#ordered()) {
-        const instance = slot.installed as Instance;
-        // Links to the devices below exist already; this links the devices above to it.
-        await this.#backplane.connect(instance);
-        await this.#backplane.install(slot, instance, null);
-        await this.#powerOn(instance);
-        this.#throwStartFault();
-        slot.state = "online";
-        this.#powered(instance);
-      }
-      this.#throwStartFault();
-      for (const slot of this.#slots.values()) this.#knownGood.set(slot.name, slot.firmware);
+      await this.#powerUpFallingBack();
+      this.#settleKnownGood();
       this.#phase = "running";
       const control = this.#controlOption;
       if (control !== undefined && control !== false) {
@@ -858,6 +882,157 @@ class Rack implements InstanceHost {
       await this.#abortStart();
       throw error;
     }
+  }
+
+  /**
+   * Powers every device on. In an executable, a device whose outside file fails while the rack
+   * starts runs its packaged firmware: the rack powers off what it started, and starts again with
+   * that file's packaged firmware, until it starts, or fails as it would under `rack start`. Each
+   * new start has one outside file fewer, so there are at most as many as outside files.
+   *
+   * @decision .agents/decisions/261120_011627-single-executables.md#falling-back
+   */
+  async #powerUpFallingBack(): Promise<void> {
+    for (;;) {
+      try {
+        await this.#powerUp();
+        return;
+      } catch (error) {
+        await this.#abortStart();
+        const fallen = await this.#fallingBack(error);
+        if (fallen.size === 0) throw error instanceof OutsideFailure ? error.failure : error;
+        for (const [source, why] of fallen) this.#fellBack.set(source, why);
+        this.#resetStart();
+      }
+    }
+  }
+
+  /** Boots, wires, and powers on every device, from the bottom up. */
+  async #powerUp(): Promise<void> {
+    const planText = await this.#prepare();
+    if (planText !== undefined) await Bun.write(this.#planPath(), planText);
+    for (const slot of this.#ordered()) {
+      const instance = slot.installed as Instance;
+      try {
+        // Links to the devices below exist already; this links the devices above to it.
+        await this.#backplane.connect(instance);
+        await this.#backplane.install(slot, instance, null);
+        await this.#powerOn(instance);
+      } catch (error) {
+        throw this.#outsideFailure(instance.firmware, error);
+      }
+      this.#throwStartFault();
+      slot.state = "online";
+      this.#powered(instance);
+    }
+    this.#throwStartFault();
+  }
+
+  /**
+   * The outside files to start from their packaged firmware after a start that failed: the one
+   * that failed, or, for a layout, a wiring, or a plan that didn't fit, each whose firmware
+   * declares another model, height, priority, needs, or ports than its packaged firmware.
+   */
+  async #fallingBack(error: unknown): Promise<Map<string, Fallen>> {
+    const fallen = new Map<string, Fallen>();
+    if (error instanceof OutsideFailure) {
+      fallen.set(error.source, { error: toWireError(error.failure), from: error.from });
+      return fallen;
+    }
+    if (!(error instanceof RackError) || error.code !== "RACK_MANIFEST") return fallen;
+    for (const [source, outside] of this.#outsideFrus) {
+      const firmware = this.#packagedFor(source);
+      if (firmware === undefined) continue;
+      let fru: Fru;
+      try {
+        fru = await this.#describe(firmware, outside.config);
+      } catch {
+        // The packaged firmware can't be read either, so it can't take the file's place.
+        continue;
+      }
+      if (!sameDeclarations(fru, outside.fru)) {
+        fallen.set(source, { error: toWireError(error), from: outside.hash });
+      }
+    }
+    return fallen;
+  }
+
+  /** Makes the rack ready to start again, after a start that it powered off. */
+  #resetStart(): void {
+    this.#phase = "starting";
+    this.#startFault = undefined;
+    this.#startFaultFirmware = undefined;
+    this.#plan = undefined;
+    this.#patch = this.#manifest.patch;
+    this.#ports.clear();
+    this.#outsideFrus.clear();
+  }
+
+  /**
+   * Sets each device's known-good firmware once the rack started: the firmware it started with,
+   * or in an executable its packaged firmware. There, a device that runs an outside file starts
+   * on probation, together with the devices of outside files wired to it, and a device whose
+   * outside file failed is `degraded`, with a record of its fallback.
+   *
+   * @decision .agents/decisions/261120_011627-single-executables.md#falling-back
+   */
+  #settleKnownGood(): void {
+    const outside: string[] = [];
+    for (const slot of this.#slots.values()) {
+      const firmware = this.#packagedFor(slot.source);
+      if (firmware === undefined) {
+        this.#knownGood.set(slot.name, slot.firmware);
+        continue;
+      }
+      this.#knownGood.set(slot.name, firmware);
+      const fell = this.#fellBack.get(slot.source);
+      if (fell !== undefined) {
+        slot.state = "degraded";
+        slot.error = fell.error;
+        this.#log("warn", `${slot.name} runs its packaged firmware: ${fell.error.message}`, {
+          file: slot.source,
+          code: fell.error.code,
+        });
+        const context = { cause: "fallback" as const, started: Date.now(), crash: fell.error };
+        updates.run(context, () =>
+          this.#emit({
+            type: "swap",
+            device: slot.name,
+            action: "swap",
+            mode: "restart",
+            from: fell.from,
+            to: firmware.hash,
+          }),
+        );
+      } else if (slot.firmware.packaged !== true) {
+        this.#log("info", `${slot.name} runs ${slot.source}`, { firmware: slot.firmware.hash });
+        outside.push(slot.name);
+      }
+    }
+    this.#fellBack.clear();
+    this.#outsideFrus.clear();
+    for (const group of this.#wiredGroups(outside)) this.#startProbation(group);
+  }
+
+  /** Splits devices into groups whose members are wired to one another, which fall back together. */
+  #wiredGroups(names: readonly string[]): string[][] {
+    const leader = new Map(names.map((name) => [name, name]));
+    const find = (name: string): string => {
+      let at = name;
+      while (leader.get(at) !== at) at = leader.get(at) as string;
+      return at;
+    };
+    for (const name of names) {
+      for (const wire of this.#slots.get(name)?.wiring.values() ?? []) {
+        if (leader.has(wire.provider)) leader.set(find(name), find(wire.provider));
+      }
+    }
+    const groups = new Map<string, string[]>();
+    for (const name of names) {
+      const at = find(name);
+      groups.set(at, [...(groups.get(at) ?? []), name]);
+    }
+    return [...groups.values()];
   }
 
   /**
@@ -953,7 +1128,7 @@ class Rack implements InstanceHost {
     const booted = await Promise.allSettled(
       entries.map(async (entry) => {
         const firmware = await builds.get(entry.source)?.catch((error: unknown) => {
-          throw new RackError("RACK_MANIFEST", messageOf(error));
+          throw this.#buildFailure(entry.source, error);
         });
         if (firmware === undefined) throw new RackError("RACK_MANIFEST", "missing firmware");
         const instance = await this.#boot(
@@ -962,7 +1137,10 @@ class Rack implements InstanceHost {
           entry.u,
           entry.spec.config,
           "RACK_MANIFEST",
-        );
+        ).catch((error: unknown) => {
+          throw this.#outsideFailure(firmware, error);
+        });
+        this.#noteOutside(entry.source, firmware, instance.fru as Fru, entry.spec.config);
         return { u: entry.u, config: entry.spec.config, firmware, instance };
       }),
     );
@@ -1013,7 +1191,7 @@ class Rack implements InstanceHost {
     const found: { source: string; config: unknown; variant: string | undefined }[] = [];
     for (const entry of scan.devices) {
       if (typeof entry === "string") {
-        for (const source of await deviceFiles(resolvePath(this.#baseDir, entry))) {
+        for (const source of await this.#deviceFiles(resolvePath(this.#baseDir, entry))) {
           found.push({ source, config: undefined, variant: undefined });
         }
       } else {
@@ -1028,17 +1206,25 @@ class Rack implements InstanceHost {
       found.map(async (item) => {
         const firmware = await (builds.get(item.source) as Promise<Firmware>).catch(
           (error: unknown) => {
-            throw new RackError("RACK_MANIFEST", messageOf(error));
+            throw this.#buildFailure(item.source, error);
           },
         );
-        let fru = await this.#describe(firmware, item.config);
-        // Needs that come from the configuration come from the configuration of the model's
-        // shared instance, which the model's entry in `config` gives before the spec does.
-        // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
-        const name = item.variant ?? fru.model;
-        if (fru.computedNeeds && Object.hasOwn(scan.config, name)) {
-          fru = await this.#describe(firmware, scan.config[name]);
+        let fru: Fru;
+        let config = item.config;
+        try {
+          fru = await this.#describe(firmware, config);
+          // Needs that come from the configuration come from the configuration of the model's
+          // shared instance, which the model's entry in `config` gives before the spec does.
+          // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
+          const name = item.variant ?? fru.model;
+          if (fru.computedNeeds && Object.hasOwn(scan.config, name)) {
+            config = scan.config[name];
+            fru = await this.#describe(firmware, config);
+          }
+        } catch (error) {
+          throw this.#outsideFailure(firmware, error);
         }
+        this.#noteOutside(item.source, firmware, fru, config);
         return { ...item, firmware, fru };
       }),
     );
@@ -1076,12 +1262,108 @@ class Rack implements InstanceHost {
     return models;
   }
 
-  /** Builds a device file, remembering the bundle so that it can be deleted once unused. */
-  async #build(source: string): Promise<Firmware> {
-    const firmware = await buildBundle(source, this.#baseDir);
+  /**
+   * Builds a device file, remembering the bundle so that it can be deleted once unused.
+   *
+   * In an executable, a device file that it packaged gives its packaged firmware, unless its
+   * outside file is there, and didn't fail while the rack started; then the outside file is built
+   * as the executable builds firmware. A file that the executable didn't package is built only
+   * for a swap that names it.
+   *
+   * @param named Whether a swap names the file.
+   * @throws Error with the build's messages, or when an executable didn't package the file.
+   * @decision .agents/decisions/261120_011627-single-executables.md#devices-from-outside-files
+   */
+  async #build(source: string, named = false): Promise<Firmware> {
+    const exe = this.#packaged;
+    let packagedBuild: PackagedBuild | undefined;
+    if (exe !== undefined) {
+      const inside = this.#packagedFor(source);
+      if (inside === undefined && !named) {
+        throw new Error(`${source} is not packaged in this executable`);
+      }
+      if (inside !== undefined) {
+        if (!this.#outsideCandidate(source)) return inside;
+        if (!(await Bun.file(source).exists())) return inside;
+      }
+      packagedBuild = {
+        appDir: this.#baseDir,
+        carried: { root: exe.root, specifiers: exe.table.carried },
+      };
+    }
+    const firmware = await buildBundle(source, this.#baseDir, packagedBuild);
     this.#built.set(firmware.path, firmware);
     this.#firmwares.set(firmware.hash, firmware);
     return firmware;
+  }
+
+  /** The packaged firmware of a device file, in an executable that packaged it. */
+  #packagedFor(source: string): Firmware | undefined {
+    const exe = this.#packaged;
+    if (exe === undefined) return undefined;
+    const known = this.#packagedFirmware.get(source);
+    if (known !== undefined) return known;
+    const entry = exe.table.devices[keyOfSource(source, exe)];
+    if (entry === undefined) return undefined;
+    const path = join(exe.root, ...entry.file.split("/"));
+    const firmware: Firmware = {
+      path,
+      url: pathToFileURL(path).href,
+      hash: entry.hash,
+      source,
+      packaged: true,
+    };
+    this.#packagedFirmware.set(source, firmware);
+    this.#firmwares.set(firmware.hash, firmware);
+    return firmware;
+  }
+
+  /**
+   * Whether an outside file may give a device file's firmware: the executable packaged it, it
+   * belongs to the app, and its outside file hasn't failed while the rack started.
+   */
+  #outsideCandidate(source: string): boolean {
+    const exe = this.#packaged;
+    if (exe === undefined || this.#packagedFor(source) === undefined) return false;
+    return hasOutsideFile(keyOfSource(source, exe)) && !this.#fellBack.has(source);
+  }
+
+  /** Whether a firmware is an outside file's, in an executable. */
+  #isOutside(firmware: Firmware): boolean {
+    return firmware.packaged !== true && this.#outsideCandidate(firmware.source);
+  }
+
+  /** What a failed build of a device file fails the start with. */
+  #buildFailure(source: string, error: unknown): RackError | OutsideFailure {
+    if (!this.#outsideCandidate(source)) return new RackError("RACK_MANIFEST", messageOf(error));
+    // As a swap of the file reports it.
+    return new OutsideFailure(source, new RackError("RACK_SWAP_REJECTED", messageOf(error)), null);
+  }
+
+  /** Marks a failure of an outside file's firmware while the rack starts as that file's. */
+  #outsideFailure(firmware: Firmware, error: unknown): unknown {
+    if (error instanceof OutsideFailure || !this.#isOutside(firmware)) return error;
+    return new OutsideFailure(firmware.source, asRackError(error), firmware.hash);
+  }
+
+  /** Keeps what an outside file's firmware declared, for a start that fails to fit it. */
+  #noteOutside(source: string, firmware: Firmware, fru: Fru, config: unknown): void {
+    if (this.#isOutside(firmware))
+      this.#outsideFrus.set(source, { fru, config, hash: firmware.hash });
+  }
+
+  /** The device files in a directory that a scanned rack names: in an executable, those it packaged. */
+  async #deviceFiles(dir: string): Promise<string[]> {
+    const exe = this.#packaged;
+    if (exe === undefined) return deviceFiles(dir);
+    const keys = exe.table.scans[keyOfSource(dir, exe)];
+    if (keys === undefined) {
+      throw new RackError(
+        "RACK_MANIFEST",
+        `cannot scan ${dir}: the executable packaged no such directory`,
+      );
+    }
+    return keys.map((key) => sourceOfKey(key, exe));
   }
 
   /**
@@ -1105,7 +1387,7 @@ class Rack implements InstanceHost {
     }
     const instance = new Instance(firmware, firmware.source, this);
     try {
-      const fru = await instance.describe(this.#hookTimeout, config);
+      const fru = await instance.describe(this.#hookTimeout, this.#baseDir, config);
       const keep = fru.computedNeeds ? key : firmware.hash;
       if (keep !== undefined) this.#described.set(keep, fru);
       return fru;
@@ -1137,14 +1419,22 @@ class Rack implements InstanceHost {
     if (this.#planMode === false) return { plan: computed, write: false };
     const path = this.#planPath();
     const name = basename(path);
+    // An executable follows the plan file it packaged, and writes none.
+    // @decision .agents/decisions/261120_011627-single-executables.md#running-an-executable
+    const writable = this.#packaged === undefined;
     const file = Bun.file(path);
-    if (!(await file.exists())) return { plan: computed, write: true };
-    const fit = fitPlan(parsePlan(await file.text(), name), computed, this.#manifest.size);
+    const text = !writable
+      ? this.#packaged?.table.plans[name]
+      : (await file.exists())
+        ? await file.text()
+        : undefined;
+    if (text === undefined) return { plan: computed, write: writable };
+    const fit = fitPlan(parsePlan(text, name), computed, this.#manifest.size);
     if (fit.fits && fit.sameOrder) return { plan: fit.plan, write: false };
     if (this.#planMode === "update") {
       const differences = fit.fits ? ["the priorities give another order"] : fit.differences;
       this.#log("info", `${name} changed`, { differences });
-      return { plan: computed, write: true };
+      return { plan: computed, write: writable };
     }
     if (fit.fits) {
       this.#log("info", `${name} keeps its order; rack plan --write applies the priorities`);
@@ -1171,7 +1461,10 @@ class Rack implements InstanceHost {
   }
 
   #throwStartFault(): void {
-    if (this.#startFault !== undefined) throw this.#startFault;
+    const fault = this.#startFault;
+    if (fault === undefined) return;
+    const firmware = this.#startFaultFirmware;
+    throw firmware === undefined ? fault : this.#outsideFailure(firmware, fault);
   }
 
   async #abortStart(): Promise<void> {
@@ -1825,7 +2118,7 @@ class Rack implements InstanceHost {
     const path = source === undefined ? slot.source : resolveSource(source, this.#baseDir);
     let firmware: Firmware;
     try {
-      firmware = await this.#build(path);
+      firmware = await this.#build(path, source !== undefined);
     } catch (error) {
       const from = slot.installed?.firmware.hash ?? null;
       if (slot.installed !== null && !slot.busy) slot.state = "degraded";
@@ -3322,6 +3615,7 @@ class Rack implements InstanceHost {
       };
       const owner = owners.get(slot.name);
       if (owner !== undefined) status.owner = owner;
+      if (slot.firmware.packaged === true) status.packaged = true;
       const probation = this.#probation.get(slot.name);
       if (probation !== undefined) status.probationUntil = probation.until;
       if (slot.error !== undefined) status.error = slot.error;
@@ -3426,6 +3720,46 @@ interface Booted {
 }
 
 /** What an update runs for: its cause and start time, and for a fallback, the crash. */
+/**
+ * A failure while an executable's rack starts that a device's outside file caused, which its
+ * packaged firmware may not have.
+ *
+ * @decision .agents/decisions/261120_011627-single-executables.md#falling-back
+ */
+class OutsideFailure extends Error {
+  /**
+   * @param source The device file.
+   * @param failure What the start would have failed with.
+   * @param from The hash of the outside file's firmware; `null` when it didn't build.
+   */
+  constructor(
+    readonly source: string,
+    readonly failure: RackError,
+    readonly from: string | null,
+  ) {
+    super(failure.message);
+  }
+}
+
+/** Why a device file runs its packaged firmware after a start in an executable. */
+interface Fallen {
+  error: WireError;
+  /** The hash of the outside file's firmware; `null` when it didn't build. */
+  from: string | null;
+}
+
+/** Whether two firmwares declare the same model, height, priority, needs, and ports. */
+function sameDeclarations(a: Fru, b: Fru): boolean {
+  const declared = (fru: Fru) => ({
+    model: fru.model,
+    height: fru.height,
+    priority: fru.priority,
+    needs: fru.needs,
+    provides: fru.provides,
+  });
+  return Bun.deepEquals(declared(a), declared(b));
+}
+
 interface UpdateContext {
   cause: UpdateCause;
   started: number;
@@ -3603,7 +3937,7 @@ function patchesOf(plan: Plan): (readonly [string, string])[] {
  *
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#scanned-manifests
  */
-async function deviceFiles(dir: string): Promise<string[]> {
+export async function deviceFiles(dir: string): Promise<string[]> {
   let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });

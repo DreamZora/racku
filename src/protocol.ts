@@ -173,6 +173,8 @@ export interface DescribeRequest {
   firmware: string;
   /** Device file the firmware was built from, for messages. */
   source: string;
+  /** The rack's base directory, which an executable's firmware names its files under. */
+  baseDir: string;
   /** The configuration that needs computed from the configuration are computed from. */
   config?: unknown;
 }

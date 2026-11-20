@@ -142,6 +142,27 @@ Measured on 2026-11-20 with Bun 1.4.4 on Linux x64, with probe scripts outside t
 - Not in this decision: installers, code signing, and net-tool's sidecar; `rack dev` and `rack plan` in an executable; and updating the executable itself.
 - Follow-up: net-tool as a sidecar of its Tauri shell, with its installers, in a decision of its own.
 
+## Implementation
+
+- `rack compile` is `compileRack()` in `src/compile.ts`, which `src/cli.ts` runs.
+  - It builds each device file with `buildFirmware()` and a `PackagedBuild`, into `.rack/compile/` under the manifest's directory, and removes that directory after.
+  - It writes three entries there: a prelude, which installs the executable's `import.meta` paths before any packaged module loads; a main entry, which calls `runExecutable()` with the table of what it packaged; and the Worker host's entry, which puts rack42u and `rack42u/std` under `HOST_MODULES` for firmware, then loads `src/worker.ts`.
+  - It compiles them, with the firmware and one module for each carried package, by the `compile` option of `Bun.build`, which takes plugins.
+- `src/packaged.ts` holds `PackagedTable`, which an executable carries, the keys of device files, and `installImportMeta()`.
+  - A file in the app's directory, outside `node_modules`, has its path from that directory as its key; in the executable, that path under the base directory is its outside file's place.
+  - Any other file, such as one of rack42u's own devices, has `~/` and that path, with `_up_` for each `..`, under the executable's root, where no file is.
+  - Packaged code calls a function by key for its `import.meta` paths. The plugin `rack42u-packaged-import-meta` rewrites the paths of the manifest, of rack42u's modules in the main entry, and of firmware, so that `httpPanel()` and the other standard devices name their files by their keys.
+- `src/firmware.ts`: builds for an executable use the plugins `rack42u-host`, which resolves `rack42u` and `rack42u/std` to the Worker host's copy, `rack42u-carried-packages` at run time, and `rack42u-record-packages` at compile time, and bundle every other import.
+- `src/rack.ts`:
+  - `#build()` gives a device file's packaged firmware, unless its outside file is there and hasn't failed while the rack started; a file that the executable didn't package is built only for a swap that names it, and otherwise fails with `RACK_MANIFEST` at start and `RACK_SWAP_REJECTED` at `plug()`.
+  - A failure of an outside file while the rack starts is an `OutsideFailure`; `#powerUpFallingBack()` powers off what started, and starts again with that file's packaged firmware. A layout, a wiring, or a plan that fails makes each outside file whose firmware declares another model, height, priority, needs, or ports than its packaged firmware fall back.
+  - `#settleKnownGood()` makes the packaged firmware known-good, puts the devices of outside files on probation, those wired to one another as one group, and marks and records each fallback.
+  - A scanned rack scans the device files that the executable packaged, in the order that `rack compile` found them, and follows the plan file it packaged, without writing one.
+  - `status()` gains `packaged`. Describe requests carry the base directory, and the Worker host sets it before firmware loads.
+- `src/executable.ts` is the executable's command line, and `src/commands.ts` holds what it shares with `src/cli.ts`. Its `ctl` takes `--base-dir` in place of `rack ctl`'s `--dir`, so that both its commands name the base directory one way.
+- `test/executable.test.ts` covers the decision's tests, and failures to load, to boot, to be wired, and of `selfTest`, the wiring groups, a scanned rack, a device the executable didn't package, and a second rack for one base directory. `test/reference.test.ts` holds the reference of the `rack` command to `src/cli.ts`, `src/commands.ts`, and `src/executable.ts`.
+- Documentation: "A rack in one executable" in [Running a rack](../../docs/guides/running.md#a-rack-in-one-executable); `rack compile` and the command line of an executable in the reference of the `rack` command; `packaged` in the reports; "Executables" in the limits; the known-good firmware of an executable in [Updates](../../docs/guides/updates.md#fallback); the README; the docs map; and a row of the skill.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-20, after the Agent's report pointed out three of its choices: the executable's own directory as the default base directory, outside files that replace packaged devices but add none, and no option to refuse outside files. The user's words: "Approve, and merge into main."

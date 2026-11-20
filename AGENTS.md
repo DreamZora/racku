@@ -42,7 +42,7 @@ This file defines the project background, architectural constraints, and working
   - [Firmware keeps the import.meta paths of its sources](.agents/decisions/261119_213017-firmware-import-meta.md): a device reads a file next to its source.
 - rack42u works around two bugs of Bun 1.4.4, which aren't reported to Bun yet: [Watching two Bun bugs before reporting them](.agents/decisions/261119_031624-watching-bun-bugs.md) holds the reports, and the watch lasts until 2027-01-19.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list still needs its own decision before work starts, except the `inline` form, which [The main thread runs no devices, and what child processes, connected racks, and single executables must meet](.agents/decisions/261119_054850-main-thread-runs-no-devices.md) drops. That decision also sets what the decisions for the `chassis` form, connected racks, and `bun build --compile` packaging must meet: transports, one authentication method for sockets and TCP, and devices outside an executable with a fallback to the ones inside it.
-- P4 is under way on `feat/p4`. Its first decision, [A rack in one executable, which runs devices from files beside it and falls back to the ones inside](.agents/decisions/261120_011627-single-executables.md), is accepted, and being implemented.
+- P4 is under way on `feat/p4`. Its first decision, [A rack in one executable, which runs devices from files beside it and falls back to the ones inside](.agents/decisions/261120_011627-single-executables.md), is implemented: `rack compile` packages a rack into one executable, which runs a device from a file in its base directory when there is one, and falls back to the device packaged inside.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
 
 ## Project positioning
@@ -239,7 +239,12 @@ bun.lock             lockfile
 .gitattributes       LF line endings in every checkout, Windows included
 src/                 framework source
   index.ts           entry point of rack42u
-  cli.ts             the rack command (start, dev, plan, ctl); dev.ts holds the file watcher
+  cli.ts             the rack command (start, dev, plan, compile, ctl); commands.ts holds what an
+                     executable shares with it, and dev.ts the file watcher
+  compile.ts         rack compile: packages a rack, its firmware, and packages into one executable
+  executable.ts      the command line of an executable that rack compile made
+  packaged.ts        what an executable carries, the keys of its device files, and its
+                     import.meta paths
   rack.ts            assembly, power sequencing, swaps, resets, and the rack handle
   backplane.ts       links between instances, holds and switches, and calls from outside the rack
   instance.ts        the main thread's handle on one device Worker

@@ -14,7 +14,8 @@ A running rack reports what it does in four ways: `status()`, `metrics()`, `hist
 | `firmware` | The firmware hash of the installed instance, or `null` while none is installed. |
 | `knownGood` | The hash of the firmware the device falls back to, as [Fallback](../guides/updates.md#fallback) describes. |
 | `probationUntil` | While the installed instance is on probation, when probation ends, a millisecond timestamp. |
-| `source` | The absolute path of the device file. |
+| `source` | The absolute path of the device file. In an executable, a device of the app names the place of its outside file under the base directory, whether or not the file is there, as [A rack in one executable](../guides/running.md#a-rack-in-one-executable) describes. |
+| `packaged` | In an executable, `true` while the device runs the firmware packaged inside it; absent otherwise. |
 | `inFlight` | The calls the installed instance is serving, from other devices and from outside the rack. |
 | `crashes` | How many times the device crashed within the crash window, watchdog bites included: a number. The window is 60 seconds, or four times the device's longest watchdog timeout when that is longer than 15 seconds, as [Crashes](../guides/faults.md#crashes) describes. A swap that succeeds sets it back to 0. |
 | `error` | The last failed swap or crash, as `{ code, message, data? }`. |

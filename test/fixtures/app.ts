@@ -250,20 +250,24 @@ export class Cli {
    * @param env Extra environment variables.
    * @param command Replaces the whole command line, for running the CLI another way.
    * @param input `"pipe"` runs the command directly with its standard input a pipe, as
-   *   `--stop-on-stdin-close` does.
+   *   `--stop-on-stdin-close` does. `"console"` runs it on a console of its own on Windows, as
+   *   `start` and `dev` run, for a command without either word, such as an executable's.
    */
   constructor(
     args: string[],
     cwd: string,
     env: Record<string, string> = {},
     command = [process.execPath, join(ROOT, "src", "cli.ts"), ...args],
-    input?: "pipe",
+    input?: "pipe" | "console",
   ) {
     if (!controlDirInUse) {
       throw new Error("call useControlDir() at the top level of this test file");
     }
     const piped = input === "pipe" || command.includes("--stop-on-stdin-close");
-    this.#hosted = WINDOWS && !piped && (command.includes("start") || command.includes("dev"));
+    this.#hosted =
+      WINDOWS &&
+      !piped &&
+      (input === "console" || command.includes("start") || command.includes("dev"));
     this.process = Bun.spawn(
       this.#hosted ? [process.execPath, CONSOLE_HOST, ...command] : command,
       {

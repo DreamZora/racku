@@ -61,6 +61,7 @@ The documentation ships with the package, and this skill names each document by 
 | What happens when a device crashes, hangs, or falls behind? | `node_modules/rack42u/docs/guides/faults.md` |
 | How do swaps, reloads, fallback, and rollback work? | `node_modules/rack42u/docs/guides/updates.md` |
 | How do a running rack's devices follow data, such as one per entry of a file? | `node_modules/rack42u/docs/guides/running.md#a-layout-that-follows-data` |
+| How do I ship the app as one executable, and replace a device in it with a file? | `node_modules/rack42u/docs/guides/running.md#a-rack-in-one-executable` |
 | Which exports, options, and types are there? | `node_modules/rack42u/docs/reference/api.md` |
 | Which commands, flags, and environment variables does `rack` take? | `node_modules/rack42u/docs/reference/cli.md` |
 | What does an error code mean? | `node_modules/rack42u/docs/reference/errors.md` |

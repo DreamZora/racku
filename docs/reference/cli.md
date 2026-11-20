@@ -7,6 +7,7 @@
 | `rack start [manifest]` | Starts the rack in `manifest`, `rack.ts` in the current directory by default. |
 | `rack dev [manifest]` | Starts the rack, then reloads the devices whose files change. |
 | `rack plan [manifest]` | Prints the plan without starting the rack. For a scanned rack, `--write` writes the plan file, and `--check` checks it. |
+| `rack compile [manifest]` | Packages the rack in `manifest` into one executable, as [A rack in one executable](../guides/running.md#a-rack-in-one-executable) describes, and prints each device it packaged with its firmware hash, and the executable's path and size. A device that fails to build fails it, with exit code 1, and no executable is written. |
 | `rack ctl <operation>` | Operates the rack that runs from the current directory, as [Managing a running rack](../guides/managing.md) describes. |
 
 ## Exit codes
@@ -36,6 +37,13 @@
 
 The two exclude each other, and a rack placed by hand takes neither.
 
+## Flags of rack compile
+
+| Flag | Meaning |
+|---|---|
+| `--outfile <file>` | The executable's path. By default, the rack's name next to the manifest, with `.exe` for Windows. |
+| `--target <target>` | One of Bun's targets, such as `bun-linux-arm64` or `bun-windows-x64`, for an executable of another system; Bun downloads that system's runtime once. By default, the executable is for the system that compiles it. |
+
 ## Operations of rack ctl
 
 `rack ctl` runs one operation of the rack handle on the rack whose base directory is the current directory, prints its result as JSON, and exits with code 0, or prints the error and exits with code 1.
@@ -59,6 +67,19 @@ The two exclude each other, and a rack placed by hand takes neither.
 | `--url <url>`, `--token <token>` | Reach a rack's TCP endpoint at `url`, with its token, from anywhere on the machine. |
 | `--no-cascade` | With `restart`: leave the device's consumers running. |
 | `--to <firmware>` | With `rollback`: go back to this firmware, which the history keeps. |
+
+## The command line of an executable
+
+An executable that `rack compile` made starts the rack it packaged, as `rack start` starts a manifest, with the same flags, signals, and exit codes, and `--base-dir`. With `ctl`, it operates the rack that it runs for the same base directory, with the operations of `rack ctl` and its flags, `--base-dir` in place of `--dir`.
+
+```sh
+./app --base-dir /var/lib/app --log json   # start the rack
+./app ctl status --base-dir /var/lib/app   # operate it
+```
+
+| Flag | Meaning |
+|---|---|
+| `--base-dir <dir>` | The base directory, which stands for the manifest's directory: by default, the directory that holds the executable. |
 
 ## Environment variables
 

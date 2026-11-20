@@ -5,9 +5,11 @@
  * @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
  * @decision .agents/decisions/261112_035943-hot-swap.md#firmware
  * @decision .agents/decisions/261119_213017-firmware-import-meta.md
+ * @decision .agents/decisions/261120_011627-single-executables.md
  */
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { fileKey, importMetaExpression } from "./packaged.ts";
 
 /** A built firmware bundle. */
 export interface Firmware {
@@ -19,6 +21,25 @@ export interface Firmware {
   hash: string;
   /** Absolute path of the device file it was built from. */
   source: string;
+  /** Set on firmware packaged inside an executable, which no file on disk holds. */
+  packaged?: true;
+}
+
+/**
+ * How a build for an executable differs from one under `rack start`: rack42u comes from the
+ * Worker host, every other import is bundled, and `import.meta` paths are the executable's.
+ *
+ * @decision .agents/decisions/261120_011627-single-executables.md#compiling-a-rack
+ */
+export interface PackagedBuild {
+  /** The app's directory, from which the files' keys are worked out; see `packaged.ts`. */
+  appDir: string;
+  /** Where the bundle goes; by default `.rack/firmware/` under the base directory. */
+  outdir?: string;
+  /** At run time: the packages that the executable carries, and the executable's root. */
+  carried?: { root: string; specifiers: Readonly<Record<string, string>> };
+  /** At compile time: the packages that the app declares, and the set of those imported. */
+  record?: { declared: ReadonlySet<string>; found: Set<string> };
 }
 
 /** The `import.meta` paths that a bundle would otherwise give its own location. */
@@ -55,6 +76,110 @@ const SOURCE_IMPORT_META: Bun.BunPlugin = {
   },
 };
 
+/**
+ * Gives the files of a build for an executable the `import.meta` paths that the executable gives
+ * them when it runs: each file's are worked out from its key, so a file in the app reads what
+ * lies under the base directory, at the place of its outside file.
+ *
+ * @param appDir The app's directory, which the keys are relative to.
+ * @param skip Files to leave as they are, such as the entries that `rack compile` generates.
+ * @decision .agents/decisions/261120_011627-single-executables.md#running-an-executable
+ */
+export function packagedImportMeta(
+  appDir: string,
+  skip: (path: string) => boolean = () => false,
+): Bun.BunPlugin {
+  return {
+    name: "rack42u-packaged-import-meta",
+    setup(build) {
+      build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
+        const text = await Bun.file(path).text();
+        const extension = /\.[cm]?([jt]sx?)$/.exec(path)?.[1] ?? "ts";
+        const loader = LOADERS[extension] ?? "ts";
+        if (skip(path)) return { contents: text, loader };
+        const key = fileKey(path, appDir);
+        return {
+          contents: text.replace(IMPORT_META, (_match, what: string) =>
+            importMetaExpression(key, what),
+          ),
+          loader,
+        };
+      });
+    },
+  };
+}
+
+/** The names that firmware imports rack42u by, which the Worker host gives it in an executable. */
+const HOST_SPECIFIER = /^rack42u(\/std)?$/;
+
+/**
+ * Gives firmware in an executable the Worker host's own rack42u: `rack42u` and `rack42u/std`
+ * resolve to a module that re-exports what the host put under `HOST_MODULES`, so the firmware
+ * and the host share one copy, and the host knows the firmware's `RackError`s.
+ *
+ * @decision .agents/decisions/261120_011627-single-executables.md#compiling-a-rack
+ */
+const HOST_RACK42U: Bun.BunPlugin = {
+  name: "rack42u-host",
+  setup(build) {
+    build.onResolve({ filter: HOST_SPECIFIER }, ({ path }) => ({
+      path,
+      namespace: "rack42u-host",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "rack42u-host" }, async ({ path }) => {
+      // Loaded when the build runs, not with this module: both import it.
+      const exports =
+        path === "rack42u" ? await import("./index.ts") : await import("./std/index.ts");
+      const names = Object.keys(exports).filter((name) => name !== "default");
+      const lines = names.map((name) => `export const ${name} = host.${name};`);
+      return {
+        contents: `const host = globalThis[Symbol.for("rack42u.hostModules")][${JSON.stringify(path)}];\n${lines.join("\n")}\n`,
+        loader: "js",
+      };
+    });
+  },
+};
+
+/** The name of the package that a bare specifier imports, such as `@scope/name` or `name`. */
+function packageOf(specifier: string): string {
+  const parts = specifier.split("/");
+  return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : (parts[0] as string);
+}
+
+/**
+ * Collects, at compile time, the specifiers of the packages that the app declares and the
+ * firmware imports, which the executable then carries for firmware built from outside files.
+ */
+function recordPackages(record: NonNullable<PackagedBuild["record"]>): Bun.BunPlugin {
+  return {
+    name: "rack42u-record-packages",
+    setup(build) {
+      build.onResolve({ filter: /^[^./]/ }, ({ path }) => {
+        if (record.declared.has(packageOf(path))) record.found.add(path);
+        return undefined;
+      });
+    },
+  };
+}
+
+/**
+ * Leaves the packages that the executable carries to the executable, at their path inside it,
+ * where firmware built from an outside file imports them.
+ */
+function carriedPackages(carried: NonNullable<PackagedBuild["carried"]>): Bun.BunPlugin {
+  return {
+    name: "rack42u-carried-packages",
+    setup(build) {
+      build.onResolve({ filter: /^[^./]/ }, ({ path: specifier }) => {
+        const inside = carried.specifiers[specifier];
+        if (inside === undefined) return undefined;
+        const path = join(carried.root, ...inside.split("/")).replaceAll("\\", "/");
+        return { path, external: true };
+      });
+    },
+  };
+}
+
 const DEPENDENCY_FIELDS = [
   "dependencies",
   "devDependencies",
@@ -72,16 +197,37 @@ const DEPENDENCY_FIELDS = [
  * Each file of the bundle keeps the `import.meta` paths of its own source, so a device reads a
  * file next to its source as it would unbundled.
  *
+ * For an executable, `packaged` changes three things: rack42u comes from the Worker host, every
+ * other import is bundled, apart from the packages that the executable carries, and the
+ * `import.meta` paths are the ones the executable gives the files.
+ *
  * @param source Absolute path of the device file.
  * @param baseDir Rack base directory; firmware must live inside the app directory.
+ * @param packaged For an executable: firmware that `rack compile` packages, or that an executable
+ *   builds from an outside file.
  * @returns The bundle and its hash.
  * @throws Error with the build messages when the build fails.
  */
-export async function buildFirmware(source: string, baseDir: string): Promise<Firmware> {
+export async function buildFirmware(
+  source: string,
+  baseDir: string,
+  packaged?: PackagedBuild,
+): Promise<Firmware> {
   // Bundles keep bare imports for externals and resolve them from their own location.
   // @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
-  const outdir = join(baseDir, ".rack", "firmware");
-  const external = ["rack42u", ...(await declaredDependencies(dirname(source)))];
+  const outdir = packaged?.outdir ?? join(baseDir, ".rack", "firmware");
+  const external =
+    packaged === undefined ? ["rack42u", ...(await declaredDependencies(dirname(source)))] : [];
+  // @decision .agents/decisions/261120_011627-single-executables.md#compiling-a-rack
+  const plugins =
+    packaged === undefined
+      ? [SOURCE_IMPORT_META]
+      : [
+          HOST_RACK42U,
+          ...(packaged.carried === undefined ? [] : [carriedPackages(packaged.carried)]),
+          ...(packaged.record === undefined ? [] : [recordPackages(packaged.record)]),
+          packagedImportMeta(packaged.appDir),
+        ];
   let output: Bun.BuildOutput;
   try {
     output = await Bun.build({
@@ -91,7 +237,7 @@ export async function buildFirmware(source: string, baseDir: string): Promise<Fi
       sourcemap: "inline",
       naming: "[name]-[hash].[ext]",
       external,
-      plugins: [SOURCE_IMPORT_META],
+      plugins,
     });
   } catch (error) {
     throw new Error(`firmware build failed for ${source}: ${describeBuildError(error)}`);
@@ -185,7 +331,7 @@ function reportsMissing(error: unknown, url: string, path: string): boolean {
 }
 
 /** Lists the dependencies of the `package.json` closest to `dir`, or none when there is none. */
-async function declaredDependencies(dir: string): Promise<string[]> {
+export async function declaredDependencies(dir: string): Promise<string[]> {
   for (let current = dir; ; current = dirname(current)) {
     const file = Bun.file(join(current, "package.json"));
     if (await file.exists()) {
@@ -203,7 +349,8 @@ async function declaredDependencies(dir: string): Promise<string[]> {
   }
 }
 
-function describeBuildError(error: unknown): string {
+/** Joins the messages of a failed build, its errors only when it has any, with their places. */
+export function describeBuildError(error: unknown): string {
   const all: unknown[] =
     error instanceof AggregateError ? error.errors : Array.isArray(error) ? error : [error];
   const errors = all.filter((item) => (item as { level?: unknown } | null)?.level !== "warning");

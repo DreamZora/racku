@@ -81,6 +81,34 @@ await running.stop();
 - A rack has 42 slots unless its manifest sets more with `size`, such as `rack("greeters", { size: 100, slots })`.
 - `rack start` and `rack ctl reload` don't read the manifest again, and `rack dev` reads it again only when the manifest file itself changes, not when a file that it reads does. So a rack whose devices follow a data file runs from a program of its own, such as this one, which also watches the file.
 
+## A rack in one executable
+
+`rack compile` packages a rack into one executable: the manifest, rack42u, the firmware of every device that the manifest mounts, and the packages that the firmware imports. The executable runs where Bun isn't installed, such as beside the window of a desktop app, and a device in it can still be replaced there by a file:
+
+```sh
+rack compile rack.ts --outfile dist/greeter          # about 100 MiB, most of it Bun
+./dist/greeter --base-dir /var/lib/greeter           # starts the rack, as rack start does
+./dist/greeter ctl status --base-dir /var/lib/greeter
+```
+
+- **The base directory** stands for the manifest's directory: the one that `--base-dir` names, or by default the one that holds the executable.
+  - The manifest runs when the executable starts, so it reads the environment then, such as a port or a token.
+  - Relative paths of the manifest and of devices' configuration, such as the database of `sqlite`, resolve against the base directory.
+  - The `import.meta` paths of the manifest and of the app's device files name their places under it, so a device reads a file next to its source from there. A file that must travel inside the executable is imported instead, such as `import routes from "./routes.json"`.
+  - The rack itself writes there only the firmware of outside files, in `.rack/firmware/`.
+- **Outside files.** Each device file of the app, outside `node_modules`, has an outside file: the file at the same path under the base directory, such as `devices/greeter.ts`.
+  - When the rack starts, and at each `reload()` and `swap(name)`, a device runs its outside file when there is one, and its packaged firmware otherwise.
+  - rack42u's own devices, and devices from other packages, run only from their packaged firmware. Outside files replace packaged devices; they add none.
+  - The executable builds an outside file as `rack compile` built the packaged firmware: its firmware imports rack42u, and the packages that the packaged firmware imports, from the executable. Any other import must resolve from the file's place, and its firmware bundles it.
+- **Falling back.** An outside file counts as an update of its packaged device, and the packaged firmware is the device's first known-good firmware, as [Fallback](updates.md#fallback) describes.
+  - A device that starts from an outside file starts on probation. Once it gets through probation, its firmware is known-good.
+  - When the outside file fails to build, with `RACK_SWAP_REJECTED`, or to load, to boot, to be wired, or its `selfTest`, the device starts from its packaged firmware instead, and its slot reports `degraded`, with the failure as its `error`.
+  - When it crashes, or a watchdog bites, on probation, the device falls back to its known-good firmware. Outside files wired to one another fall back together.
+  - At `reload()` or `swap(name)`, an outside file that fails to build is a failed swap: the device keeps what it runs.
+- **Reports.** `status()` marks a device that runs its packaged firmware with `packaged: true`, and its `source` names the place of its outside file, whether or not the file is there. The log says `<device> runs <file>` for each outside file at start, and warns `<device> runs its packaged firmware: <reason>` at each fallback. `history()` records each fallback with the cause `fallback`.
+- **Who can change it.** Outside files run with the rights of the executable: whoever can write the base directory can run code in the rack, as whoever can write an app's files can under `rack start`.
+- [The command line of an executable](../reference/cli.md#the-command-line-of-an-executable) lists its flags, and [Flags of rack compile](../reference/cli.md#flags-of-rack-compile) how to compile for another system.
+
 ## Windows
 
 rack42u runs on Windows as it does on Linux and macOS, with these differences:
