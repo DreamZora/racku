@@ -19,6 +19,9 @@ A program in another language, such as the Rust shell of a desktop app, runs `ra
 - **Waiting:** the shutdown takes as long as the rack's timeouts allow, such as `drainTimeout` and `hookTimeout`. A program that must not wait that long gives the rack a grace period of its own, then kills it.
 - **Windows:** a program can start its children in a job object that the system ends together with the program, as `Bun.spawn` does unless the child is detached. A rack started that way ends at once with its program, without its shutdown. Such a program starts the rack detached, with `Bun.spawn`'s `detached: true`.
 - The command line's own messages, such as a usage error, are text on stderr.
+- **Finding the command:** an app's `rack` command is in its `node_modules/.bin/`, where the scripts of its `package.json` find it. So a program runs a script in the app's directory, such as `bun run start --stop-on-stdin-close --log json` for the `start` script of [Getting started](../getting-started.md#create-the-app): Bun passes the arguments after the script's name on to `rack`. Don't run `bun run rack`: in an app whose manifest is `rack.ts`, Bun runs that file instead of the command, which prints nothing and exits with 0.
+- **Configuration:** the manifest is a module, so it can take values from the environment that the program gives the rack, such as `httpPanel({ port: Number(process.env.PORT ?? 3000), routes })`, and read files next to it, such as `new URL("./routes.json", import.meta.url)`.
+- **Changing a device while it runs:** under `rack dev`, the rack replaces a device once its file changes, and logs `<device> swapped` once the new firmware serves. Under `rack start`, `rack ctl reload` does it on demand, run through a script too, as [Managing a running rack](managing.md) shows.
 
 A program written in Bun can instead run a rack inside itself with `start()`, with its own `logger`.
 

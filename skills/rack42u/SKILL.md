@@ -33,6 +33,7 @@ The documentation ships with the package, and this skill names each document by 
 
 - **A call to an RPC member without input** still passes its input: `ctx.ports.notes.list(undefined)`. The context's port functions take the input first: `node_modules/rack42u/docs/guides/devices.md#the-context`.
 - **Several providers of one connector below a need** fail the rack's start. A manifest placed by hand picks one with a patch, and a scanned rack with `use`: `node_modules/rack42u/docs/guides/racks.md#placing-devices-by-hand` and `node_modules/rack42u/docs/guides/racks.md#shared-instances-and-own-copies`.
+- **`bun run rack …` runs `rack.ts`**, the manifest, rather than the `rack` command, and prints nothing. Run the command through the scripts of `package.json`, such as `bun run start`: `node_modules/rack42u/docs/guides/running.md#running-a-rack-from-another-program`.
 - **Every file in a scanned directory** must default-export a device; helpers go in files or folders whose names start with `_`: `node_modules/rack42u/docs/guides/racks.md#scanned-racks`.
 - **A scanned rack under `rack start`** follows its plan file, and refuses to start when the plan no longer fits; `rack plan --write` updates it: `node_modules/rack42u/docs/guides/racks.md#the-plan-file`.
 - **An event emitted before an instance is installed is dropped**, such as one from `powerOn` during a swap: `node_modules/rack42u/docs/guides/testing.md#members-of-a-bench`.

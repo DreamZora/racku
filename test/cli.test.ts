@@ -78,7 +78,8 @@ describe("rack start", () => {
   });
 
   // @doc docs/guides/running.md#a-layout-that-follows-data
-  test("rack ctl reload doesn't read an edited manifest", async () => {
+  // @doc docs/guides/running.md#running-a-rack-from-another-program
+  test("rack ctl reload replaces a device whose file changed, and doesn't read an edited manifest", async () => {
     const created = await app();
     const cli = run(["start"], created.dir);
     const url = await cli.panelUrl();
@@ -89,6 +90,15 @@ describe("rack start", () => {
     expect(JSON.parse(reload.output)).toEqual([]);
     // The panel still routes all of /web, as the manifest the rack started with says.
     expect((await fetch(new URL("/web/echo", url))).status).toBe(200);
+
+    const source = await created.read("devices/web.ts");
+    await created.write("devices/web.ts", source.replace('"hello"', '"hello again"'));
+    const again = run(["ctl", "reload"], created.dir);
+    expect(await again.exited()).toBe(0);
+    expect(JSON.parse(again.output)).toEqual([
+      expect.objectContaining({ device: "web", mode: "hot" }),
+    ]);
+    expect(await greeting(url)).toBe("hello again");
   });
 
   // Windows has no SIGTERM.
@@ -182,6 +192,18 @@ async function removeLink(path: string): Promise<void> {
 
 /** A program that runs a rack and is killed in a test. */
 const HOST_PROGRAM = join(FIXTURES, "host-program.ts");
+
+describe("configuration from the program", () => {
+  // @doc docs/guides/running.md#running-a-rack-from-another-program
+  test("a manifest takes values from the environment that the program gives the rack", async () => {
+    const created = await app(MANIFEST.replace("port: 0", "port: Number(process.env.PANEL_PORT)"));
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+    const port = String(server.port);
+    await server.stop(true);
+    const cli = run(["start"], created.dir, { PANEL_PORT: port });
+    expect(new URL(await cli.panelUrl()).port).toBe(port);
+  });
+});
 
 /** A device that logs a `bigint`, a warning, and circular details. */
 const NOISY = `import { device } from "rack42u";
@@ -382,6 +404,7 @@ describe("the rack bin", () => {
 
 // @doc docs/guides/running.md#hot-reload-with-rack-dev
 describe("rack dev", () => {
+  // @doc docs/guides/running.md#running-a-rack-from-another-program
   test("swaps a device after its file changes", async () => {
     const created = await app();
     const cli = run(["dev"], created.dir);

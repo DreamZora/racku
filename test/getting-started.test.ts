@@ -190,6 +190,7 @@ async function curls(block: string, port: number): Promise<{ got: string[]; show
 }
 
 // @doc docs/getting-started.md
+// @doc docs/guides/running.md#running-a-rack-from-another-program
 test("the app of the getting-started guide installs, runs, tests, and reloads as written", async () => {
   const app = join(WORK, "notes");
   await mkdir(app, { recursive: true });
@@ -251,6 +252,11 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
     const path = (code.split("\n")[0] as string).slice(3);
     await Bun.write(join(app, path), code.replaceAll("3000", String(port)));
   }
+
+  // `bun run rack` runs the manifest, rack.ts, and not the rack command, which would refuse
+  // `status` with a usage error.
+  const wrong = await exec([process.execPath, "run", "rack", "status"], app);
+  expect({ code: wrong.code, output: wrong.output.trim() }).toEqual({ code: 0, output: "" });
 
   const [running, reloaded] = blocks("sh").filter((block) => block.startsWith("curl "));
   expect(command("bun run ")).toBe("bun run start");
