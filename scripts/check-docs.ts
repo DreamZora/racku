@@ -9,6 +9,10 @@
  * - Every relative link and anchor in `README.md`, `docs/`, and `skills/` leads to a file, a
  *   directory, or a heading that exists, and `docs/README.md` links to every other document under
  *   `docs/`.
+ * - A skill's links stay in its own folder, since an app copies that folder away from the rest of
+ *   the package. A skill names the documentation by its path in an app instead, in code such as
+ *   `node_modules/rack42u/docs/guides/devices.md#hooks`: every such path, in any document, leads
+ *   to a file, a directory, or a heading of this repository.
  *
  * Run it from the repository root with `bun run check:docs`. It prints one
  * `<file>:<line>: <problem>` line per problem and exits with code 1 when it finds any.
@@ -32,7 +36,7 @@ export interface DocsResult {
   sections: number;
   /** Number of `@doc` references found in tests. */
   references: number;
-  /** Number of relative links and anchors checked. */
+  /** Number of relative links, anchors, and paths in an app checked. */
   links: number;
 }
 
@@ -60,8 +64,12 @@ const REFERENCE_TARGET = /^((?:README\.md|docs\/[^#\s]+\.md))(?:#(.+))?$/;
 const NO_CLAIMS = /^<!-- no claims: \S.*-->$/;
 // An inline link or image, `[text](target)` or `[text](target "title")`.
 const LINK = /!?\[[^\]]*\]\(\s*([^)\s]*)(?:\s+"[^"]*")?\s*\)/g;
-const INLINE_CODE = /(`+)[^`]+?\1/g;
+const INLINE_CODE = /(`+)([^`]+?)\1/g;
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
+/** A skill's folder, `skills/<name>/`, which an app copies on its own. */
+const SKILL_FOLDER = /^skills\/[^/]+\//;
+/** A path in an app to a file of the installed package, and its anchor. */
+const PACKAGE_PATH = /^node_modules\/rack42u\/([^\s#]*)(?:#(\S+))?$/;
 
 /**
  * Checks the documentation under a repository root against its tests and its links.
@@ -123,6 +131,13 @@ export async function checkDocs(root: string): Promise<DocsResult> {
         if (typeof result === "string")
           problems.push({ file: document.file, line, message: result });
         else if (document.file === MAP) mapped.add(result.file);
+      }
+      for (const [, , code = ""] of text.matchAll(INLINE_CODE)) {
+        const path = PACKAGE_PATH.exec(code.trim());
+        if (path === null) continue;
+        links++;
+        const message = await checkPackagePath(root, path, documents);
+        if (message !== undefined) problems.push({ file: document.file, line, message });
       }
     }
   }
@@ -194,6 +209,11 @@ async function checkLink(
     const resolved = toPosix(relative(root, join(root, dirname(document.file), path)));
     if (resolved.startsWith("../") || resolved === "..")
       return `${target} leads outside the repository`;
+    const skill = SKILL_FOLDER.exec(document.file)?.[0];
+    if (skill !== undefined && !`${resolved}/`.startsWith(skill)) {
+      const path = `node_modules/rack42u/${resolved}${anchor === undefined ? "" : `#${anchor}`}`;
+      return `${target} leaves the skill's folder, which an app copies on its own; name the file by its path in an app, \`${path}\``;
+    }
     if (!(await exists(join(root, resolved))))
       return `${target} leads to nothing: ${resolved} doesn't exist`;
     file = resolved;
@@ -203,6 +223,27 @@ async function checkLink(
   if (!linked.anchors.includes(anchor))
     return `${target} leads to nothing: ${file} has no #${anchor}`;
   return { file };
+}
+
+/**
+ * Checks a path in an app to a file of the installed package, such as
+ * `node_modules/rack42u/docs/guides/devices.md#hooks`, against this repository.
+ *
+ * @returns The problem, or `undefined` when the path leads to a file, a directory, or a heading.
+ */
+async function checkPackagePath(
+  root: string,
+  [span, path = "", anchor]: RegExpExecArray,
+  documents: ReadonlyMap<string, Document>,
+): Promise<string | undefined> {
+  const file = toPosix(relative(root, join(root, path)));
+  if (file.startsWith("../") || file === "..") return `${span} leads outside the package`;
+  if (!(await exists(join(root, file)))) return `${span} leads to nothing: ${file} doesn't exist`;
+  if (anchor === undefined || !file.endsWith(".md")) return undefined;
+  const linked = documents.get(file) ?? (await readMarkdown(root, file));
+  if (!linked.anchors.includes(anchor))
+    return `${span} leads to nothing: ${file} has no #${anchor}`;
+  return undefined;
 }
 
 async function readMarkdown(root: string, file: string): Promise<Document> {

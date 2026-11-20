@@ -257,7 +257,8 @@ examples/net-tool/   a TCP and UDP tool: its rack, devices, and connector, which
   app/               the window, Vue 3 and Quasar with its own package.json, and src-tauri/,
                      the Tauri shell; the root's type check and lint skip it
 skills/rack42u/      the skill for agents that build apps on rack42u, which apps copy from
-                     node_modules; bun run check:docs checks its links
+                     node_modules; it names documents by their path in an app, such as
+                     node_modules/rack42u/docs/concepts.md, which bun run check:docs checks
 scripts/             project scripts: check-decisions.ts, the decision gate; check-docs.ts, the
                      documentation gate; and markdown.ts, the headings and anchors both read
 .github/workflows/   check.yml, the CI jobs on Linux, macOS, and Windows

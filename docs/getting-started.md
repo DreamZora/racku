@@ -213,6 +213,8 @@ rack42u comes with a skill for coding agents, such as Claude Code: the workflow 
 mkdir -p .claude/skills && cp -r node_modules/rack42u/skills/rack42u .claude/skills/
 ```
 
+The skill names each document by its path in the app, such as `node_modules/rack42u/docs/guides/devices.md`, so the agent reads the documentation of the version the app installed.
+
 ## Where to go next
 
 - [Concepts](concepts.md) explains how a rack works: slots, devices, connectors, the backplane, firmware, swaps, and faults.

@@ -9,9 +9,10 @@
  * @decision .agents/decisions/261119_055008-documentation.md#tests-that-hold-the-documentation
  */
 import { afterAll, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { headingAnchors, headingsOf } from "../scripts/markdown.ts";
 import { ROOT } from "./fixtures/app.ts";
 import { typecheck } from "./fixtures/typecheck.ts";
 
@@ -78,6 +79,46 @@ async function repository(): Promise<{ url: string; commit: string }> {
   }
   const commit = (await git("rev-parse", "HEAD")).stdout.trim();
   return { url: `git+${Bun.pathToFileURL(dir).href}`, commit };
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    // Missing, or unreadable: either way, not there for the app.
+    return false;
+  }
+}
+
+/**
+ * Reads a skill copied into an app, and follows the paths in the app that it names, such as
+ * `node_modules/rack42u/docs/guides/devices.md#hooks`, and its relative links.
+ *
+ * @returns What it followed, and what led to no file, directory, or heading.
+ */
+async function follow(app: string, skill: string): Promise<{ followed: string[]; lost: string[] }> {
+  const text = await Bun.file(skill).text();
+  const targets = [
+    ...[...text.matchAll(/`(node_modules\/rack42u\/[^`\s]*)`/g)].map(([, ref = ""]) => ({
+      ref,
+      base: app,
+    })),
+    ...[...text.matchAll(/\]\(([^)\s]+)\)/g)]
+      .map(([, ref = ""]) => ({ ref, base: dirname(skill) }))
+      .filter(({ ref }) => !/^[a-z][a-z0-9+.-]*:/i.test(ref)),
+  ];
+  const lost: string[] = [];
+  for (const { ref, base } of targets) {
+    const [path = "", anchor] = ref.split("#");
+    const file = join(base, path);
+    if (!(await exists(file))) lost.push(ref);
+    else if (anchor !== undefined && file.endsWith(".md")) {
+      const headings = headingsOf((await Bun.file(file).text()).split(/\r?\n/));
+      if (!headingAnchors(headings).includes(anchor)) lost.push(ref);
+    }
+  }
+  return { followed: targets.map(({ ref }) => ref), lost };
 }
 
 async function freePort(): Promise<number> {
@@ -175,12 +216,23 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
     output: "",
   });
 
-  // The skill that the guide copies into the app comes with the package.
+  // The skill that the guide copies into the app comes with the package, and once copied, what
+  // it names leads to the documentation the app installed. The test copies as the command does,
+  // since Bun's shell has no cp of its own on every system.
   expect(command("mkdir -p .claude/skills")).toBe(
     "mkdir -p .claude/skills && cp -r node_modules/rack42u/skills/rack42u .claude/skills/",
   );
-  const skill = join(app, "node_modules", "rack42u", "skills", "rack42u", "SKILL.md");
+  const skills = join(app, ".claude", "skills");
+  await mkdir(skills, { recursive: true });
+  await cp(join(app, "node_modules", "rack42u", "skills", "rack42u"), join(skills, "rack42u"), {
+    recursive: true,
+  });
+  const skill = join(skills, "rack42u", "SKILL.md");
   expect(await Bun.file(skill).text()).toStartWith("---\nname: rack42u\n");
+  const { followed, lost } = await follow(app, skill);
+  expect(followed).toContain("node_modules/rack42u/docs/getting-started.md");
+  expect(followed).toContain("node_modules/rack42u/docs/guides/devices.md#the-context");
+  expect(lost).toEqual([]);
 
   const port = await freePort();
   const files = blocks("ts").filter((code) => /^\/\/ [\w./-]+\.ts\n/.test(code));
