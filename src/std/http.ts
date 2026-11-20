@@ -121,7 +121,8 @@ export interface HttpHandlers<T = unknown> {
   streamThreshold?: number;
   websocket?: {
     open?(ws: HttpSocket<T>): void | Promise<void>;
-    message?(ws: HttpSocket<T>, data: string | Uint8Array): void | Promise<void>;
+    /** Text arrives as a string, and binary as bytes in an `ArrayBuffer` of their own. */
+    message?(ws: HttpSocket<T>, data: string | Uint8Array<ArrayBuffer>): void | Promise<void>;
     close?(ws: HttpSocket<T>, code: number, reason: string): void | Promise<void>;
   };
 }

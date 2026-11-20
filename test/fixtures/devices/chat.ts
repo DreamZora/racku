@@ -60,7 +60,9 @@ export default device({
           },
           async message(ws, data) {
             if (typeof data !== "string") {
-              ws.send(data);
+              // Binary goes back as it arrived, through the port's send event, which takes the
+              // type that a message arrives with (#14).
+              await ctx.emit.http.send({ socket: ws.id, data });
               return;
             }
             if (data === "fail") throw new RackError("CHAT_FAILED", "failed on purpose");
