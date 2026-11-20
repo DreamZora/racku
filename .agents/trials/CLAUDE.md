@@ -18,12 +18,15 @@ This folder holds trial apps built on rack42u by agents that know rack42u only f
 ## Adding rack42u
 
 - rack42u is the git repository two levels above this folder: `pwd` shows this folder's path, and the repository's path is that without `/.agents/trials`.
-- Add it as the skill and the documentation say, from that repository at its current commit, in your app's folder once its `package.json` exists: `bun add git+file://<repository>#HEAD`. Run in a folder without a `package.json`, `bun add` changes the nearest one above it instead: this folder's `package.json` is there only to stop that search, so never add packages to it. Bun reports the commit it installed, as `rack42u@git+file://…#<commit>`: pin that commit in `package.json` in place of `HEAD`, and write it at the top of `TRIAL.md`.
+- Add it as the skill and the documentation say, from that repository at its current commit, in your app's folder once its `package.json` exists: `bun add git+file://<repository>#HEAD`. Run in a folder without a `package.json`, `bun add` changes the nearest one above it instead: this folder's `package.json` is there only to stop that search, so never add packages to it. Bun reports the commit it installed, as `installed rack42u@git+file://…#<commit>`: add rack42u again with that commit in place of `HEAD`, as getting started says, and write it at the top of `TRIAL.md`.
 
 ## Commands
 
-- You may run `bun`, `bunx`, `curl`, `echo`, and commands that list or read files. Other commands are denied.
-- Change files with the editing tools, not with `sed` or shell redirection.
+- You may run `bun`, `bunx`, `curl`, `echo`, and commands that list or read files. Other commands are denied, and so is reading outside this folder, such as rack42u's own files, except the skill's.
+- Keep each call simple: allowed commands, after `cd <your app's folder> &&` if need be, joined with `&&` or `;`, and piped into `grep`, `head`, or `tail`. Loops, heredocs, writing into a file with `>`, `rm`, and an environment variable before a command, such as `PORT=0 bun …`, are denied.
+- A command that fails shows `Exit code <n>` at the top of its result, and a result without it means that the command exited with 0, so `$?` isn't needed; an unquoted one is denied.
+- To bound how long a command runs, give the Bash tool its own timeout. To run your app while you try it, start it with the Bash tool in the background, and stop it with `TaskStop`. To give a program environment variables, start it from a script, such as with `Bun.spawn(cmd, { env: { ...process.env, PORT: "0" } })`.
+- Change files with the editing tools, which create the folders they need, not with `sed` or shell redirection.
 - Keep scratch files, such as a probe of how Bun behaves, in your app's `scratch/` folder, which git ignores. Don't write outside your app's folder.
 - A call that is denied is a problem of the trial setup: record it in `TRIAL.md`, and go on another way. Stop only when no way is left, and say so in `TRIAL.md`.
 - Never run `git`: this folder is inside rack42u's repository, and git commands would act on rack42u itself. Bun runs git by itself when it installs rack42u, which is fine.
