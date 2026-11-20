@@ -83,10 +83,10 @@ What works, on Linux, macOS, and Windows:
 - hot swaps, cold swaps, restarts, reloads under `rack dev`, fallback from updates that fail, rollback, and a history of updates;
 - racks placed by hand, and racks scanned from directories of device files, with a plan file to review;
 - crash resets, watchdogs, bounded backlogs, and the handling of threads stuck in native code;
-- listeners that devices open, and the standard HTTP panel, with WebSocket and certificates that change without a restart;
-- the standard `memkv` and `sqlite` devices, the `rack` command, a test bench for one device, counters, and logs that other programs can read.
+- listeners that devices open, and the standard HTTP panel, with WebSocket, files sent from disk with their length, and certificates that change without a restart;
+- the standard `memkv` and `sqlite` devices, the `rack` command, a test bench for one device, crashes and hangs that tests inject, counters, and logs that other programs can read.
 
-rack42u has no formal release yet: any version until the first one may break the API. An app depends on rack42u through git, at a tag of its repository.
+rack42u has no formal release yet: any version until the first one may break the API. An app depends on rack42u through git, at a tag or a commit of its repository, as [Getting started](docs/getting-started.md#add-rack42u) shows.
 
 ### Not supported yet
 
@@ -99,7 +99,8 @@ rack42u has no formal release yet: any version until the first one may break the
 - [Getting started](docs/getting-started.md): an app of your own, from adding rack42u to changing a device while the rack runs.
 - [Concepts](docs/concepts.md) and [Design](docs/design.md): how a rack works, and why it is built this way.
 - [The guides](docs/README.md#guides): one for each part of rack42u, from connectors and devices to updates, faults, and the HTTP panel. They build a small app, a greeter, file by file, and the test suite extracts their files and runs them.
-- [The reference](docs/README.md#reference): the API, the `rack` command, the error codes, and the reports.
+- [The reference](docs/README.md#reference): the API, the `rack` command, the error codes, the reports, and the limits.
+- [Working with an agent](docs/getting-started.md#working-with-an-agent): a skill for coding agents, such as Claude Code, which an app copies from the package, so that the agent reads the documentation of the version the app installed.
 
 ## Requirements
 
@@ -119,7 +120,7 @@ rack42u has no formal release yet: any version until the first one may break the
 
 CI runs for every push to `main`, and on request: `bun run check` on Linux, `bun test` on macOS and Windows, and `bun test` on the latest Bun release on Linux. A failure of any of the four jobs fails the run. To check a branch before merging it, start the workflow by hand with "Run workflow" on the Actions tab, or with `gh workflow run check.yml --ref <branch>`.
 
-Design decisions live in [`.agents/decisions/`](.agents/decisions); [`AGENTS.md`](AGENTS.md) explains how the project is run.
+Design decisions live in [`.agents/decisions/`](.agents/decisions); [`AGENTS.md`](AGENTS.md) explains how the project is run. Problems go in GitHub issues, through the forms for bugs, documentation, features, and trial apps. [`.agents/trials/`](.agents/trials) holds the trial apps that agents build from the skill and the documentation alone; its README says how to run a round.
 
 ## License
 

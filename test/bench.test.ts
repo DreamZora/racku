@@ -342,6 +342,7 @@ describe("the bench", () => {
 });
 
 // @doc docs/guides/testing.md#crashes-and-hangs
+// @doc README.md#status
 // @decision .agents/decisions/261119_205416-injected-faults.md#tests
 describe("injected faults", () => {
   const online = (orders: { rack: RackHandle }) =>

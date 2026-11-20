@@ -899,6 +899,7 @@ describe("wholeResponse", () => {
 });
 
 // @doc docs/guides/listeners.md#files
+// @doc README.md#status
 // @decision .agents/decisions/261119_205344-file-responses.md#tests
 describe("fileResponse", () => {
   const headOf = async (port: number, method: string, path: string) =>

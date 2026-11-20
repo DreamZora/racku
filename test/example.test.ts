@@ -39,7 +39,7 @@ async function shop(command: "start" | "dev") {
 
 // @doc README.md#quick-start
 describe("examples/shop-api", () => {
-  // Mirrors the curl session under "Try the example" in README.md.
+  // Mirrors the curl session under "Quick start" in README.md.
   test("the curl walkthrough returns what the README shows", async () => {
     const { api, post } = await shop("start");
     expect((await post({ item: "book", quantity: 2, price: 12.5 })).body).toEqual({
