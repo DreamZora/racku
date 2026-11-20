@@ -1,195 +1,62 @@
 {
   "issues": [
     {
-      "title": "bun add with no package.json installs nothing and reports success",
+      "title": "Adding devices to a running rack from the app has no documented recipe",
       "kind": "documentation",
-      "apps": ["chat", "files"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "Adding rack42u with bun add git+file://...#HEAD in an app folder that had no package.json (chat: cd chat && bun add ...; files: first in the trials folder, the shell cwd, then in files/)",
-      "happened": "chat: Bun printed 'installed rack42u@git+file://...#7dc1aba... with binaries: rack' and '1 package installed', twice, but the folder had no package.json, bun.lock, or node_modules afterwards.\nfiles: bun add printed 'installed rack42u@git+file:///home/zmmfly/prjs/rack42u#7dc1aba... with binaries: - rack' and done in 1 ms, but wrote no package.json or node_modules in files/. The first run was in the trials folder and changed that folder; undone with bun remove rack42u. Only after writing a package.json by hand did it install.",
-      "expected": "A package.json made in the app's folder, or an error; at least package.json, bun.lock and node_modules/rack42u to exist",
+      "apps": ["watcher"],
+      "commit": "fe584eb1318282dcf4a19ab463ef08e71881ad0a",
+      "doing": "Finding how a URL added to watch.json while the app runs gets a checker of its own, without restarting the others",
+      "happened": "The docs show plug/unplug in the handle table and say reload(manifest) moves a running rack to a new layout, but not how an app built on rack start does this (a device cannot reach the handle). I concluded the app needs its own main.ts that calls start() and reload(manifest), with stable slot numbers per URL and a size large enough. No guide shows that.",
+      "expected": "A guide section on a rack whose set of devices changes while it runs: who calls plug or reload, how slot numbers and names stay stable, how many slots there are",
       "fellShort": "documentation",
-      "where": "docs/getting-started.md 'Create the app' says to make package.json first, but the skill and the trials CLAUDE.md 'Adding rack42u' do not say it must exist before bun add, nor that the shell cwd is the trials folder and not the app's. Bun gave no warning.",
-      "workaround": "Wrote package.json by hand, ran bun install / cd <app> && bun add ..., pinned the commit by hand. Did not read source.",
+      "where": "Racks and Running a rack: 'Running a rack from code' shows only a static manifest; the 42U default and the size option appear only in Concepts and in a type row of the API table; the API table has one line on reload(manifest?)",
+      "workaround": "main.ts polls watch.json, builds a new placed manifest (size 200, checker in slot n, name checker-<slot>) and calls running.reload(manifest); unchanged checkers kept their firmware. Did not need to read source, only grepped once for the size check.",
       "readSource": false,
       "cost": "slowed",
       "sources": [
-        {"app": "chat", "title": "bun add reported success but left nothing on disk"},
-        {"app": "files", "title": "bun add with no package.json installs nothing, and says it did"}
+        { "app": "watcher", "title": "Adding devices to a running rack from the app has no documented recipe" }
       ]
     },
     {
-      "title": "Trial permissions deny the commands and files CLAUDE.md allows",
+      "title": "status() is async and crashes is a number, not stated where looked",
       "kind": "documentation",
-      "apps": ["watcher", "chat", "files"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "Reading the skill in .claude/skills/rack42u and running bun, ls and cd from the app folder",
-      "happened": "watcher: Bash(ls /home/zmmfly/prjs/rack42u/.agents/trials/.claude/skills/rack42u) and an earlier `cd ...; pwd; ls ...; cat watcher/SPEC.md` both returned: Permission to use Bash has been denied because Claude Code is running in don't ask mode. Read of .claude/skills/rack42u/SKILL.md returned the same denial. Read of watcher/SPEC.md succeeded. Nothing was built, no TRIAL.md written.\nchat: Bash ls and Read on .claude/skills/rack42u were denied by the permission mode; the Skill tool loaded SKILL.md.\nfiles: Read of .claude/skills/rack42u/SKILL.md and plain ls were denied; bun -e could list directories; some compound commands (cd dir; ls, $?, PIPESTATUS, a long bun -e script) were denied while cd dir && bun ... worked; bun add --cwd <dir> printed success but wrote nowhere.",
-      "expected": "The commands CLAUDE.md lists (bun, bunx, curl, commands that list or read files) to work in any form, and the skill to be readable",
-      "fellShort": "trial setup",
-      "where": "Permission settings of the trials folder and Trials CLAUDE.md 'Commands': they do not allow Bash (bun, ls) or Read of .claude/skills/ uniformly",
-      "workaround": "chat and files: Skill tool for the skill, cd <app> && bun ..., bun -e for listings, Edit/Write for files. watcher: none; stopped, no source read.",
-      "readSource": false,
-      "cost": "blocked",
-      "sources": [
-        {"app": "watcher", "title": "Bash and Read denied in the trial run"},
-        {"app": "chat", "title": "Reading the skill's files with Read and Bash was denied"},
-        {"app": "files", "title": "The trial's command limits are uneven"}
-      ]
-    },
-    {
-      "title": "The skill's relative doc links do not resolve in the trial folder",
-      "kind": "documentation",
-      "apps": ["links"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "Reading the skill, which links to ../../docs/...",
-      "happened": "From .agents/trials/.claude/skills/rack42u/, ../../docs is not a folder; the docs exist only in node_modules/rack42u/docs after install",
-      "expected": "Links that work where the skill is read",
-      "fellShort": "trial setup",
-      "where": "Skill rack42u, every link: it says the docs are in node_modules/rack42u/, but the links are relative to the package",
-      "workaround": "Read node_modules/rack42u/docs/ directly; no source read",
-      "readSource": false,
-      "cost": "minor",
-      "sources": [
-        {"app": "links", "title": "The skill's relative doc links do not resolve in the trial folder"}
-      ]
-    },
-    {
-      "title": "Getting started does not say whether to use bun init",
-      "kind": "documentation",
-      "apps": ["links"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "Creating the app's package.json with bun init -y",
-      "happened": "It also made index.ts, README.md, CLAUDE.md, tsconfig.json; package.json got a typecheck script and a typescript ^7 peer dependency",
-      "expected": "Getting started shows a hand-written package.json; it doesn't say whether to use bun init",
+      "apps": ["watcher"],
+      "commit": "fe584eb1318282dcf4a19ab463ef08e71881ad0a",
+      "doing": "Reading status() in check.ts to prove a checker crashed",
+      "happened": "The API table lists status() without saying it returns a promise; Reports says crashes is 'the crashes within the last 60 seconds', which could be a list. A probe (scratch/probe.ts) showed a promise of an array with crashes: 0.",
+      "expected": "Return types spelled out (Promise<SlotStatus[]>, crashes: number)",
       "fellShort": "documentation",
-      "where": "Getting started, Create the app",
-      "workaround": "Ignored the extra files; no source read",
+      "where": "API, 'The rack handle'; Reports, status() table",
+      "workaround": "Ran a probe and printed the JSON; no source read",
       "readSource": false,
       "cost": "minor",
       "sources": [
-        {"app": "links", "title": "bun init leaves unrelated files"}
+        { "app": "watcher", "title": "status() is async and crashes is a number, not stated where looked" }
       ]
     },
     {
-      "title": "Docs have no recipe for a check that drives rack start and a change while it runs",
+      "title": "Hang and crash need a cause from inside the device",
       "kind": "documentation",
-      "apps": ["links"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "Writing check.ts: start the app on a free port, restart it, change a device while it runs",
-      "happened": "Nothing failed, but I had to combine --control-port, RACK_CONTROL_TOKEN and rack ctl reload --url --token from the CLI reference. The manifest reads PORT from process.env because the panel's port is config. The docs never say a manifest may read the environment, nor give the binary path node_modules/.bin/rack",
-      "expected": "A short recipe for env-driven config in a manifest and for changing a device in a running rack from a script",
+      "apps": ["watcher"],
+      "commit": "fe584eb1318282dcf4a19ab463ef08e71881ad0a",
+      "doing": "Making check.ts cause a hang and a crash of a checker through what a test server answers",
+      "happened": "Nothing in the docs says how a test provokes either. A throw inside setTimeout crashes the device ('checker-7 crashed: exited with code 1'); an endless for(;;) is bitten by the event-loop watchdog after 10 s (12.4 s to recover). A checker that hangs after every reset would reach the crash limit and be faulted, so the test server hangs only once. The chaos hook behind WATCHER_CHAOS is test code in a production device.",
+      "expected": "A documented way to provoke a crash or a hang in a device on the bench or in a test rack",
       "fellShort": "documentation",
-      "where": "Running a rack and The rack command: no example of env-driven config in a manifest, or of reaching the rack binary from a script",
-      "workaround": "It worked as guessed; no source read",
+      "where": "Testing a device and Faults and overload: the bench has faults but no way to cause one",
+      "workaround": "An env flag read in the device, since Workers copy process.env when they start",
       "readSource": false,
       "cost": "minor",
       "sources": [
-        {"app": "links", "title": "Docs have no recipe for a check that drives rack start and a change while it runs"}
-      ]
-    },
-    {
-      "title": "What a caller catches from ctx.ports is undocumented",
-      "kind": "documentation",
-      "apps": ["links"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "Mapping a SQLite unique-constraint failure to a device error code",
-      "happened": "The docs say SQL_ERROR carries data.code, but not the type of the error a device catches from a port call. I wrote (error as {data?:{code?:string}}).data?.code by guess",
-      "expected": "The Devices guide to say what a caller catches (a RackError with code and data)",
-      "fellShort": "documentation",
-      "where": "Devices, Data and errors: says what a device throws, not what a caller catches",
-      "workaround": "Guessed; the stub test and the check cover it only in part, as the real constraint path is not exercised",
-      "readSource": false,
-      "cost": "minor",
-      "sources": [
-        {"app": "links", "title": "What a caller catches from ctx.ports is undocumented"}
-      ]
-    },
-    {
-      "title": "list() and restore() socket shape of the HTTP handler is not documented",
-      "kind": "documentation",
-      "apps": ["chat"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "Broadcasting to the sockets of a room from a device behind the HTTP panel, and keeping them across a swap",
-      "happened": "docs/guides/http.md says to return handler.list() from snapshot, but not what it returns, nor that it can serve as room membership (the data given to upgrade() comes back in it). The API table only says 'A socket and its data'",
-      "expected": "The shape { socket: id, data }, and a note that a device can broadcast with ctx.emit.http.send({ socket: [ids], data })",
-      "fellShort": "documentation",
-      "where": "guides/http.md 'WebSocket' and reference/api.md HttpSocketState; a chat-like broadcast example is missing",
-      "workaround": "Read node_modules/rack42u/src/std/http.ts (HttpSocketState, HttpHandler); then used list() as the room membership and ctx.emit.http.send to broadcast",
-      "readSource": true,
-      "cost": "slowed",
-      "sources": [
-        {"app": "chat", "title": "list() and restore() socket shape is not documented"}
-      ]
-    },
-    {
-      "title": "The result and path rule of swap() are not documented",
-      "kind": "documentation",
-      "apps": ["chat"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "await running.swap('chat', './variants/chat-trim.ts') in check.ts, expecting a result like reload()'s",
-      "happened": "swap resolved with undefined; JSON.stringify(results).includes threw a TypeError. Docs say nothing of swap()'s return value, nor that a relative source resolves against the base directory",
-      "expected": "A documented return value and path rule",
-      "fellShort": "documentation",
-      "where": "reference/api.md 'The rack handle', swap(name, source?)",
-      "workaround": "Dropped the result check and showed the swap took effect by the new device's behaviour; the relative path worked",
-      "readSource": false,
-      "cost": "minor",
-      "sources": [
-        {"app": "chat", "title": "The result of swap() is not documented"}
-      ]
-    },
-    {
-      "title": "No named type for a hook's ctx, so shared helpers need hand-written types",
-      "kind": "enhancement",
-      "apps": ["chat"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "Sharing the message handling between two device files in chat-core.ts, passing ctx to a function",
-      "happened": "No exported type for a hook's ctx is named in the guides, so I wrote a structural type by hand and cast ctx.emit.http and restore's state with 'as never'",
-      "expected": "A documented DeviceContext-style type, and a hint on narrowing restore's state",
-      "fellShort": "api",
-      "where": "reference/api.md lists PortEmitter and PortClient; guides/devices.md 'The context' does not name the type",
-      "workaround": "Structural type with casts; did not read source",
-      "readSource": false,
-      "cost": "minor",
-      "sources": [
-        {"app": "chat", "title": "Typing a helper that takes a device's ctx"}
-      ]
-    },
-    {
-      "title": "The HTTP panel cannot send a large streamed file with Content-Length",
-      "kind": "enhancement",
-      "apps": ["files"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "Serving GET /files/<name> through the HTTP panel, with Content-Length and without holding 50 MiB in memory",
-      "happened": "http.md says a response body over httpHandler's streamThreshold (16 MiB) streams chunked without Content-Length even when the device names one; raising the threshold would hold the file in memory. Confirmed with plain Bun.serve that a ReadableStream response with explicit content-length also goes out chunked.",
-      "expected": "A way to send a large stored file through the panel with its length",
-      "fellShort": "api",
-      "where": "The HTTP panel (guides/http.md, Requests): no way to give a streamed or file-backed response a length. Listeners (guides/listeners.md) is the way out, but a length there needs new Response(Bun.file(path)), hence a file path.",
-      "workaround": "web device opens its own listener with ctx.serve(); store has a locate member that answers the file's path so web answers new Response(Bun.file(path)). Steps around the backplane; web must see the same disk. No source read.",
-      "readSource": false,
-      "cost": "slowed",
-      "sources": [
-        {"app": "files", "title": "A 50 MiB download can have a Content-Length only from a listener of the device itself"}
-      ]
-    },
-    {
-      "title": "Stubs read a stream whole up to 16 MiB, so size limits above that cannot be tested on the bench",
-      "kind": "documentation",
-      "apps": ["files"],
-      "commit": "7dc1abaf4c1dc1efe6ccc749df8bc2ba153ee123",
-      "doing": "Testing the 50 MiB limit of the devices on the bench",
-      "happened": "testing.md says a stream in a stub call crosses read whole up to 16 MiB, so a 50 MiB upload can't go through a stubbed need on the bench",
-      "expected": "A way to test a size limit as it is",
-      "fellShort": "documentation",
-      "where": "Testing a device, Stubs: nothing says how to test a limit above 16 MiB",
-      "workaround": "Made the limit a maxSize config of both devices; unit tests use limits of a few bytes; 50 MiB cases are in check.ts. No source read.",
-      "readSource": false,
-      "cost": "minor",
-      "sources": [
-        {"app": "files", "title": "Stubs read a stream whole, up to 16 MiB"}
+        { "app": "watcher", "title": "Hang and crash need a cause from inside the device" }
       ]
     }
   ],
-  "leftOut": []
+  "leftOut": [
+    {
+      "app": "watcher",
+      "title": "A denied command (trial setup)",
+      "why": "The agent ran a compound command ('cd ../../.. ; cat ...') and a shell heredoc, both outside the commands the trials CLAUDE.md allows. This is a trial-setup matter, not a rack42u skill or documentation gap, so no rack42u issue."
+    }
+  ]
 }

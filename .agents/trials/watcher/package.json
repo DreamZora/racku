@@ -1,0 +1,9 @@
+{
+  "name": "watcher",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "rack42u": "git+file:///home/zmmfly/prjs/rack42u#fe584eb1318282dcf4a19ab463ef08e71881ad0a",
+    "valibot": "^1.5.0"
+  }
+}
