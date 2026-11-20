@@ -216,6 +216,9 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
     code: 0,
     output: "",
   });
+  // package.json keeps the ref as typed, here a commit, which pins rack42u in it.
+  const dependencies = (await Bun.file(join(app, "package.json")).json()).dependencies;
+  expect(dependencies.rack42u).toBe(`${url}#${commit}`);
 
   // The skill that the guide copies into the app comes with the package, and once copied, what
   // it names leads to the documentation the app installed. The test copies as the command does,
@@ -316,6 +319,65 @@ test("bun add, in a directory without a package.json, changes the nearest one ab
   expect(await exists(join(app, "package.json"))).toBe(false);
   const changed = await Bun.file(join(outer, "package.json")).json();
   expect(Object.keys(changed.dependencies ?? {})).toEqual(["tiny"]);
+}, 60_000);
+
+// @doc docs/getting-started.md#add-rack42u
+test("bun add keeps a branch or HEAD in package.json, and only bun.lock holds the commit", async () => {
+  const dep = join(WORK, "pinned");
+  await mkdir(dep, { recursive: true });
+  await Bun.write(join(dep, "package.json"), JSON.stringify({ name: "pinned", version: "1.0.0" }));
+  const git = async (...args: string[]) => {
+    const result = await exec(
+      ["git", "-c", "user.name=rack42u test", "-c", "user.email=test@rack42u.invalid", ...args],
+      dep,
+    );
+    if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${result.output}`);
+    return result.stdout.trim();
+  };
+  const commit = async (message: string) => {
+    await git("add", "-A");
+    await git("commit", "-q", "--no-verify", "--no-gpg-sign", "-m", message);
+    return git("rev-parse", "HEAD");
+  };
+  await git("init", "-q", "-b", "main");
+  const first = await commit("first");
+  const url = `git+${Bun.pathToFileURL(dep).href}`;
+  const bun = (app: string, ...args: string[]) =>
+    exec([process.execPath, ...args, `--cache-dir=${join(WORK, "cache")}`], app);
+  const dependencyOf = async (app: string) =>
+    (await Bun.file(join(app, "package.json")).json()).dependencies.pinned;
+  const lockOf = (app: string) => Bun.file(join(app, "bun.lock")).text();
+
+  for (const ref of ["main", "HEAD"]) {
+    const app = join(WORK, `pin-${ref}`);
+    await mkdir(app, { recursive: true });
+    await Bun.write(join(app, "package.json"), JSON.stringify({ name: "app", private: true }));
+    const added = await bun(app, "add", `${url}#${ref}`);
+    expect({ code: added.code, output: added.code === 0 ? "" : added.output }).toEqual({
+      code: 0,
+      output: "",
+    });
+    // Bun reports the commit it installed, as installed pinned@git+file:///…#<commit>.
+    expect(added.output).toMatch(new RegExp(`installed pinned@git\\+\\S+#${first}\\b`));
+    expect(await dependencyOf(app)).toBe(`${url}#${ref}`);
+    expect(await lockOf(app)).toContain(first);
+  }
+
+  // Once the branch moves on, an install with bun.lock keeps its commit, and a fresh one doesn't.
+  await Bun.write(join(dep, "next.txt"), "next");
+  const second = await commit("second");
+  const app = join(WORK, "pin-HEAD");
+  expect((await bun(app, "install")).code).toBe(0);
+  expect(await lockOf(app)).toContain(first);
+  await rm(join(app, "bun.lock"));
+  await rm(join(app, "node_modules"), { recursive: true, force: true });
+  expect((await bun(app, "install")).code).toBe(0);
+  expect(await lockOf(app)).toContain(second);
+  expect(await lockOf(app)).not.toContain(first);
+
+  // Adding it again with the commit in place of the branch pins it in package.json.
+  expect((await bun(app, "add", `${url}#${second}`)).code).toBe(0);
+  expect(await dependencyOf(app)).toBe(`${url}#${second}`);
 }, 60_000);
 
 // @doc docs/getting-started.md
