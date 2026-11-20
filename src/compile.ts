@@ -188,6 +188,9 @@ export async function compileRack(
         compile: {
           outfile,
           ...(target === undefined ? {} : { target: target as Bun.Build.CompileTarget }),
+          // The executable reads .env where it starts, as bun does, but not bunfig.toml, whose
+          // preload would run code from that directory in the rack.
+          autoloadBunfig: false,
         },
         plugins: [packagedImportMeta(appDir, (path) => path.startsWith(generated))],
       });

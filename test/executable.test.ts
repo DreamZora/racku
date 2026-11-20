@@ -152,14 +152,22 @@ async function baseDir(files: Record<string, string> = {}): Promise<string> {
   return dir;
 }
 
-/** Runs an executable for a base directory; its panel's URL once its rack started. */
+/**
+ * Runs an executable for a base directory, in that directory unless `cwd` names another; its
+ * panel's URL once its rack started.
+ */
 async function run(
   dir: string,
-  options: { env?: Record<string, string>; input?: "pipe" | "console"; flags?: string[] } = {},
+  options: {
+    env?: Record<string, string>;
+    input?: "pipe" | "console";
+    flags?: string[];
+    cwd?: string;
+  } = {},
   executable = exe,
 ): Promise<{ cli: Cli; url: string }> {
   const command = [executable, "--base-dir", dir, ...(options.flags ?? [])];
-  const cli = new Cli([], dir, options.env ?? {}, command, options.input);
+  const cli = new Cli([], options.cwd ?? dir, options.env ?? {}, command, options.input);
   running.push(cli);
   const url = await cli.panelUrl();
   await cli.waitFor(/control listening/);
@@ -211,6 +219,21 @@ describe("an executable from rack compile", () => {
     // A path of a device's configuration is under the base directory; the rack wrote nothing.
     expect(existsSync(join(dir, "data", "hello.db"))).toBe(true);
     expect(existsSync(join(dir, ".rack"))).toBe(false);
+  }, 30_000);
+
+  test("reads .env, but not bunfig.toml, from the directory where it starts", async () => {
+    const started = await baseDir({
+      ".env": "HELLO_NAME=Dotenv\n",
+      "bunfig.toml": 'preload = ["./preload.ts"]\n',
+      "preload.ts": 'console.log("preloaded from bunfig.toml");\n',
+      "script.ts": "export {};\n",
+    });
+    // bun itself runs the preload there.
+    const underBun = Bun.spawnSync([process.execPath, "script.ts"], { cwd: started });
+    expect(underBun.stdout.toString()).toContain("preloaded from bunfig.toml");
+    const { cli, url } = await run(await baseDir(), { cwd: started });
+    expect(await greet(url)).toEqual({ text: "Hello, Dotenv", from: "packaged" });
+    expect(cli.output).not.toContain("preloaded from bunfig.toml");
   }, 30_000);
 
   test("gives the manifest and the devices files next to their sources from the base directory", async () => {

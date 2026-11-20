@@ -106,7 +106,9 @@ rack compile rack.ts --outfile dist/greeter          # about 100 MiB, most of it
   - When it crashes, or a watchdog bites, on probation, the device falls back to its known-good firmware. Outside files wired to one another fall back together.
   - At `reload()` or `swap(name)`, an outside file that fails to build is a failed swap: the device keeps what it runs.
 - **Reports.** `status()` marks a device that runs its packaged firmware with `packaged: true`, and its `source` names the place of its outside file, whether or not the file is there. The log says `<device> runs <file>` for each outside file at start, and warns `<device> runs its packaged firmware: <reason>` at each fallback. `history()` records each fallback with the cause `fallback`.
-- **Who can change it.** Outside files run with the rights of the executable: whoever can write the base directory can run code in the rack, as whoever can write an app's files can under `rack start`.
+- **Who can change it.**
+  - Outside files run with the rights of the executable: whoever can write the base directory can run code in the rack, as whoever can write an app's files can under `rack start`.
+  - Like `bun`, the executable reads a `.env` file in the directory where it starts, so whoever can write that directory can add variables to its environment. Unlike `bun`, it ignores a `bunfig.toml` there, whose `preload` would run code in the rack.
 - [The command line of an executable](../reference/cli.md#the-command-line-of-an-executable) lists its flags, and [Flags of rack compile](../reference/cli.md#flags-of-rack-compile) how to compile for another system.
 
 ## Windows

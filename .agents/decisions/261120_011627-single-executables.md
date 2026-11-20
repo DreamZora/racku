@@ -148,6 +148,7 @@ Measured on 2026-11-20 with Bun 1.4.4 on Linux x64, with probe scripts outside t
   - It builds each device file with `buildFirmware()` and a `PackagedBuild`, into `.rack/compile/` under the manifest's directory, and removes that directory after.
   - It writes three entries there: a prelude, which installs the executable's `import.meta` paths before any packaged module loads; a main entry, which calls `runExecutable()` with the table of what it packaged; and the Worker host's entry, which puts rack42u and `rack42u/std` under `HOST_MODULES` for firmware, then loads `src/worker.ts`.
   - It compiles them, with the firmware and one module for each carried package, by the `compile` option of `Bun.build`, which takes plugins.
+  - It turns off `autoloadBunfig`, as the user approved on 2026-11-20: an executable reads a `.env` file in the directory where it starts, as `bun` does, but not `bunfig.toml`, whose `preload` would run code from that directory in the rack.
 - `src/packaged.ts` holds `PackagedTable`, which an executable carries, the keys of device files, and `installImportMeta()`.
   - A file in the app's directory, outside `node_modules`, has its path from that directory as its key; in the executable, that path under the base directory is its outside file's place.
   - Any other file, such as one of rack42u's own devices, has `~/` and that path, with `_up_` for each `..`, under the executable's root, where no file is.
@@ -160,7 +161,7 @@ Measured on 2026-11-20 with Bun 1.4.4 on Linux x64, with probe scripts outside t
   - A scanned rack scans the device files that the executable packaged, in the order that `rack compile` found them, and follows the plan file it packaged, without writing one.
   - `status()` gains `packaged`. Describe requests carry the base directory, and the Worker host sets it before firmware loads.
 - `src/executable.ts` is the executable's command line, and `src/commands.ts` holds what it shares with `src/cli.ts`. Its `ctl` takes `--base-dir` in place of `rack ctl`'s `--dir`, so that both its commands name the base directory one way.
-- `test/executable.test.ts` covers the decision's tests, and failures to load, to boot, to be wired, and of `selfTest`, the wiring groups, a scanned rack, a device the executable didn't package, and a second rack for one base directory. `test/reference.test.ts` holds the reference of the `rack` command to `src/cli.ts`, `src/commands.ts`, and `src/executable.ts`.
+- `test/executable.test.ts` covers the decision's tests, and failures to load, to boot, to be wired, and of `selfTest`, the wiring groups, a scanned rack, a device the executable didn't package, a second rack for one base directory, and the `.env` and `bunfig.toml` files where the executable starts. `test/reference.test.ts` holds the reference of the `rack` command to `src/cli.ts`, `src/commands.ts`, and `src/executable.ts`.
 - Documentation: "A rack in one executable" in [Running a rack](../../docs/guides/running.md#a-rack-in-one-executable); `rack compile` and the command line of an executable in the reference of the `rack` command; `packaged` in the reports; "Executables" in the limits; the known-good firmware of an executable in [Updates](../../docs/guides/updates.md#fallback); the README; the docs map; and a row of the skill.
 
 ## Confirmation
