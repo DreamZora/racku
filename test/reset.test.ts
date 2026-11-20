@@ -108,3 +108,43 @@ describe("crash resets", () => {
     expect(entry?.message).toContain(join("devices", "probe.ts"));
   });
 });
+
+// @doc docs/guides/testing.md#crashes-and-hangs
+// @doc docs/reference/api.md#the-rack-handle
+// @decision .agents/decisions/261119_205416-injected-faults.md#tests
+describe("injected faults", () => {
+  test("a rack refuses to inject a fault unless it starts with faultInjection", async () => {
+    const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
+    expect(await codeOf(running.injectFault("probe", "crash"))).toBe("RACK_SWAP_REJECTED");
+    expect(await running.call("probe.probe", "echo", 1)).toBe(1);
+    expect(running.status()[0]?.crashes).toBe(0);
+  });
+
+  test("a rack refuses a hang while watchdogs are off, an unknown device, and an unknown kind", async () => {
+    const { running } = await startRack(
+      { slots: { 1: slot("./devices/probe.ts") } },
+      { faultInjection: true, watchdog: 0 },
+    );
+    expect(await codeOf(running.injectFault("probe", "hang"))).toBe("RACK_SWAP_REJECTED");
+    expect(await codeOf(running.injectFault("nobody", "crash"))).toBe("RACK_NO_ROUTE");
+    expect(await codeOf(running.injectFault("probe", "melt" as "crash"))).toBe(
+      "RACK_INVALID_INPUT",
+    );
+    expect(await running.call("probe.probe", "echo", 1)).toBe(1);
+  });
+
+  test("injected crashes beyond the crash limit leave the slot faulted, as real ones do", async () => {
+    const { running, rec } = await startRack(
+      { slots: { 1: slot("./devices/probe.ts") } },
+      { faultInjection: true },
+    );
+    for (let n = 1; n <= 3; n++) {
+      await running.injectFault("probe", "crash");
+      await waitFor(() => count(rec, poweredOn) === n);
+    }
+    await running.injectFault("probe", "crash");
+    await waitFor(() => running.status()[0]?.state === "faulted");
+    expect(running.status()[0]).toMatchObject({ firmware: null, crashes: 4 });
+    expect(await codeOf(running.injectFault("probe", "crash"))).toBe("RACK_LINK_DOWN");
+  });
+});

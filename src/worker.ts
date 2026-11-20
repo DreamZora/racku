@@ -78,6 +78,7 @@ import {
   type Fru,
   type HoldEventsRequest,
   type HookRequest,
+  type InjectedFault,
   type LinkCall,
   type LiveRequest,
   type Marker,
@@ -445,7 +446,26 @@ function handle(request: ControlRequest): unknown {
       return drain(request);
     case "metrics":
       return snapshot();
+    case "fault":
+      return injectFault(request.kind);
   }
+}
+
+/**
+ * Causes a fault on purpose, from a task of its own once the reply has gone out, through the
+ * paths of a real fault: an uncaught exception, or an event loop that stays blocked until the
+ * event-loop watchdog bites and the rack ends the Worker.
+ *
+ * @decision .agents/decisions/261119_205416-injected-faults.md#injectfault
+ */
+function injectFault(kind: InjectedFault): undefined {
+  setTimeout(() => {
+    if (kind === "crash") throw new Error("injected crash");
+    for (;;) {
+      // The injected hang: nothing ends this loop but the end of the Worker.
+    }
+  }, 0);
+  return undefined;
 }
 
 async function boot(request: BootRequest): Promise<Fru> {

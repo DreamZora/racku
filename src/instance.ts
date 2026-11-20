@@ -22,6 +22,7 @@ import {
   type DataToWorker,
   type Fru,
   type InheritedListener,
+  type InjectedFault,
   type ListenerReport,
   type LogNotice,
   type Marker,
@@ -356,6 +357,17 @@ export class Instance {
    */
   async metrics(timeout: number): Promise<InstanceMetrics> {
     return (await this.request({ op: "metrics" }, timeout)) as InstanceMetrics;
+  }
+
+  /**
+   * Has the instance's Worker cause a fault on purpose, a crash or a hang; resolves once the
+   * Worker has scheduled it, before it happens.
+   *
+   * @throws RackError when the instance is gone or does not answer within `timeout` ms.
+   * @decision .agents/decisions/261119_205416-injected-faults.md#protocol
+   */
+  async injectFault(kind: InjectedFault, timeout: number): Promise<void> {
+    await this.request({ op: "fault", kind }, timeout);
   }
 
   /**

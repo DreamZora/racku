@@ -174,6 +174,26 @@ describe("passive fallback", () => {
     });
   });
 
+  // @doc docs/guides/testing.md#crashes-and-hangs
+  // @decision .agents/decisions/261119_205416-injected-faults.md#tests
+  test("an injected crash during probation falls back to the known-good firmware, as a real one does", async () => {
+    const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
+    const { running } = await startRack(COUNTER_RACK, {
+      baseDir: created.dir,
+      faultInjection: true,
+    });
+    const v1 = counterStatus(running)?.firmware;
+    await created.write("devices/counter.ts", counter("v2"));
+    await running.reload();
+    const v2 = counterStatus(running)?.firmware;
+    expect(counterStatus(running)?.knownGood).toBe(v1);
+    await running.injectFault("counter", "crash");
+    await waitFor(
+      () => counterStatus(running)?.firmware === v1 && counterStatus(running)?.state === "degraded",
+    );
+    expect(running.history("counter")[0]).toMatchObject({ cause: "fallback", from: v2, to: v1 });
+  });
+
   test("a fallback reports the slot degraded, with the crash, from the moment the known-good instance is installed", async () => {
     const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
     const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir });

@@ -69,6 +69,7 @@ import {
   type DataFromWorker,
   type Fru,
   type InheritedListener,
+  type InjectedFault,
   type LogNotice,
   type Marker,
   QUEUE_LIMIT,
@@ -276,6 +277,11 @@ export interface StartOptions {
    * one. Its `stop` operation stops the rack. `rack start` and `rack dev` open one of their own.
    */
   control?: boolean | { port?: number; token?: string };
+  /**
+   * Lets `injectFault()` make a device crash or hang on purpose, for tests; default false, so
+   * that a rack in production refuses it. The bench allows it always.
+   */
+  faultInjection?: boolean;
 }
 
 /** A running rack. */
@@ -364,6 +370,17 @@ export interface RackHandle {
    *   ordered by slot from the bottom up; no entries after `stop()`.
    */
   metrics(): Promise<RackMetrics>;
+  /**
+   * Makes a device crash or hang on purpose, for a test of its recovery, through the paths of a
+   * real fault: `"crash"` throws an uncaught exception in its Worker, and `"hang"` blocks its
+   * event loop until the event-loop watchdog bites. It resolves once the Worker has taken the
+   * fault, before the crash or the bite, and waits for the management operations before it.
+   *
+   * @throws RackError `RACK_NO_ROUTE` for an unknown device; `RACK_SWAP_REJECTED` in a rack
+   *   started without `faultInjection`, or for a hang while watchdogs are off; `RACK_INVALID_INPUT`
+   *   for another kind; and `RACK_LINK_DOWN` when the device has no installed instance.
+   */
+  injectFault(name: string, kind: InjectedFault): Promise<void>;
   /** Powers devices off from the top down, so that panels stop listening first. */
   stop(): Promise<void>;
 }
@@ -434,6 +451,7 @@ class Rack implements InstanceHost {
   readonly #historyLimit: number;
   /** Timeout of the event-loop watchdogs, or 0 when watchdogs are off. */
   readonly #watchdog: number;
+  readonly #faultInjection: boolean;
   /** The most unfinished calls of a need, or from outside the rack to a device. */
   readonly #queueLimit: number;
   /** Update records, oldest first, at most `#historyLimit`. */
@@ -501,6 +519,7 @@ class Rack implements InstanceHost {
       throw new RackError("RACK_MANIFEST", "start option historyLimit must be a positive integer");
     }
     this.#watchdog = options.watchdog ?? 10_000;
+    this.#faultInjection = options.faultInjection === true;
     if (
       !(this.#watchdog === 0 || (Number.isFinite(this.#watchdog) && this.#watchdog >= WATCHDOG_MIN))
     ) {
@@ -548,6 +567,8 @@ class Rack implements InstanceHost {
       },
       stop: () => this.#serialize(() => this.#stop()),
       metrics: () => this.#metrics(),
+      injectFault: (name: string, kind: InjectedFault) =>
+        this.#serialize(() => this.#injectFault(name, kind)),
     });
   }
 
@@ -1439,6 +1460,40 @@ class Rack implements InstanceHost {
     const run = this.#operations.then(operation);
     this.#operations = run.catch(() => undefined);
     return run;
+  }
+
+  /**
+   * Has a device's installed instance crash or hang on purpose, once the checks pass.
+   *
+   * @decision .agents/decisions/261119_205416-injected-faults.md#who-may-inject
+   */
+  async #injectFault(name: string, kind: InjectedFault): Promise<void> {
+    this.#requireRunning();
+    const slot = this.#slots.get(name);
+    if (slot === undefined || slot.removed) {
+      throw new RackError("RACK_NO_ROUTE", `no device named ${name}`);
+    }
+    if (!this.#faultInjection) {
+      throw new RackError(
+        "RACK_SWAP_REJECTED",
+        `${name}: this rack doesn't inject faults; start it with faultInjection: true`,
+      );
+    }
+    if (kind !== "crash" && kind !== "hang") {
+      throw new RackError("RACK_INVALID_INPUT", `${name}: no fault "${String(kind)}" to inject`);
+    }
+    if (kind === "hang" && this.#watchdog === 0) {
+      throw new RackError(
+        "RACK_SWAP_REJECTED",
+        `${name}: watchdogs are off, so nothing would end an injected hang`,
+      );
+    }
+    const instance = slot.installed;
+    if (instance === null || instance.dead) {
+      throw new RackError("RACK_LINK_DOWN", `${name} has no installed instance`);
+    }
+    this.#log("warn", `${name}: injecting a ${kind}`);
+    await instance.injectFault(kind, this.#hookTimeout);
   }
 
   #requireRunning(): void {

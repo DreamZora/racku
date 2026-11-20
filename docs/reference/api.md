@@ -115,6 +115,7 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 | `queueLimit` | 10 000 | Most calls a need has unfinished, and most events that wait for one subscriber. See [Overload](../guides/faults.md#overload). |
 | `control` | off | Open the management endpoint: `true` for the platform's default, or `{ port, token? }` for loopback TCP. |
 | `plan` | `true` | How a scanned rack uses its plan file: `true` follows it, `"update"` rewrites it as `rack dev` does, and `false` neither reads nor writes it. |
+| `faultInjection` | `false` | Let `injectFault()` make devices crash or hang on purpose, for tests. See [Crashes and hangs](../guides/testing.md#crashes-and-hangs). |
 
 | Export | Kind | What it is |
 |---|---|---|
@@ -137,6 +138,7 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 | `plug(u, slot(...))` / `unplug(name)` | `Promise<void>` | Add a device to a free slot, or remove one that nothing uses. |
 | `subscribe(listener)` | `() => void` | Receive power, swap, fault, and log events, until the function it returns is called. |
 | `metrics()` | `Promise<RackMetrics>` | Read each device's call and event counters, and the rack's counters of calls from outside the rack. |
+| `injectFault(name, kind)` | `Promise<void>` | Make a device crash, `"crash"`, or hang, `"hang"`, on purpose, for a test, in a rack started with `faultInjection`. See [Crashes and hangs](../guides/testing.md#crashes-and-hangs). |
 | `stop()` | `Promise<void>` | Shut down from the top down. |
 
 The types of what the methods take and return:

@@ -585,6 +585,13 @@ export interface Bench<N extends Record<string, Stub> = Record<string, Stub>>
   restart(): Promise<ReloadResult[]>;
   /** Rebuilds the firmware and replaces the device if its hash changed, as `rack.reload()` does. */
   reload(): Promise<ReloadResult[]>;
+  /**
+   * Makes the device crash or hang on purpose, as `rack.injectFault()` does; a bench always
+   * allows it.
+   *
+   * @throws RackError as `rack.injectFault()` does.
+   */
+  injectFault(kind: "crash" | "hang"): Promise<void>;
   /** Stops the rack, closes the bench's channel, and deletes the bench's files. */
   stop(): Promise<void>;
 }
@@ -648,7 +655,9 @@ export async function bench<N extends Record<string, Stub> = Record<never, Stub>
   let running: RackHandle;
   try {
     const manifest = await writeRack(dir, channelName, source, name, config, fru);
-    running = await start(manifest, { ...startOptions, baseDir, logger });
+    // A bench exists for tests, so it lets them inject faults.
+    // @decision .agents/decisions/261119_205416-injected-faults.md#who-may-inject
+    running = await start(manifest, { ...startOptions, baseDir, logger, faultInjection: true });
   } catch (error) {
     await release();
     throw error;
@@ -691,6 +700,7 @@ export async function bench<N extends Record<string, Stub> = Record<never, Stub>
     swap: (next?: string | URL) => running.swap(name, next),
     restart: () => running.restart(name),
     reload: () => running.reload(),
+    injectFault: (kind: "crash" | "hang") => running.injectFault(name, kind),
     stop,
     [Symbol.asyncDispose]: stop,
   };

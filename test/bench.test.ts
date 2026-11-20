@@ -340,3 +340,50 @@ describe("the bench", () => {
     expect(existsSync(BENCHES)).toBe(false);
   });
 });
+
+// @doc docs/guides/testing.md#crashes-and-hangs
+// @decision .agents/decisions/261119_205416-injected-faults.md#tests
+describe("injected faults", () => {
+  const online = (orders: { rack: RackHandle }) =>
+    orders.rack.status().find((slot) => slot.name === "orders")?.state === "online";
+
+  test("an injected crash resets the device through a real crash, without its state", async () => {
+    await using orders = await bench(ORDERS, {
+      baseDir: FIXTURES,
+      config: { currency: "EUR" },
+      needs: { kv: memoryKv().kv, blobs: memoryBlobs().blobs },
+    });
+    await orders.call("orders", "create", { item: "tea", quantity: 1 });
+    expect(await orders.call("orders", "count", undefined)).toBe(1);
+    await orders.injectFault("crash");
+    await waitFor(() => orders.faults.length > 0);
+    expect(orders.faults[0]).toMatchObject({ reset: true, error: { code: "RACK_DEVICE_FAULT" } });
+    expect(orders.faults[0]?.error.message).toContain("injected crash");
+    expect(orders.logs).toContainEqual(
+      expect.objectContaining({ level: "warn", message: "orders: injecting a crash" }),
+    );
+    await waitFor(() => online(orders));
+    expect(await orders.call("orders", "count", undefined)).toBe(0);
+  });
+
+  test("an injected hang ends with the bite of the event-loop watchdog, and the device serves again", async () => {
+    await using orders = await bench(ORDERS, {
+      baseDir: FIXTURES,
+      config: { currency: "EUR" },
+      needs: { kv: memoryKv().kv, blobs: memoryBlobs().blobs },
+      watchdog: 1_000,
+    });
+    const before = Date.now();
+    await orders.injectFault("hang");
+    await waitFor(() => orders.faults.length > 0, 10_000);
+    expect(orders.faults[0]).toMatchObject({
+      reset: true,
+      error: { code: "RACK_DEVICE_FAULT", data: { watchdog: "event loop", timeout: 1000 } },
+    });
+    // The watchdog bites between 1 and 1.25 times its timeout after its last feed; the rest is
+    // the margin of a slow machine.
+    expect((orders.faults[0]?.at ?? 0) - before).toBeLessThan(5_000);
+    await waitFor(() => online(orders), 10_000);
+    expect(await orders.call("orders", "count", undefined)).toBe(0);
+  }, 20_000);
+});

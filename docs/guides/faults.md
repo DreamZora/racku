@@ -2,7 +2,7 @@
 
 ## Crashes
 
-When a device crashes (an uncaught exception, an unhandled rejection, or `process.exit`), its calls in flight fail with `RACK_DEVICE_FAULT` and the rack resets it from the same firmware. Calls during the reset fail with `RACK_LINK_DOWN`. In-memory state does not survive a reset, so keep state that matters in a storage device. After more than 3 crashes within 60 seconds, the slot is marked `faulted` until a swap succeeds. When a device's longest watchdog timeout is longer than 15 seconds, the window is four times that timeout instead, so a device that hangs after every reset reaches the limit too.
+When a device crashes (an uncaught exception, an unhandled rejection, or `process.exit`), its calls in flight fail with `RACK_DEVICE_FAULT` and the rack resets it from the same firmware. Calls during the reset fail with `RACK_LINK_DOWN`. In-memory state does not survive a reset, so keep state that matters in a storage device. A test makes a device crash on purpose with `injectFault()`, as [Crashes and hangs](testing.md#crashes-and-hangs) describes. After more than 3 crashes within 60 seconds, the slot is marked `faulted` until a swap succeeds. When a device's longest watchdog timeout is longer than 15 seconds, the window is four times that timeout instead, so a device that hangs after every reset reaches the limit too.
 
 ## Hangs and watchdogs
 

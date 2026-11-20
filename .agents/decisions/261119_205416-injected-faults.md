@@ -68,6 +68,15 @@ Status: accepted
 - Costs: a public method on the rack handle and the bench, a `start()` option, and a message of the protocol between the main thread and a Worker host.
 - Follow-up: the testing guide replaces the sentence that rack42u has no way to cause a crash or a hang with `injectFault`.
 
+## Implementation
+
+- `injectFault(name, kind)` on the rack handle and `faultInjection` in `StartOptions`, in `src/rack.ts`: the rack checks the device, the option, the kind, and the watchdog, logs `<device>: injecting a <kind>`, and asks the installed instance, in the queue of management operations, without a record in `history()`.
+- `injectFault(kind)` on the bench, in `src/bench.ts`, whose rack starts with `faultInjection: true`.
+- The `fault` request and the `InjectedFault` type in `src/protocol.ts`; `Instance.injectFault()` in `src/instance.ts`; and the Worker host's `injectFault()` in `src/worker.ts`, which throws `injected crash`, or loops without end, from a timer once its reply has gone out.
+- A kind other than `"crash"` and `"hang"` fails with `RACK_INVALID_INPUT`.
+- Tests: "injected faults" in `test/bench.test.ts`, a crash and a hang on the bench, the hang with a `watchdog` of 1 000 ms, whose bite the test allows 5 s to come, for slow machines; "injected faults" in `test/reset.test.ts`, what a rack refuses and the crash limit; and a fallback during probation in `test/safety.test.ts`.
+- The documentation: "Crashes and hangs" in `docs/guides/testing.md`, a pointer from "Crashes" in `docs/guides/faults.md`, the rack handle, `start()` options, and errors in the reference.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-19, with the answers it proposed to its open questions: a refused injection fails with `RACK_SWAP_REJECTED`, and the kinds are `"crash"` and `"hang"`, since the rack handles every crash the same way. The user's words: "All approved — handle them in order."

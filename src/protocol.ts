@@ -322,6 +322,21 @@ export interface MetricsRequest {
   op: "metrics";
 }
 
+/** A fault that a test injects into a device: an uncaught exception, or a blocked event loop. */
+export type InjectedFault = "crash" | "hang";
+
+/**
+ * Main thread to Worker: cause a fault on purpose, from a task of the host's own, and reply
+ * once it is scheduled, before it happens.
+ *
+ * @decision .agents/decisions/261119_205416-injected-faults.md#protocol
+ */
+export interface FaultRequest {
+  id: number;
+  op: "fault";
+  kind: InjectedFault;
+}
+
 /** A hold marker a drain waits for: the link it travels on, and the hold it belongs to. */
 export type Marker = [link: number, token: number];
 
@@ -341,6 +356,7 @@ export type ControlRequest =
   | InstalledRequest
   | DrainRequest
   | MetricsRequest
+  | FaultRequest
   | ListenRequest
   | UnlistenRequest;
 

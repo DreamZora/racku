@@ -61,6 +61,7 @@ A need without a stub, a stub of another connector, and a stub for a need the de
 | `logs` | The rack's log entries, the device's included. |
 | `faults` | The device's crashes and watchdog bites, as `{ firmware, error, reset, at }`. |
 | `swap(source?)`, `restart()`, `reload()` | Replace the device, as the rack handle's methods do. |
+| `injectFault(kind)` | Make the device crash or hang on purpose, as [Crashes and hangs](#crashes-and-hangs) describes. |
 | `rack` | The rack handle, for `status()`, `metrics()`, `history()`, and the rest. |
 | `stop()` | Stop the rack and delete the bench's files; `await using` calls it at the end of the scope. |
 
@@ -72,6 +73,17 @@ A need without a stub, a stub of another connector, and a stub for a need the de
 
 ## Crashes and hangs
 
-rack42u has no way to make a device crash or hang on demand. A device crashes when its own code lets an exception or a rejection go uncaught, or calls `process.exit()`, and it hangs when its event loop stays blocked, as [Faults and overload](faults.md) describes; the bench records either in `faults`. A test reaches what follows them in two ways:
+A device crashes when its own code lets an exception or a rejection go uncaught, or calls `process.exit()`, and it hangs when its event loop stays blocked, as [Faults and overload](faults.md) describes; the bench records either in `faults`. A test makes the device do either on purpose with `injectFault()`, with no test code in the device:
+
+```ts
+await orders.injectFault("crash"); // an uncaught exception in its Worker: the rack resets it
+await orders.injectFault("hang"); // a blocked event loop, until the event-loop watchdog bites
+```
+
+- **The paths of real faults.** The rack handles an injected fault as any other: calls in flight fail with `RACK_DEVICE_FAULT`, the device starts again without its state, the faults count toward the crash limit, and during probation the device falls back to its known-good firmware. A crash's error says `injected crash`, and the log says `<device>: injecting a <kind>` first.
+- **When it resolves.** Once the device's Worker has taken the fault, before the crash or the bite. A hang lasts until the event-loop watchdog bites, after `watchdog` milliseconds: give the bench a short one, such as `watchdog: 1_000`.
+- **A whole app.** The bench always allows it. A rack started with `start()` allows `rack.injectFault(name, kind)` only with `faultInjection: true`, so that a rack in production refuses it with `RACK_SWAP_REJECTED`; so does a rack whose watchdogs are off, for a hang.
+
+A test also reaches what follows a fault in two other ways:
 - **Starting again without state.** `restart()` starts the device again from scratch, without its in-memory state, as the reset after a crash does. So it tests how the device gets its state back, such as from a storage device.
 - **A need that fails.** A stub throws what a crashed provider gives its callers, such as `new RackError("RACK_LINK_DOWN", …)` while the provider resets, or never settles, as a provider that hangs never answers, so that the device's call times out.
