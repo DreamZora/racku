@@ -25,7 +25,15 @@ export default device({
             return { ok: true, value };
           } catch (error) {
             const e = error as RackError;
-            return { ok: false, value: null, code: e.code, message: e.message, data: e.data };
+            const instance = error instanceof RackError;
+            return {
+              ok: false,
+              value: null,
+              code: e.code,
+              message: e.message,
+              data: e.data,
+              instance,
+            };
           }
         },
         received: () => [...received],

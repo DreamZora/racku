@@ -54,11 +54,13 @@ describe("RPC", () => {
       "no order 7",
       { id: 7 },
     ]);
+    // A device that calls through ctx.ports catches a RackError too.
     expect(await relay("fail", input)).toMatchObject({
       ok: false,
       code: "ORDER_NOT_FOUND",
       message: "no order 7",
       data: { id: 7 },
+      instance: true,
     });
   });
 

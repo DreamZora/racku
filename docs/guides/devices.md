@@ -76,6 +76,21 @@ The first argument of every hook, `ctx`, provides:
 
 Data that crosses the backplane must survive `structuredClone`: no functions, no class instances. It is copied, unless you move or share binary data as [Binary data](data.md) describes. Throw `new RackError(code, message, data?)` to give callers a code they can branch on. Device codes must not start with `RACK_`, except `RACK_OVERLOADED` for a limit of the device's own, as [Overload](faults.md#overload) describes. Any other exception reaches the caller as `RACK_DEVICE_FAULT`.
 
+A call through `ctx.ports` that fails rejects with a `RackError`, whether the provider threw it or the rack did, such as `RACK_TIMEOUT`; [Error codes](../reference/errors.md) lists the rack's. It carries the `code`, `message`, and `data` it was thrown with, and `data` is `unknown` until the caller checks it:
+
+```ts
+try {
+  await ctx.ports.db.run({ sql: "INSERT INTO links (code, url) VALUES (?, ?)", params: [code, url] });
+} catch (error) {
+  // The sqlite device's SQL_ERROR carries SQLite's own code in its data.
+  const data = error instanceof RackError && error.code === "SQL_ERROR" ? error.data : undefined;
+  if ((data as { code?: unknown } | undefined)?.code === "SQLITE_CONSTRAINT_UNIQUE") {
+    throw new RackError("LINK_TAKEN", `the code ${code} is taken`);
+  }
+  throw error;
+}
+```
+
 ## The environment
 
 Each Worker receives a copy of `process.env` as it is when the Worker starts.

@@ -60,6 +60,8 @@ export const Relay = connector("test.relay/v1", {
       code: v.optional(v.string()),
       message: v.optional(v.string()),
       data: v.optional(v.unknown()),
+      /** Whether what the call rejected with is a RackError. */
+      instance: v.optional(v.boolean()),
     }),
   ),
   received: rpc(v.undefined(), v.array(v.number())),
