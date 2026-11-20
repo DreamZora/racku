@@ -83,6 +83,6 @@ An update can pass `selfTest` and still be defective. The rack guards against th
     from: "9c1e…", to: "7f3a…", ok: true, error: { code: "RACK_DEVICE_FAULT", message: "…" } }
   ```
 
-- **Fields.** `cause` says what asked for the update: `reload`, `swap`, `restart`, `rollback`, `fallback`, `plug`, or `unplug`. Records of one group replacement share a `group`. The rollback records are the ones whose cause is `rollback` or `fallback`.
+- **Fields.** `mode` says how the device was updated: `hot`, `cold`, `restart`, `plug`, or `unplug`. `cause` says what asked for it: the operation, `reload`, `swap`, `restart`, `rollback`, `plug`, or `unplug`, or a `fallback`. So a device that `reload()` plugs or unplugs has the cause `reload`, and only `plug()` and `unplug()` give the causes `plug` and `unplug`. Records of one group replacement share a `group`. The rollback records are the ones whose cause is `rollback` or `fallback`.
 - **Limit.** The history keeps at most `historyLimit` records, 256 by default, in memory, and a restart of the rack starts it empty.
 - **Firmware files.** The rack deletes the firmware bundles it built once nothing needs them: no instance, no known-good firmware, and no kept record. So `.rack/firmware/` stays bounded, and `rollback` reaches only the firmware the kept records name.

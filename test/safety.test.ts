@@ -12,6 +12,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type RackHandle,
+  rack,
   type SlotStatus,
   slot,
   type UpdateCause,
@@ -380,6 +381,23 @@ describe("update history", () => {
     ]);
     expect(all[0]?.seq).toBeGreaterThan(all[1]?.seq as number);
     expect(running.history("base")).toHaveLength(1);
+  });
+
+  // @doc docs/reference/reports.md#history
+  test("cause names the operation: a device that reload() plugs or unplugs has the cause reload", async () => {
+    const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
+    const base = { 1: slot("./devices/base.ts") };
+    const { running } = await startRack({ slots: base }, { baseDir: created.dir });
+    await running.reload(rack("test", COUNTER_RACK));
+    await running.plug(3, slot("./devices/counter.ts", { name: "other" }));
+    await running.unplug("other");
+    await running.reload(rack("test", { slots: base }));
+    expect(running.history().map((record) => [record.device, record.mode, record.cause])).toEqual([
+      ["counter", "unplug", "reload"],
+      ["other", "unplug", "unplug"],
+      ["other", "plug", "plug"],
+      ["counter", "plug", "reload"],
+    ]);
   });
 
   // @doc docs/reference/limits.md#supervision-and-history

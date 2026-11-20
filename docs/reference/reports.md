@@ -80,7 +80,7 @@ A running rack reports what it does in four ways: `status()`, `metrics()`, `hist
 | `time` | When the operation that made the update started, a millisecond timestamp. |
 | `device` | The device the update replaced, plugged, or unplugged. |
 | `mode` | How: `"hot"`, `"cold"`, `"restart"`, `"plug"`, or `"unplug"`. |
-| `cause` | What asked for it: `"reload"`, `"swap"`, `"restart"`, `"rollback"`, `"fallback"`, `"plug"`, or `"unplug"`. |
+| `cause` | What asked for it: the operation, `"reload"`, `"swap"`, `"restart"`, `"rollback"`, `"plug"`, or `"unplug"`, or a `"fallback"`. A device that `reload()` plugs or unplugs has the cause `"reload"`. |
 | `from`, `to` | The firmware hash before the update, and the one it installed or tried to install. |
 | `ok` | Whether the update succeeded. |
 | `error` | Why it failed, or why the device fell back. |
