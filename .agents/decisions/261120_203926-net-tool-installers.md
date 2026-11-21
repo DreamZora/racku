@@ -219,6 +219,24 @@ The user left this to the Agent on 2026-11-20: "Decide for yourself when it is a
 - Security: whoever can write the app's local data directory, which is the user's own, can run code in the rack with the user's rights. [A rack in one executable](261120_011627-single-executables.md#impact) says the same of any base directory. With `automatic`, such a file runs at once, not at the next start or **Reload**.
 - Follow-ups, each in a decision of its own: signing and notarization, an updater, more installers, and more systems, such as Linux arm64.
 
+## Implementation
+
+- `examples/net-tool/app/scripts/sidecar.ts`, which `bun run sidecar` runs, compiles the rack with `rack compile` into `src-tauri/binaries/net-tool-rack-<target triple>`, with the triple from `rustc --print host-tuple`.
+- `src-tauri/tauri.bundle.conf.json` turns bundling on, with the targets `deb`, `dmg`, and `nsis`, of which Tauri builds those of the system it runs on, `externalBin`, and the ad-hoc signature on macOS. `bun run bundle` runs `bun run sidecar`, then `tauri build --config` with that file.
+- `src-tauri/src/main.rs`:
+  - `Place` holds how a build runs the rack and its `ctl`: `Runner::Sidecar` in a release build, `Runner::Source` in a debug build, with the base directory, the path of `settings.json`, and the setting in use.
+  - `Log` writes the rack's standard output and standard error to `rack.log` in a release build, up to `LOG_LIMIT`, once the previous file is `rack.old.log`.
+  - The window gets the endpoint once the log has shown the panel's URL and `control listening`, the last step of a start. The rack of a second copy of the app opens its panel, then stops at its control endpoint, so its window shows that failure instead of a connection that closes.
+  - `failed()` gives the window the reason and the log's path; a debug build exits, as before.
+  - `devices()`, `reload_devices()`, and `set_replace_devices()` use `ctl()`, which kills a `ctl` after `CTL_WAIT`, and `write_settings()`, which writes `settings.json.new` and renames it over `settings.json`.
+  - `stop()` joins the thread that reads the log, so that an orderly exit keeps the rack's last lines.
+- `src/Devices.vue` is the dialog. `src/App.vue` shows the **Devices** button in the Tauri shell only, and the failure of a start in the window's banner.
+- `scripts/smoke.ts` is the smoke test. It also starts a second copy of the app while the first runs, and checks that the copy stays open with the failure, while the first copy's rack runs on. After `ctl status` says that no rack runs, it waits for the sidecar's process to end, with `pgrep` or `tasklist`. With `--app`, it runs a build without installing it.
+- `.github/workflows/net-tool.yml` names the Bun minimum as `BUN_MINIMUM`, as `check.yml` does, and `test/bun-version.test.ts` checks it.
+- The root's type check and lint cover `app/scripts/`, and still skip the rest of `app/`.
+- `test/net-tool.test.ts` covers the compiled rack, with both origins of a built app.
+- Checked on Linux x64 on 2026-11-21: `bun run bundle` built only the `.deb`, 53.41 MiB; the smoke test passed with `--app` under `xvfb-run`; a debug build ran the rack from source, and its window connected; and the Devices dialog worked in Chromium, with the shell's commands stubbed.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-20, as revised after their three answers: the setting `replaceDevices`, manual or automatic, with the Devices dialog; when the Agent starts the installer workflow, which they left to it; and no fallback for a runner that can't open the window. The user's words: "Accept, Go ahead".

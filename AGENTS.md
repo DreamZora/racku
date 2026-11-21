@@ -44,6 +44,7 @@ This file defines the project background, architectural constraints, and working
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list still needs its own decision before work starts, except the `inline` form, which [The main thread runs no devices, and what child processes, connected racks, and single executables must meet](.agents/decisions/261119_054850-main-thread-runs-no-devices.md) drops. That decision also sets what the decisions for the `chassis` form, connected racks, and `bun build --compile` packaging must meet: transports, one authentication method for sockets and TCP, and devices outside an executable with a fallback to the ones inside it.
 - P4 is under way on `feat/p4`. Its first decision, [A rack in one executable, which runs devices from files beside it and falls back to the ones inside](.agents/decisions/261120_011627-single-executables.md), is implemented: `rack compile` packages a rack into one executable, which runs a device from a file in its base directory when there is one, and falls back to the device packaged inside.
   - [Executables that apply changed device files on command, or as they change with --watch](.agents/decisions/261120_221450-watching-outside-files.md) is implemented: an executable with `--watch` reloads its rack as device files and JSON in its base directory change, with the watcher of `rack dev`, which no longer ends when its base directory is removed.
+  - [Installers for net-tool, whose shell runs the rack as a sidecar compiled by rack compile](.agents/decisions/261120_203926-net-tool-installers.md) is implemented: `bun run bundle` in `examples/net-tool/app` builds a `.deb`, a `.dmg`, or an NSIS setup whose shell runs the compiled rack, with a Devices dialog and the setting `replaceDevices`, manual or automatic; `.github/workflows/net-tool.yml` builds and smoke-tests the three.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
 
 ## Project positioning
@@ -171,6 +172,7 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 4. Put tests and implementation in the same change, using `bun:test`. See the global rules for how documented capabilities map to tests.
 5. Run the checks closest to the change first, then widen them with the scope; see [Commands](#commands). Report only commands that actually ran, with their results.
    - CI runs only for pushes to `main` and manual runs, so `bun run check` before each commit is what checks a branch. A change to platform behavior, such as paths, sockets, signals, or file modes, needs a manual run on its branch before it merges; ask the user to start one.
+   - The installer workflow, `net-tool.yml`, needs no asking: the Agent starts its runs by the rule of [When the workflow runs](.agents/decisions/261120_203926-net-tool-installers.md#when-the-workflow-runs), which the user left to it, and says why in its report.
 6. Finish by updating `## Implementation` in the affected decisions and the documentation they affect, in `README.md` and `docs/`. A test that confirms what a section of the documentation says names it as `@doc <document>#<anchor>`, and every section of `docs/guides/` and `docs/reference/` needs such a test, as [A README that explains rack42u, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md#tests-that-hold-the-documentation) decides; `bun run check:docs` checks it. Commits follow the global rules and list the relevant decisions in `Context:`.
 
 ## Versions
@@ -180,9 +182,9 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 - rack42u has no formal release yet. Until the user cuts the first one, every version is informal: any may break the API, a version is tagged only at the user's word, and the repository stays private. Apps depend on rack42u through git.
 - rack42u names a minimum Bun version, not a pinned one, and supports every later release.
   - The minimum is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
-  - `engines.bun` names it as `>=1.4.4`. `@types/bun`, `.github/workflows/check.yml`, the README's Requirements, and this file name the same version, and `test/bun-version.test.ts` checks that they agree.
+  - `engines.bun` names it as `>=1.4.4`. `@types/bun`, `.github/workflows/check.yml` and `net-tool.yml`, the README's Requirements, and this file name the same version, and `test/bun-version.test.ts` checks that they agree.
   - CI tests the minimum on Linux, macOS, and Windows, and the latest Bun release on Linux. A failure on the latest release is a defect: fix rack42u, or work around the bug of Bun and record it.
-  - Until the first formal release, move the minimum whenever work needs it, such as for a fix, an API, or a workaround that can go. Move the five places in one change, run CI by hand on its branch, and say why in the commit. After the release, a major version can still raise its minimum, in a minor version.
+  - Until the first formal release, move the minimum whenever work needs it, such as for a fix, an API, or a workaround that can go. Move the six places in one change, run CI by hand on its branch, and say why in the commit. After the release, a major version can still raise its minimum, in a minor version.
   - Use only the Bun APIs that the minimum has. Code that exists for a bug of a Bun release names the bug and the release.
 
 ## Commands
@@ -265,14 +267,16 @@ test/                bun:test tests, named *.test.ts
   fixtures/          test devices, connectors, and helpers; no tests
 examples/shop-api/   the example app
 examples/net-tool/   a TCP and UDP tool: its rack, devices, and connector, which the suite checks
-  app/               the window, Vue 3 and Quasar with its own package.json, and src-tauri/,
-                     the Tauri shell; the root's type check and lint skip it
+  app/               the window, Vue 3 and Quasar with its own package.json, src-tauri/, the
+                     Tauri shell, and scripts/, which builds the sidecar and smoke-tests an
+                     installer; the root's type check and lint cover only scripts/
 skills/rack42u/      the skill for agents that build apps on rack42u, which apps copy from
                      node_modules; it names documents by their path in an app, such as
                      node_modules/rack42u/docs/concepts.md, which bun run check:docs checks
 scripts/             project scripts: check-decisions.ts, the decision gate; check-docs.ts, the
                      documentation gate; and markdown.ts, the headings and anchors both read
-.github/workflows/   check.yml, the CI jobs on Linux, macOS, and Windows
+.github/workflows/   check.yml, the CI jobs on Linux, macOS, and Windows; net-tool.yml, which
+                     builds net-tool's installers on the three and smoke-tests them
 .github/ISSUE_TEMPLATE/  the issue forms: trial, bug, documentation, and feature
 .agents/decisions/   decision records, stored flat as <YYMMDD>_<hhmmss>-<topic>.md
 .agents/trials/      trial apps that agents build from the skill and the documentation alone;
