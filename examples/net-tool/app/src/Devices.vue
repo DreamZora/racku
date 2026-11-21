@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { copyToClipboard } from "quasar";
 import { ref, watch } from "vue";
+import { icons } from "./icons.ts";
 
 const open = defineModel<boolean>({ required: true });
 
@@ -53,7 +54,7 @@ interface ReloadResult {
   error?: WireError;
 }
 
-const modes = [
+const modes: { label: string; value: Mode }[] = [
   { label: "Manual", value: "manual" },
   { label: "Automatic", value: "automatic" },
 ];
@@ -91,7 +92,7 @@ async function reload(): Promise<void> {
 }
 
 async function choose(mode: Mode): Promise<void> {
-  if (view.value === undefined) return;
+  if (view.value === undefined || view.value.settings.replaceDevices === mode) return;
   try {
     view.value.settings = await invoke<Settings>("set_replace_devices", { mode });
   } catch (error) {
@@ -130,69 +131,269 @@ watch(open, (now) => {
 
 <template>
   <q-dialog v-model="open">
-    <q-card style="min-width: 560px; max-width: 90vw">
-      <q-card-section class="text-h6">Devices</q-card-section>
-      <q-banner v-if="problem" class="bg-negative text-white" dense>{{ problem }}</q-banner>
+    <q-card class="devices">
+      <div class="devices-head">
+        <div class="grow">
+          <div class="devices-title">Devices</div>
+          <div class="devices-subtitle">The rack's devices, and how files replace them.</div>
+        </div>
+        <q-btn v-close-popup flat round dense size="sm" title="Close">
+          <q-icon :name="icons.close" size="16px" />
+        </q-btn>
+      </div>
+
+      <div v-if="problem" class="notice devices-notice">
+        <span>{{ problem }}</span>
+      </div>
+
       <template v-if="view">
-        <q-banner v-if="view.error" class="bg-warning" dense>{{ view.error }}</q-banner>
-        <q-list v-if="view.devices" dense separator>
-          <q-item v-for="device in view.devices" :key="device.name">
-            <q-item-section>
-              <q-item-label>{{ device.name }}</q-item-label>
-              <q-item-label caption>{{ runs(device) }}</q-item-label>
-              <q-item-label v-if="device.error" caption class="text-negative">
-                {{ device.error.code }}: {{ device.error.message }}
-              </q-item-label>
-            </q-item-section>
-            <q-item-section side>
-              <q-badge :color="device.state === 'online' ? 'positive' : 'warning'" :label="device.state" />
-            </q-item-section>
-          </q-item>
-        </q-list>
-        <q-separator />
-        <q-card-section class="q-gutter-sm">
-          <div class="text-subtitle2">Replacing a device</div>
-          <div v-if="view.settings.fromSource" class="text-caption">
-            This build runs the rack from source, with <code>rack start</code>: Reload applies edits of
-            <code>devices/</code> there. The setting below is the installed app's.
+        <div v-if="view.error" class="notice devices-notice">
+          <span>{{ view.error }}</span>
+        </div>
+        <div v-if="view.devices" class="device-list">
+          <div v-for="device in view.devices" :key="device.name" class="device">
+            <span class="light" :class="device.state === 'online' ? 'open' : 'warn-light'" />
+            <span class="device-name">{{ device.name }}</span>
+            <span class="device-runs mono" :class="{ packaged: device.packaged }">{{ runs(device) }}</span>
+            <span class="device-state" :class="device.state">{{ device.state }}</span>
+            <div v-if="device.error" class="device-error mono">
+              {{ device.error.code }}: {{ device.error.message }}
+            </div>
           </div>
-          <div v-else class="text-caption">
-            A <code>devices/ui.ts</code> or <code>devices/net.ts</code> in this directory, with
-            <code>connectors.ts</code> beside <code>devices/</code>, replaces the device packaged in the app:
+        </div>
+
+        <div class="devices-section">
+          <div class="section-title">Replacing a device</div>
+          <p v-if="view.settings.fromSource" class="devices-text">
+            This build runs the rack from source, with <code>rack start</code>. Reload applies your edits of
+            <code>devices/</code> in this directory; the setting below is the installed app's.
+          </p>
+          <p v-else class="devices-text">
+            A <code>devices/ui.ts</code> or <code>devices/net.ts</code> in this directory replaces the
+            device packaged in the app. Both import <code>../connectors.ts</code>, so put a
+            <code>connectors.ts</code> beside <code>devices/</code> too.
+          </p>
+          <div class="path">
+            <span class="path-text mono">{{ view.settings.baseDir }}</span>
+            <q-btn flat dense no-caps size="sm" class="path-copy" @click="copy(view.settings.baseDir)">
+              <q-icon :name="copied ? icons.check : icons.copy" size="14px" class="q-mr-xs" />
+              {{ copied ? "Copied" : "Copy" }}
+            </q-btn>
           </div>
-          <div class="row items-center q-gutter-sm">
-            <code class="col">{{ view.settings.baseDir }}</code>
-            <q-btn flat dense no-caps :label="copied ? 'Copied' : 'Copy'" @click="copy(view.settings.baseDir)" />
+        </div>
+
+        <div class="devices-section">
+          <div class="section-title">When a file applies</div>
+          <div class="segmented modes">
+            <button
+              v-for="mode in modes"
+              :key="mode.value"
+              type="button"
+              :class="{ on: view.settings.replaceDevices === mode.value }"
+              @click="choose(mode.value)"
+            >
+              {{ mode.label }}
+            </button>
           </div>
-          <q-btn-toggle
-            :model-value="view.settings.replaceDevices"
-            :options="modes"
-            no-caps
-            dense
-            @update:model-value="choose"
-          />
-          <div class="text-caption">
-            Manual: a file applies when the app starts, and at Reload. Automatic: also as soon as it is
-            written. The rack uses {{ label(view.settings.inUse) }}<span
-              v-if="view.settings.replaceDevices !== view.settings.inUse"
-            >; {{ label(view.settings.replaceDevices) }} applies at the next start</span>.
+          <p class="devices-text">
+            <b>Manual:</b> when the app starts, and at Reload. <b>Automatic:</b> also as soon as the file
+            is written.
+          </p>
+          <p class="devices-text in-use">
+            The rack uses {{ label(view.settings.inUse) }}<span v-if="view.settings.replaceDevices !== view.settings.inUse">;
+              {{ label(view.settings.replaceDevices) }} applies at the next start</span>.
+          </p>
+          <div v-if="view.settings.error" class="notice">
+            <span>{{ view.settings.error }}</span>
           </div>
-          <q-banner v-if="view.settings.error" class="bg-warning" dense>{{ view.settings.error }}</q-banner>
-        </q-card-section>
+        </div>
       </template>
-      <q-card-section v-if="results" class="q-gutter-xs">
-        <div v-if="results.length === 0" class="text-caption">Reload replaced nothing: no firmware changed.</div>
-        <div v-for="result in results" :key="result.device">
-          <span v-if="result.error" class="text-negative">
+
+      <div v-if="results" class="devices-section results">
+        <div v-if="results.length === 0" class="faint">Reload replaced nothing: no firmware changed.</div>
+        <div v-for="result in results" :key="result.device" class="result" :class="{ failed: result.error }">
+          <q-icon :name="result.error ? icons.close : icons.check" size="14px" />
+          <span v-if="result.error" class="mono">
             {{ result.device }} failed: {{ result.error.code }}: {{ result.error.message }}
           </span>
-          <span v-else>{{ result.device }} replaced, {{ result.mode }}</span>
+          <span v-else>
+            <b>{{ result.device }}</b> replaced, {{ result.mode }}
+          </span>
         </div>
-      </q-card-section>
-      <q-card-actions align="right">
-        <q-btn label="Reload" color="primary" :loading="busy" @click="reload" />
-        <q-btn v-close-popup flat label="Close" />
-      </q-card-actions>
+      </div>
+
+      <div class="devices-actions">
+        <q-btn v-close-popup flat no-caps label="Close" class="devices-close" />
+        <q-btn unelevated no-caps color="primary" :loading="busy" @click="reload">
+          <q-icon :name="icons.reload" size="16px" class="q-mr-xs" />
+          Reload
+        </q-btn>
+      </div>
     </q-card>
   </q-dialog>
 </template>
+
+<style>
+.devices {
+  width: 600px;
+  max-width: 92vw;
+  border-radius: 12px !important;
+  background: var(--nt-surface) !important;
+  color: var(--nt-text);
+}
+.devices-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 16px 12px 20px;
+}
+.devices-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+.devices-subtitle {
+  margin-top: 2px;
+  color: var(--nt-muted);
+}
+.devices-notice {
+  margin: 0 20px 12px;
+}
+.device-list {
+  margin: 0 20px;
+  border: 1px solid var(--nt-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.device {
+  display: grid;
+  grid-template-columns: 8px 110px 1fr auto;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px 14px;
+}
+.device + .device {
+  border-top: 1px solid var(--nt-border);
+}
+.light.warn-light {
+  background: var(--nt-warn);
+}
+.device-name {
+  font-weight: 600;
+}
+.device-runs {
+  font-size: 12px;
+  color: var(--nt-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.device-runs.packaged {
+  color: var(--nt-faint);
+}
+.device-state {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--nt-muted);
+  background: var(--nt-sunken);
+  border: 1px solid var(--nt-border);
+}
+.device-state.online {
+  color: var(--nt-ok);
+  background: color-mix(in srgb, var(--nt-ok) 10%, transparent);
+  border-color: color-mix(in srgb, var(--nt-ok) 30%, transparent);
+}
+.device-state.degraded {
+  color: var(--nt-warn);
+  background: color-mix(in srgb, var(--nt-warn) 10%, transparent);
+  border-color: color-mix(in srgb, var(--nt-warn) 30%, transparent);
+}
+.device-error {
+  grid-column: 2 / -1;
+  font-size: 11.5px;
+  color: var(--nt-bad);
+  overflow-wrap: anywhere;
+}
+.devices-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 20px 0;
+}
+.devices-text {
+  margin: 0;
+  color: var(--nt-muted);
+  line-height: 1.55;
+}
+.devices-text code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--nt-sunken);
+  font-family: var(--nt-mono);
+  font-size: 12px;
+  color: var(--nt-text);
+}
+.devices-text.in-use {
+  color: var(--nt-text);
+}
+.path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--nt-border);
+  background: var(--nt-sunken);
+}
+.path-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.path-copy {
+  color: var(--nt-muted);
+}
+.segmented.modes {
+  align-self: flex-start;
+}
+.segmented.modes button {
+  min-width: 110px;
+}
+.results {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--nt-border);
+  background: var(--nt-sunken);
+  gap: 6px;
+}
+.result {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--nt-ok);
+}
+.result span {
+  color: var(--nt-text);
+  overflow-wrap: anywhere;
+}
+.result.failed,
+.result.failed span {
+  color: var(--nt-bad);
+}
+.result .q-icon {
+  margin-top: 2px;
+}
+.devices-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 18px 20px 18px;
+}
+.devices-close {
+  color: var(--nt-muted);
+}
+</style>
