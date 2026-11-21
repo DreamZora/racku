@@ -165,6 +165,13 @@ function status(sidecar: string): Slot[] {
   return JSON.parse(done.stdout) as Slot[];
 }
 
+/** What `ctl status` reports of a device, or `undefined` while no rack answers. */
+function tryStatus(sidecar: string, name: string): Slot | undefined {
+  const done = ctl(sidecar, "status");
+  if (!done.ok) return undefined;
+  return (JSON.parse(done.stdout) as Slot[]).find((found) => found.name === name);
+}
+
 function slot(sidecar: string, name: string): Slot {
   return status(sidecar).find((found) => found.name === name) ?? fail(`no device ${name}`);
 }
@@ -214,13 +221,17 @@ async function launch(shell: string, sidecar: string): Promise<Running> {
   const since = Date.now();
   const running = spawn(shell);
   const started = running.process;
-  await until("the panel listening, in rack.log", 60, () =>
-    entries(since).some((entry) => entry.device === "http-panel" && entry.message === "listening"),
-  );
+  // The rack's control endpoint listens last, after the panel, as the start's last step.
+  await until("the rack's start, with its panel and its control endpoint, in rack.log", 60, () => {
+    const seen = entries(since);
+    const panel = seen.some(
+      (entry) => entry.device === "http-panel" && entry.message === "listening",
+    );
+    return panel && seen.some((entry) => entry.message === "control listening");
+  });
   await until("the window's WebSocket on the panel", 60, () => {
     if (started.exitCode !== null) fail(`the app exited with ${started.exitCode}`);
-    const panel = status(sidecar).find((found) => found.name === "http-panel");
-    return (panel?.listeners[0]?.webSockets ?? 0) > 0;
+    return (tryStatus(sidecar, "http-panel")?.listeners[0]?.webSockets ?? 0) > 0;
   });
   return running;
 }
@@ -316,8 +327,8 @@ async function smoke(): Promise<void> {
   step = "editing ui's file";
   await writeFile(join(base, "devices", "ui.ts"), uiSource(2));
   await until("ui running the edited file, without ctl reload", 10, () => {
-    const now = slot(sidecar, "ui");
-    return now.firmware !== before.firmware && now.packaged !== true && now.state === "online";
+    const now = tryStatus(sidecar, "ui");
+    return now?.firmware !== before.firmware && now?.packaged !== true && now?.state === "online";
   });
 
   step = "starting a second copy of the app";
