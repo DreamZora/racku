@@ -1,6 +1,6 @@
 # Decision: Executables that apply changed device files on command, or as they change with --watch
 
-Status: proposed
+Status: accepted
 
 ## Background
 
@@ -101,3 +101,7 @@ None.
 - Documentation: `--watch` in [The command line of an executable](../../docs/reference/cli.md#the-command-line-of-an-executable) and in [A rack in one executable](../../docs/guides/running.md#a-rack-in-one-executable); the wait before a reload, and what a removed base directory does, in [Hot reload with rack dev](../../docs/guides/running.md#hot-reload-with-rack-dev); and the watch's bounds in the limits.
 - Costs: a flag, and the watch's work: one watch, and a reload per change that counts.
 - Security: with `--watch`, a file that someone writes in the base directory runs at once, not at the next `ctl reload` or start. Whoever can write the base directory can run code in the rack either way, as [A rack in one executable](261120_011627-single-executables.md#impact) says.
+
+## Confirmation
+
+- The user accepted this decision on 2026-11-20, after the Agent's report on their three answers to [Installers for net-tool](261120_203926-net-tool-installers.md): `--watch` for every executable, the files that count as a change, the bound of 1 s on the wait before a reload, and the fix for a removed base directory of `rack dev`. The user's words: "Accept, Go ahead".

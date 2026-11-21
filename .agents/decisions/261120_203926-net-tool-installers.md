@@ -1,6 +1,6 @@
 # Decision: Installers for net-tool, whose shell runs the rack as a sidecar compiled by rack compile
 
-Status: proposed
+Status: accepted
 
 ## Background
 
@@ -218,3 +218,7 @@ The user left this to the Agent on 2026-11-20: "Decide for yourself when it is a
   - about 160 MiB of artifact storage for 7 days per run.
 - Security: whoever can write the app's local data directory, which is the user's own, can run code in the rack with the user's rights. [A rack in one executable](261120_011627-single-executables.md#impact) says the same of any base directory. With `automatic`, such a file runs at once, not at the next start or **Reload**.
 - Follow-ups, each in a decision of its own: signing and notarization, an updater, more installers, and more systems, such as Linux arm64.
+
+## Confirmation
+
+- The user accepted this decision on 2026-11-20, as revised after their three answers: the setting `replaceDevices`, manual or automatic, with the Devices dialog; when the Agent starts the installer workflow, which they left to it; and no fallback for a runner that can't open the window. The user's words: "Accept, Go ahead".
