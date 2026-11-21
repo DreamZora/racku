@@ -109,7 +109,7 @@ async function main(args: string[]): Promise<void> {
     baseDir: dirname(manifestPath),
     flags,
     usage,
-    manifestPath,
+    ...(command === "dev" ? { watch: { manifestPath } } : {}),
   });
 }
 

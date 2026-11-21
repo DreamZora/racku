@@ -4,6 +4,7 @@
  * the packaged devices when those files fail.
  *
  * @decision .agents/decisions/261120_011627-single-executables.md#tests
+ * @decision .agents/decisions/261120_221450-watching-outside-files.md#tests
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
@@ -412,6 +413,60 @@ describe("an executable from rack compile", () => {
     expect(await three.cli.exited()).toBe(0);
     expect(three.cli.output).toContain("rack hello stopped");
   }, 30_000);
+});
+
+// @decision .agents/decisions/261120_221450-watching-outside-files.md#tests
+// @doc docs/guides/running.md#a-rack-in-one-executable
+// @doc docs/reference/cli.md#the-command-line-of-an-executable
+// @doc docs/reference/limits.md#watching
+describe("an executable with --watch", () => {
+  test("applies a device file as it is written, edited, and removed", async () => {
+    const dir = await baseDir();
+    const { cli, url } = await run(dir, { flags: ["--watch"] });
+    await cli.waitFor(/watching .* for changes/);
+    const file = join(dir, "devices", "hello.ts");
+    await Bun.write(file, helloSource("outside"));
+    await waitFor(async () => (await greet(url)).from === "outside", 15_000);
+    await Bun.write(file, helloSource("edited"));
+    await waitFor(async () => (await greet(url)).from === "edited", 15_000);
+    await rm(file);
+    await waitFor(async () => (await greet(url)).from === "packaged", 15_000);
+    const hello = await statusOf(dir, "hello");
+    expect([hello.state, hello.packaged]).toEqual(["online", true]);
+    const records = await ctl<UpdateRecord[]>(dir, "history", "hello");
+    expect(records.map(({ mode, ok }) => [mode, ok])).toEqual([
+      ["hot", true],
+      ["hot", true],
+      ["hot", true],
+    ]);
+  }, 60_000);
+
+  test("starts no reload for data, dot files, other kinds of file, or node_modules", async () => {
+    const dir = await baseDir();
+    const { cli } = await run(dir, { flags: ["--watch"] });
+    await cli.waitFor(/watching .* for changes/);
+    // The rack's own database, data/hello.db, changes too, at each greeting.
+    await Bun.write(join(dir, "data.db"), "x");
+    await Bun.write(join(dir, ".draft.ts"), "export {};\n");
+    await Bun.write(join(dir, "notes.txt"), "x");
+    await Bun.write(join(dir, "node_modules", "pkg", "index.ts"), "export {};\n");
+    await Bun.sleep(1_500);
+    expect(cli.output).not.toContain("reload:");
+    await Bun.write(join(dir, "settings.json"), "{}");
+    await cli.waitFor(/reload: no firmware changed/);
+  }, 60_000);
+
+  test("without --watch, a device file written while the rack runs waits for ctl reload", async () => {
+    const dir = await baseDir();
+    const { cli, url } = await run(dir);
+    await Bun.write(join(dir, "devices", "hello.ts"), helloSource("outside"));
+    await Bun.sleep(1_500);
+    expect((await greet(url)).from).toBe("packaged");
+    expect(cli.output).not.toContain("watching");
+    const results = await ctl<{ device: string; error?: unknown }[]>(dir, "reload");
+    expect(results.map((result) => [result.device, result.error])).toEqual([["hello", undefined]]);
+    expect((await greet(url)).from).toBe("outside");
+  }, 60_000);
 });
 
 // @doc docs/reference/cli.md#commands

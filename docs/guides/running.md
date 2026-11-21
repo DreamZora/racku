@@ -27,7 +27,12 @@ A program written in Bun can instead run a rack inside itself with `start()`, wi
 
 ## Hot reload with rack dev
 
-`rack dev` watches the base directory, ignoring `node_modules` and dot directories. After a change it rebuilds every device and replaces the ones whose firmware hash changed, so editing a file that several devices bundle, such as a shared connector, replaces all of them. A device that fails to build keeps running its old firmware. Edits to the manifest itself take effect at once, as [Changed plans and edited manifests](updates.md#changed-plans-and-edited-manifests) describes.
+`rack dev` watches the base directory, ignoring `node_modules` and dot directories. After a change it rebuilds every device and replaces the ones whose firmware hash changed, so editing a file that several devices bundle, such as a shared connector, replaces all of them. Edits to the manifest itself take effect at once, as [Changed plans and edited manifests](updates.md#changed-plans-and-edited-manifests) describes.
+
+- **When:** a reload starts 100 ms after the last change, and at most 1 s after the first, so that changes that never pause don't hold it off. One reload runs at a time, and the changes made during one start one more after it.
+- **Failures:** a device that fails to build keeps running its old firmware, and a reload that fails logs `reload failed`. Watching goes on.
+- **A removed base directory:** watching stops, the log errors `stopped watching <dir>: it was removed`, and the rack runs on until it is stopped.
+- **A watch that can't start,** such as at the system's limit of watches, logs `cannot watch <dir>`, and the rack runs on; `rack ctl reload` applies changes.
 
 ## Running a rack from code
 
@@ -100,6 +105,11 @@ rack compile rack.ts --outfile dist/greeter          # about 100 MiB, most of it
   - When the rack starts, and at each `reload()` and `swap(name)`, a device runs its outside file when there is one, and its packaged firmware otherwise.
   - rack42u's own devices, and devices from other packages, run only from their packaged firmware. Outside files replace packaged devices; they add none.
   - The executable builds an outside file as `rack compile` built the packaged firmware: its firmware imports rack42u, and the packages that the packaged firmware imports, from the executable. Any other import must resolve from the file's place, and its firmware bundles it.
+- **On command, or as files change.** While the rack runs, a changed outside file applies at `ctl reload`, or at `ctl swap <device>`. With `--watch`, it also applies as it changes: the executable watches its base directory, and reloads the rack as `ctl reload` does, when and with the bounds that [Hot reload with rack dev](#hot-reload-with-rack-dev) describes.
+  - A change counts when the file's name ends in `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, or `.json`, outside `node_modules`, and outside files and directories whose names start with a dot, such as `.rack/` and `.env`. So the data that devices keep in the base directory, such as a database, starts no reloads. A device that writes code or JSON there keeps it in a directory whose name starts with a dot.
+  - A change to another kind of file that firmware imports, such as `.txt`, applies at the next `ctl reload`.
+  - A file that fails at a watched reload, such as one still being written, is a failed swap, as at `ctl reload`; the change that ends the write starts another reload.
+  - The program that runs the executable picks one way or the other at each start, such as a service manager, or the shell of a desktop app from a setting of its user.
 - **Falling back.** An outside file counts as an update of its packaged device, and the packaged firmware is the device's first known-good firmware, as [Fallback](updates.md#fallback) describes.
   - A device that starts from an outside file starts on probation. Once it gets through probation, its firmware is known-good.
   - When the outside file fails to build, with `RACK_SWAP_REJECTED`, or to load, to boot, to be wired, or its `selfTest`, the device starts from its packaged firmware instead, and its slot reports `degraded`, with the failure as its `error`.
@@ -107,7 +117,7 @@ rack compile rack.ts --outfile dist/greeter          # about 100 MiB, most of it
   - At `reload()` or `swap(name)`, an outside file that fails to build is a failed swap: the device keeps what it runs.
 - **Reports.** `status()` marks a device that runs its packaged firmware with `packaged: true`, and its `source` names the place of its outside file, whether or not the file is there. The log says `<device> runs <file>` for each outside file at start, and warns `<device> runs its packaged firmware: <reason>` at each fallback. `history()` records each fallback with the cause `fallback`.
 - **Who can change it.**
-  - Outside files run with the rights of the executable: whoever can write the base directory can run code in the rack, as whoever can write an app's files can under `rack start`.
+  - Outside files run with the rights of the executable: whoever can write the base directory can run code in the rack, as whoever can write an app's files can under `rack start`. With `--watch`, such a file runs at once, not at the next `ctl reload` or start.
   - Like `bun`, the executable reads a `.env` file in the directory where it starts, so whoever can write that directory can add variables to its environment. Unlike `bun`, it ignores a `bunfig.toml` there, whose `preload` would run code in the rack.
 - [The command line of an executable](../reference/cli.md#the-command-line-of-an-executable) lists its flags, and [Flags of rack compile](../reference/cli.md#flags-of-rack-compile) how to compile for another system.
 

@@ -70,16 +70,18 @@ The two exclude each other, and a rack placed by hand takes neither.
 
 ## The command line of an executable
 
-An executable that `rack compile` made starts the rack it packaged, as `rack start` starts a manifest, with the same flags, signals, and exit codes, and `--base-dir`. With `ctl`, it operates the rack that it runs for the same base directory, with the operations of `rack ctl` and its flags, `--base-dir` in place of `--dir`. It reads a `.env` file in the directory where it starts, as `bun` does, but not a `bunfig.toml`.
+An executable that `rack compile` made starts the rack it packaged, as `rack start` starts a manifest, with the same flags, signals, and exit codes, and two flags of its own, `--base-dir` and `--watch`. With `ctl`, it operates the rack that it runs for the same base directory, with the operations of `rack ctl` and its flags, `--base-dir` in place of `--dir`. It reads a `.env` file in the directory where it starts, as `bun` does, but not a `bunfig.toml`.
 
 ```sh
 ./app --base-dir /var/lib/app --log json   # start the rack
+./app --base-dir /var/lib/app --watch      # start it, and apply outside files as they change
 ./app ctl status --base-dir /var/lib/app   # operate it
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--base-dir <dir>` | The base directory, which stands for the manifest's directory: by default, the directory that holds the executable. |
+| `--watch` | Also apply outside files as they change: watch the base directory, and reload the rack after a change to a device file or a JSON file, as `ctl reload` does. Without it, outside files apply when the rack starts, and at `ctl reload` and `ctl swap`. |
 
 ## Environment variables
 

@@ -89,6 +89,19 @@ See [Faults and overload](../guides/faults.md) and [Updates](../guides/updates.m
 
 See [A rack in one executable](../guides/running.md#a-rack-in-one-executable).
 
+## Watching
+
+`rack dev`, and an executable with `--watch`, watch the base directory and reload the rack after changes.
+
+| Bound | Value | Beyond it |
+|---|---|---|
+| Watches | One recursive watch of the base directory | A watch that can't start, such as at the system's limit of watches, logs `cannot watch <dir>`, and the rack runs on: changes apply at `ctl reload`. |
+| The wait before a reload | 100 ms after the last change, and at most 1 s after the first | |
+| Reloads | One at a time, and one more waiting, which applies the changes made during the one that runs | |
+| Builds per reload | One per device file, as at `ctl reload` | |
+
+See [Hot reload with rack dev](../guides/running.md#hot-reload-with-rack-dev) and [A rack in one executable](../guides/running.md#a-rack-in-one-executable).
+
 ## The bench
 
 | Bound | Value | Beyond it |

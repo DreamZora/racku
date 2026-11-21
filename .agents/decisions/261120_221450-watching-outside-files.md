@@ -102,6 +102,22 @@ None.
 - Costs: a flag, and the watch's work: one watch, and a reload per change that counts.
 - Security: with `--watch`, a file that someone writes in the base directory runs at once, not at the next `ctl reload` or start. Whoever can write the base directory can run code in the rack either way, as [A rack in one executable](261120_011627-single-executables.md#impact) says.
 
+## Implementation
+
+- `src/dev.ts`:
+  - `watchAndReload()` takes the rack's `reload`, `rack dev`'s manifest file when there is one, and `counts`, which decides by a file's path whether its change counts; files in `node_modules`, and paths with a part whose name starts with a dot, never count.
+  - A reload starts `DEBOUNCE_MS`, 100 ms, after the last change, and at most `MAX_WAIT_MS`, 1 s, after the first. An event without a file name counts as a change, since anything may have changed.
+  - When a reload is due, a base directory that is gone, or no longer a directory, stops watching, with `it was removed`; so does an `error` event of the watch, with its message. A watch that can't start logs `cannot watch <dir>: <reason>`, and returns.
+  - `isDeviceFileOrJson()` is what an executable counts.
+- `src/commands.ts`: `runRack()` takes `watch`, which `rack dev` passes with its manifest file, and an executable with `--watch` passes with `isDeviceFileOrJson`.
+- `src/executable.ts`: `--watch` in `START_FLAGS` and in the usage.
+- Tests:
+  - `test/watch.test.ts`: the wait of changes every 50 ms, one reload at a time with one more after it, a filter, and a watch that can't start, with a stub rack.
+  - `test/executable.test.ts`: the executable with `--watch`, and without it.
+  - `test/cli.test.ts`: a removed base directory of `rack dev`.
+  - `test/reference.test.ts`: the executable's two flags of its own in the reference.
+- Documentation: `--watch` in [The command line of an executable](../../docs/reference/cli.md#the-command-line-of-an-executable); "On command, or as files change" in [A rack in one executable](../../docs/guides/running.md#a-rack-in-one-executable); the wait and the failures in [Hot reload with rack dev](../../docs/guides/running.md#hot-reload-with-rack-dev); and [Watching](../../docs/reference/limits.md#watching) in the limits.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-20, after the Agent's report on their three answers to [Installers for net-tool](261120_203926-net-tool-installers.md): `--watch` for every executable, the files that count as a change, the bound of 1 s on the wait before a reload, and the fix for a removed base directory of `rack dev`. The user's words: "Accept, Go ahead".

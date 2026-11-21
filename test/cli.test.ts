@@ -6,7 +6,8 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { realpathSync } from "node:fs";
-import { lstat, rmdir, unlink } from "node:fs/promises";
+import { lstat, rm, rmdir, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -538,6 +539,22 @@ export default rack("cli", {
     expect(cli.output).not.toContain("reload:");
     await created.write("notes.txt", "x");
     await cli.waitFor(/reload: no firmware changed/);
+  });
+
+  // Bun 1.4.4 reports the removal of a watched directory without a file name, which ended
+  // rack dev at once with code 1 when its watcher took every name for a string.
+  // @decision .agents/decisions/261120_221450-watching-outside-files.md#failure-modes
+  test("stops watching when its base directory is removed, and still stops in order", async () => {
+    const created = await app();
+    // Run from elsewhere, since a system may refuse to remove a process's working directory.
+    const cli = run(["dev", join(created.dir, "rack.ts"), "--stop-on-stdin-close"], tmpdir());
+    await cli.panelUrl();
+    await cli.waitFor(/watching /);
+    await rm(created.dir, { recursive: true, force: true });
+    await cli.waitFor(/\[rack\] error stopped watching .*: it was removed/);
+    await cli.closeInput();
+    expect(await cli.exited()).toBe(0);
+    expect(cli.output).toContain("rack cli stopped");
   });
 
   test("reports a device that fails to build and keeps serving", async () => {

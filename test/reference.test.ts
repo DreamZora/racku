@@ -223,7 +223,9 @@ test("the reference of the rack command lists every command, flag, and operation
   expect(listedFlags("Flags of rack compile")).toEqual(flagsOf("compile"));
   expect(listedFlags("Flags of rack ctl")).toEqual(flagsOf("ctl"));
 
-  // An executable takes the flags of rack start, and those of rack ctl with --base-dir for --dir.
+  // An executable takes the flags of rack start with two of its own, --base-dir and --watch, and
+  // those of rack ctl with --base-dir for --dir.
+  // @decision .agents/decisions/261120_221450-watching-outside-files.md#on-command-or-as-files-change
   const executable = await read("src/executable.ts");
   const listOf = (name: string) =>
     (new RegExp(`const ${name} = \\[([^\\]]*)\\]`).exec(executable)?.[1] ?? "")
@@ -231,8 +233,8 @@ test("the reference of the rack command lists every command, flag, and operation
       .map((flag) => flag.trim().replace(/^"|"$/g, ""))
       .filter(Boolean)
       .sort();
-  expect(listedFlags("The command line of an executable")).toEqual(["--base-dir"]);
-  expect(listOf("START_FLAGS")).toEqual([...flagsOf("start"), "--base-dir"].sort());
+  expect(listedFlags("The command line of an executable")).toEqual(["--base-dir", "--watch"]);
+  expect(listOf("START_FLAGS")).toEqual([...flagsOf("start"), "--base-dir", "--watch"].sort());
   expect(listOf("CTL_FLAGS")).toEqual(
     flagsOf("ctl")
       .map((flag) => (flag === "--dir" ? "--base-dir" : flag))

@@ -10,11 +10,12 @@
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-command
  * @decision .agents/decisions/261118_173838-running-under-another-program.md
  * @decision .agents/decisions/261120_011627-single-executables.md#running-an-executable
+ * @decision .agents/decisions/261120_221450-watching-outside-files.md#on-command-or-as-files-change
  */
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Control, type ControlFile, controlPaths, openControl } from "./control.ts";
-import { watchAndReload } from "./dev.ts";
+import { type WatchOptions, watchAndReload } from "./dev.ts";
 import { RackError } from "./errors.ts";
 import { consoleLogger, jsonLogger, type LogEntry } from "./log.ts";
 import { isRackManifest, type RackManifest } from "./manifest.ts";
@@ -230,7 +231,7 @@ function ctlArgs(
 
 /** What {@link runRack} runs. */
 export interface RunOptions {
-  /** `start`, or `dev`, which also reloads devices whose files change. */
+  /** `start`, or `dev`, which keeps a scanned rack's plan file in step with its devices. */
   command: "start" | "dev";
   /** Loads the manifest, once the signals that stop the rack are handled. */
   manifest: () => Promise<RackManifest>;
@@ -239,8 +240,11 @@ export interface RunOptions {
   flags: ReadonlyMap<string, string>;
   /** Prints the usage and exits; called on a malformed flag. */
   usage: () => never;
-  /** For `rack dev`: the manifest file, which it watches with the base directory. */
-  manifestPath?: string;
+  /**
+   * Watches the base directory once the rack runs, and reloads it after changes: for `rack dev`,
+   * with its manifest file, and for an executable with `--watch`, with the changes that count.
+   */
+  watch?: Omit<WatchOptions, "baseDir" | "log">;
 }
 
 /**
@@ -339,11 +343,7 @@ export async function runRack(options: RunOptions): Promise<void> {
     message: "control listening",
     data: { address: control.address },
   });
-  if (command === "dev" && options.manifestPath !== undefined) {
-    unwatch = watchAndReload(running, {
-      baseDir,
-      manifestPath: options.manifestPath,
-      log: logger,
-    });
+  if (options.watch !== undefined) {
+    unwatch = watchAndReload(running, { ...options.watch, baseDir, log: logger });
   }
 }

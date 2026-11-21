@@ -1,17 +1,21 @@
 /**
  * The command line of an executable that `rack compile` made. Without a command, it starts the
- * rack it packaged, as `rack start` starts a manifest, with the same flags and `--base-dir`; with
- * `ctl`, it operates the rack that it runs for the same base directory, as `rack ctl` does.
+ * rack it packaged, as `rack start` starts a manifest, with the same flags, `--base-dir`, and
+ * `--watch`, which also applies outside files as they change; with `ctl`, it operates the rack
+ * that it runs for the same base directory, as `rack ctl` does.
  *
  * @decision .agents/decisions/261120_011627-single-executables.md#running-an-executable
+ * @decision .agents/decisions/261120_221450-watching-outside-files.md#on-command-or-as-files-change
  */
 import { basename, dirname, resolve } from "node:path";
 import { fail, parseArgs, runRack, sendOperation, setProgram } from "./commands.ts";
+import { isDeviceFileOrJson } from "./dev.ts";
 import { isRackManifest } from "./manifest.ts";
 import { type PackagedTable, setPackaged } from "./packaged.ts";
 
 const START_FLAGS = [
   "--base-dir",
+  "--watch",
   "--no-plan",
   "--no-watchdog",
   "--control-port",
@@ -41,8 +45,8 @@ export async function runExecutable(
   const usage = (): never => {
     console.error(
       [
-        `usage: ${name} [--base-dir <dir>] [--no-plan] [--no-watchdog] [--control-port <port>]`,
-        "         [--log text|json] [--stop-on-stdin-close]",
+        `usage: ${name} [--base-dir <dir>] [--watch] [--no-plan] [--no-watchdog]`,
+        "         [--control-port <port>] [--log text|json] [--stop-on-stdin-close]",
         `       ${name} ctl status | metrics | reload | stop`,
         `       ${name} ctl swap <device> [source] | restart <device> [--no-cascade]`,
         `       ${name} ctl rollback <device> [--to <firmware>] | history [device]`,
@@ -73,5 +77,8 @@ export async function runExecutable(
     baseDir,
     flags,
     usage,
+    // Outside files apply as they change, as well as on command: only device files and JSON
+    // count, so the data that devices keep in the base directory starts no reloads.
+    ...(flags.has("--watch") ? { watch: { counts: isDeviceFileOrJson } } : {}),
   });
 }
