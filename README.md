@@ -60,7 +60,7 @@ curl localhost:3000     # Hello again
 ## How it works
 
 <img src="docs/images/rack.png" width="880" alt="A rack of four devices, each in a Worker of its own: http-panel, web, notes, and sqlite, above the main thread, which runs none of them. web is in a hot swap from firmware 9c1e7a to 4b7a20 while the others keep serving. Three cards: hot swaps, faults stay put, and safe updates.">
-<!-- docs/images/rack.html da8810b0ded6 -->
+<!-- docs/images/rack.html fd4c8f14389b -->
 
 - **[Devices](docs/concepts.md#devices)** run in Workers of their own, so a crash, a leak, or a blocked event loop stays in its device.
 - **[Connectors](docs/concepts.md#connectors-and-ports)** are the contracts between devices, such as `notes/v1`, with a schema for everything that crosses. No device imports another.
