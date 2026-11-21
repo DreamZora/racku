@@ -17,5 +17,12 @@
     "skipLibCheck": true
   },
   "include": ["src", "test", "examples", "scripts"],
-  "exclude": ["**/.rack", "examples/net-tool/app"]
+  "exclude": [
+    "**/.rack",
+    "examples/net-tool/app/src",
+    "examples/net-tool/app/src-tauri",
+    "examples/net-tool/app/node_modules",
+    "examples/net-tool/app/dist",
+    "examples/net-tool/app/vite.config.ts"
+  ]
 }

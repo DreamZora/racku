@@ -118,3 +118,6 @@ dist
 # The net tool's Tauri shell: build output and generated schemas
 examples/net-tool/app/src-tauri/target/
 examples/net-tool/app/src-tauri/gen/
+
+# The net tool's sidecar, which bun run sidecar compiles
+examples/net-tool/app/src-tauri/binaries/

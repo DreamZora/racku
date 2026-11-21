@@ -4,6 +4,7 @@
  * counters, and sends and shows each socket's bytes as text or hex.
  *
  * @decision .agents/decisions/261118_173845-net-tool-example.md#the-window
+ * @decision .agents/decisions/261120_203926-net-tool-installers.md#the-devices-dialog
  */
 import { computed, markRaw, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import {
@@ -22,6 +23,7 @@ import {
   type NetEvent,
   type SocketInfo,
 } from "./connection.ts";
+import Devices from "./Devices.vue";
 
 /** The most messages the window keeps per socket. */
 const KEPT = 10_000;
@@ -54,6 +56,9 @@ const modes = [
   { label: "Hex", value: "hex" },
 ];
 
+/** Whether the window runs in the Tauri shell, whose commands the Devices dialog needs. */
+const inShell = "__TAURI_INTERNALS__" in window;
+const devicesOpen = ref(false);
 const state = ref<ConnectionState>("connecting");
 const detail = ref("");
 const problem = ref("");
@@ -206,8 +211,10 @@ onMounted(async () => {
     });
     timer = setInterval(() => void refresh(), REFRESH);
   } catch (error) {
+    // Such as a rack that couldn't start, whose reason and log the shell gives.
     state.value = "closed";
-    detail.value = error instanceof Error ? error.message : String(error);
+    detail.value = "";
+    problem.value = error instanceof Error ? error.message : String(error);
   }
 });
 
@@ -226,6 +233,7 @@ onBeforeUnmount(() => {
           {{ state }}
         </q-chip>
         <span class="text-caption">{{ detail }}</span>
+        <q-btn v-if="inShell" flat no-caps label="Devices" class="q-ml-md" @click="devicesOpen = true" />
       </q-toolbar>
     </q-header>
     <q-page-container>
@@ -307,6 +315,7 @@ onBeforeUnmount(() => {
         </div>
       </q-page>
     </q-page-container>
+    <Devices v-if="inShell" v-model="devicesOpen" />
   </q-layout>
 </template>
 

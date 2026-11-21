@@ -4,11 +4,14 @@
  * and the window are checked by hand, as the example's README lists.
  *
  * @decision .agents/decisions/261118_173845-net-tool-example.md#tests
+ * @decision .agents/decisions/261120_203926-net-tool-installers.md#tests
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
 import { type AddressInfo, createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RackError } from "rack42u";
+import { RackError, type SlotStatus } from "rack42u";
 import { type Bench, bench, stub } from "rack42u/bench";
 import {
   base64ToBytes,
@@ -27,6 +30,7 @@ import {
   type TempApp,
   tempApp,
   useControlDir,
+  WINDOWS,
   waitFor,
 } from "./fixtures/app.ts";
 
@@ -507,6 +511,175 @@ describe("the net tool's rack", () => {
     expect(await cli.exited()).toBe(1);
     expect(cli.output).toContain("RACK_INVALID_CONFIG");
   });
+});
+
+// examples/net-tool/README.md, "Installers": the shell of a built app runs the rack compiled
+// with rack compile, with its base directory, and with --watch when its setting says so.
+// @decision .agents/decisions/261120_203926-net-tool-installers.md#tests
+// @doc docs/guides/running.md#running-a-rack-from-another-program
+describe("the net tool's rack as the sidecar of a built app", () => {
+  /** The origins of a built app's window: on macOS and Linux, and on Windows. */
+  const BUILT_ORIGINS = ["tauri://localhost", "http://tauri.localhost"];
+  let compiled: TempApp;
+  let sidecar: string;
+  const bases: string[] = [];
+
+  beforeAll(async () => {
+    compiled = await tempApp(["connectors.ts", "devices", "rack.ts"], NET_TOOL);
+    const compile = new Cli(["compile", "rack.ts", "--outfile", "net-tool-rack"], compiled.dir);
+    if ((await compile.exited()) !== 0) throw new Error(compile.output);
+    sidecar = join(compiled.dir, WINDOWS ? "net-tool-rack.exe" : "net-tool-rack");
+  }, 120_000);
+
+  afterEach(async () => {
+    // This hook runs before the file's own, so it stops the sidecars before their directories go.
+    await Promise.all(processes.splice(0).map((cli) => cli.stop()));
+    await Promise.all(bases.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  afterAll(async () => {
+    await compiled?.remove();
+  });
+
+  /** Runs the sidecar as the shell of a built app runs it, in a base directory of its own. */
+  async function start(watch: boolean): Promise<{ cli: Cli; base: string; panel: string }> {
+    const base = await mkdtemp(join(tmpdir(), "rack42u-test-net-tool-"));
+    bases.push(base);
+    const command = [sidecar, "--base-dir", base, "--stop-on-stdin-close", "--log", "json"];
+    const cli = new Cli(
+      [],
+      base,
+      { NET_TOOL_TOKEN: TOKEN },
+      watch ? [...command, "--watch"] : command,
+    );
+    processes.push(cli);
+    const [, panel = ""] = await cli.waitFor(
+      /"device":"http-panel","message":"listening","data":\{"url":"([^"]+)"\}/,
+    );
+    await cli.waitFor(/"message":"control listening"/);
+    return { cli, base, panel };
+  }
+
+  /** Runs the sidecar's ctl for a base directory, and returns what it printed, parsed. */
+  async function ctl<T>(base: string, op: string): Promise<T> {
+    const cli = new Cli([], base, {}, [sidecar, "ctl", op, "--base-dir", base]);
+    const code = await cli.exited();
+    await cli.ended;
+    if (code !== 0) throw new Error(`ctl ${op} exited with ${code}: ${cli.output}`);
+    return JSON.parse(cli.stdout) as T;
+  }
+
+  async function ui(base: string): Promise<SlotStatus> {
+    const found = (await ctl<SlotStatus[]>(base, "status")).find((slot) => slot.name === "ui");
+    if (found === undefined) throw new Error("no device ui");
+    return found;
+  }
+
+  /** A window's WebSocket to the panel, from `origin`, with a function that sends a command. */
+  async function connect(panel: string, origin: string) {
+    const url = new URL("/ws", panel);
+    url.protocol = "ws:";
+    const ws = new WebSocket(url, {
+      protocols: ["net-tool", `token.${TOKEN}`],
+      headers: { origin },
+    });
+    const messages: Payload[] = [];
+    ws.addEventListener("message", (event) => messages.push(JSON.parse(String(event.data))));
+    await new Promise((resolve, reject) => {
+      ws.addEventListener("open", resolve);
+      ws.addEventListener("error", reject);
+    });
+    let commands = 0;
+    const answer = async (op: string, input?: unknown) => {
+      const id = ++commands;
+      ws.send(JSON.stringify({ id, op, input }));
+      return waitFor(() => messages.find((received) => "ok" in received && received.id === id));
+    };
+    return { ws, messages, answer };
+  }
+
+  /** Writes the example's `connectors.ts` and `devices/ui.ts` in a base directory. */
+  async function replace(base: string, files: ("connectors.ts" | "devices/ui.ts")[]) {
+    for (const file of files) {
+      await Bun.write(join(base, file), await Bun.file(join(NET_TOOL, file)).text());
+    }
+  }
+
+  test("a window with a built app's origin opens a TCP connection, and the end of input stops the rack", async () => {
+    const server = echoServer();
+    const { cli, base, panel } = await start(false);
+    const [first = "", other = ""] = BUILT_ORIGINS;
+    const { answer, messages, ws } = await connect(panel, first);
+    const second = await connect(panel, other);
+    expect([ws.protocol, second.ws.protocol]).toEqual(["net-tool", "net-tool"]);
+    second.ws.close();
+    const opened = await answer("open", {
+      kind: "tcp-client",
+      host: "127.0.0.1",
+      port: server.port,
+    });
+    const socket = (opened.value as { id: number }).id;
+    const hello = bytesToBase64(textToBytes("hello"));
+    expect(await answer("send", { id: socket, data: hello })).toMatchObject({ ok: true });
+    const echoed = await waitFor(() =>
+      messages.find((message) => message.event === "data" && message.id === socket),
+    );
+    expect(bytesToText(base64ToBytes(echoed.data as string))).toBe("hello");
+    expect((await ui(base)).packaged).toBe(true);
+    ws.close();
+
+    await cli.closeInput();
+    expect(await cli.exited()).toBe(0);
+    expect(cli.output).toContain("rack net-tool stopped");
+  }, 60_000);
+
+  test("without --watch, a replacement of ui waits for ctl reload, and fails without connectors.ts", async () => {
+    const { base, panel } = await start(false);
+    const { answer, ws } = await connect(panel, BUILT_ORIGINS[0] as string);
+
+    await replace(base, ["devices/ui.ts"]);
+    const failed = await ctl<{ device: string; error?: { code: string; message: string } }[]>(
+      base,
+      "reload",
+    );
+    expect(failed.map((result) => [result.device, result.error?.code])).toEqual([
+      ["ui", "RACK_SWAP_REJECTED"],
+    ]);
+    expect(failed[0]?.error?.message).toContain("connectors.ts");
+    expect((await ui(base)).packaged).toBe(true);
+    expect(await answer("list")).toMatchObject({ ok: true, value: [] });
+
+    await replace(base, ["connectors.ts"]);
+    await Bun.sleep(1_500);
+    expect((await ui(base)).packaged).toBe(true);
+    const results = await ctl<{ device: string; mode: string; error?: unknown }[]>(base, "reload");
+    expect(results.map((result) => [result.device, result.mode, result.error])).toEqual([
+      ["ui", "hot", undefined],
+    ]);
+    const replaced = await ui(base);
+    expect([replaced.state, replaced.packaged, replaced.source]).toEqual([
+      "online",
+      undefined,
+      join(base, "devices", "ui.ts"),
+    ]);
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    expect(await answer("list")).toMatchObject({ ok: true, value: [] });
+    ws.close();
+  }, 60_000);
+
+  test("with --watch, a replacement of ui applies without ctl reload, and the window stays connected", async () => {
+    const { base, panel } = await start(true);
+    const { answer, ws } = await connect(panel, BUILT_ORIGINS[0] as string);
+    await replace(base, ["connectors.ts", "devices/ui.ts"]);
+    const replaced = await waitFor(async () => {
+      const slot = await ui(base);
+      return slot.packaged === undefined && slot.state === "online" && slot;
+    }, 15_000);
+    expect(replaced.source).toBe(join(base, "devices", "ui.ts"));
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    expect(await answer("list")).toMatchObject({ ok: true, value: [] });
+    ws.close();
+  }, 60_000);
 });
 
 describe("the window's codec", () => {
