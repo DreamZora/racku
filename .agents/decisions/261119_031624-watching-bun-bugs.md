@@ -239,6 +239,7 @@ Throughput, measured on 2026-11-18 with the server on 6 pinned cores answering a
 ## Implementation
 
 - `AGENTS.md` names this record under "Current state", after the minimum Bun version.
+- The first bug fails builds too: `Bun.build` resolves imports through the same cache, so a relative import of a file written after its directory was cached could fail with "Could not resolve", as the installer workflow found on 2026-11-21. `retryMissedImports` in `src/firmware.ts` builds again, as [the P0 decision's implementation](261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#implementation) records. A report to Bun can add the case.
 
 ## Confirmation
 

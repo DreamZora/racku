@@ -11,7 +11,12 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rack, slot, start } from "rack42u";
 import { bench } from "rack42u/bench";
-import { buildFirmware, explainMissingPackage, importFirmware } from "../src/firmware.ts";
+import {
+  buildFirmware,
+  explainMissingPackage,
+  importFirmware,
+  retryMissedImports,
+} from "../src/firmware.ts";
 import { errorOf, FIXTURES, ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
 
 const apps: TempApp[] = [];
@@ -156,6 +161,91 @@ describe("a base directory outside the app", () => {
       "",
     );
     expect(explainMissingPackage("boom", firmware, "/elsewhere")).toBe("");
+  });
+});
+
+// Bun 1.4.4's bundler can miss a file written after its directory was cached, as import() can.
+// @decision .agents/decisions/261119_031624-watching-bun-bugs.md
+describe("retryMissedImports", () => {
+  /** A device file that imports `./late.ts`, and a build of it into `.rack/firmware/`. */
+  async function lateImport(dir: string) {
+    const entry = join(dir, "devices", "late-entry.ts");
+    await Bun.write(entry, 'import { late } from "./late.ts";\nexport default late;\n');
+    return {
+      late: join(dir, "devices", "late.ts"),
+      build: () =>
+        Bun.build({ entrypoints: [entry], outdir: join(dir, ".rack", "firmware"), target: "bun" }),
+    };
+  }
+
+  test("builds again when Bun reports a relative import missing whose file is on disk", async () => {
+    const { dir } = await app();
+    const { late, build } = await lateImport(dir);
+    let attempts = 0;
+    const output = await retryMissedImports(async () => {
+      attempts++;
+      if (attempts > 1) return build();
+      try {
+        return await build();
+      } finally {
+        // The file is on disk once Bun's first lookup has missed it, as when two threads race.
+        await Bun.write(late, "export const late = 42;\n");
+      }
+    });
+    expect(output.success).toBe(true);
+    expect(attempts).toBe(2);
+  });
+
+  // @doc docs/reference/limits.md#supervision-and-history
+  test("gives up after four attempts", async () => {
+    const { dir } = await app();
+    const { late } = await lateImport(dir);
+    await Bun.write(late, "export const late = 42;\n");
+    const missed = new AggregateError(
+      [
+        {
+          level: "error",
+          code: "ERR_MODULE_NOT_FOUND",
+          message: 'Could not resolve: "./late.ts"',
+          specifier: "./late.ts",
+          position: { file: join(dir, "devices", "late-entry.ts") },
+        },
+      ],
+      "Bundle failed",
+    );
+    let attempts = 0;
+    const error = await retryMissedImports(async () => {
+      attempts++;
+      throw missed;
+    }).catch((caught: unknown) => caught);
+    expect(error).toBe(missed);
+    expect(attempts).toBe(4);
+  });
+
+  test("fails at once for an import not on disk, a package, and a syntax error", async () => {
+    const { dir } = await app();
+    const { build } = await lateImport(dir);
+    const failures: [string, () => Promise<unknown>][] = [["a file not on disk", build]];
+    const sources: [string, string][] = [
+      ["a package", 'import "no-such-package-anywhere";\nexport default 1;\n'],
+      ["a syntax error", "export default {{{\n"],
+    ];
+    for (const [what, source] of sources) {
+      const entry = join(dir, "devices", `${what.replaceAll(" ", "-")}.ts`);
+      await Bun.write(entry, source);
+      failures.push([
+        what,
+        () => Bun.build({ entrypoints: [entry], outdir: join(dir, ".rack", "firmware") }),
+      ]);
+    }
+    for (const [what, build] of failures) {
+      let attempts = 0;
+      const error = await retryMissedImports(() => {
+        attempts++;
+        return build();
+      }).catch((caught: unknown) => caught);
+      expect([what, error instanceof AggregateError, attempts]).toEqual([what, true, 1]);
+    }
   });
 });
 

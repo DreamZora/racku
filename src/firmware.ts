@@ -7,7 +7,8 @@
  * @decision .agents/decisions/261119_213017-firmware-import-meta.md
  * @decision .agents/decisions/261120_011627-single-executables.md
  */
-import { basename, dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileKey, importMetaExpression } from "./packaged.ts";
 
@@ -230,15 +231,17 @@ export async function buildFirmware(
         ];
   let output: Bun.BuildOutput;
   try {
-    output = await Bun.build({
-      entrypoints: [source],
-      outdir,
-      target: "bun",
-      sourcemap: "inline",
-      naming: "[name]-[hash].[ext]",
-      external,
-      plugins,
-    });
+    output = await retryMissedImports(() =>
+      Bun.build({
+        entrypoints: [source],
+        outdir,
+        target: "bun",
+        sourcemap: "inline",
+        naming: "[name]-[hash].[ext]",
+        external,
+        plugins,
+      }),
+    );
   } catch (error) {
     throw new Error(`firmware build failed for ${source}: ${describeBuildError(error)}`);
   }
@@ -321,6 +324,76 @@ export async function importFirmware(
     }
     await Bun.sleep(IMPORT_PAUSE);
   }
+}
+
+/** Attempts in all at a build whose relative imports Bun reports missing while they are on disk. */
+const BUILD_ATTEMPTS = 4;
+/** Milliseconds between two of those attempts. */
+const BUILD_PAUSE = 10;
+/** What Bun adds to a relative import without an extension, the import as it is first. */
+const IMPORT_EXTENSIONS = [
+  "",
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".json",
+];
+
+/**
+ * Runs a build, and runs it again when it failed only because Bun reported relative imports
+ * missing whose files are on disk, up to {@link BUILD_ATTEMPTS} times in all.
+ *
+ * Bun 1.4.4's bundler resolves imports through the same process-wide cache of directory entries
+ * as `import()`, which {@link importFirmware} describes, with the same flaw: of two threads that
+ * miss in one directory at once, one misses for good. A file written after its directory was
+ * cached can so fail a build: in an executable on two CPUs, a `connectors.ts` written to the base
+ * directory after the rack started failed 2 of 30 `ctl reload`s with "Could not resolve", and
+ * none of 60 once a failed build was run again.
+ *
+ * @param build Runs the build once; `Bun.build` with the firmware's options.
+ * @returns What the build returned.
+ * @throws The build's error, unchanged: when it failed for another reason, or every attempt did.
+ */
+export async function retryMissedImports<T>(build: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await build();
+    } catch (error) {
+      if (attempt >= BUILD_ATTEMPTS || !missesFilesOnDisk(error)) throw error;
+    }
+    await Bun.sleep(BUILD_PAUSE);
+  }
+}
+
+/**
+ * Whether every error of a failed build is Bun's report of a relative import missing, whose file
+ * is on disk.
+ */
+function missesFilesOnDisk(error: unknown): boolean {
+  const all = error instanceof AggregateError ? error.errors : [];
+  const errors = all.filter((item) => (item as { level?: unknown } | null)?.level !== "warning");
+  return (
+    errors.length > 0 &&
+    errors.every((item) => {
+      const { code, specifier, position } = (item ?? {}) as {
+        code?: unknown;
+        specifier?: unknown;
+        position?: { file?: string } | null;
+      };
+      const importer = position?.file;
+      if (code !== "ERR_MODULE_NOT_FOUND" || typeof specifier !== "string" || !importer) {
+        return false;
+      }
+      if (!/^\.\.?[\\/]/.test(specifier)) return false;
+      const target = resolve(dirname(importer), specifier);
+      return IMPORT_EXTENSIONS.some((extension) => existsSync(target + extension));
+    })
+  );
 }
 
 /** Whether `error` is Bun's report that the module at `url`, whose path is `path`, is missing. */

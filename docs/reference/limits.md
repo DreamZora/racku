@@ -76,6 +76,7 @@ See [The HTTP panel](../guides/http.md).
 | `historyLimit`, a `start()` option: update records | 256 | The oldest records go. |
 | Firmware bundles under `.rack/firmware/` | those that an instance, a known-good firmware, or a kept record needs | The rack deletes the others. |
 | Imports of a firmware bundle that Bun reports missing while it is on disk | 4 attempts, 10 ms apart | The error of the last one. |
+| Builds of firmware whose relative imports Bun reports missing while their files are on disk | 4 attempts, 10 ms apart | The error of the last one. |
 
 See [Faults and overload](../guides/faults.md) and [Updates](../guides/updates.md#history).
 
