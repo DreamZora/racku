@@ -105,11 +105,12 @@ Then `bun src/cli.ts dev hello/rack.ts`, and `curl localhost:3000` answers `Hell
 
 ## Implementation
 
-- `README.md` in the shape above, 162 lines, with the image at the top and its hash in the comment `<!-- docs/images/rack.html <hash> -->` beside it.
+- `README.md` in the shape above, 162 lines, with the image and its hash in the comment `<!-- docs/images/rack.html <hash> -->` beside it.
 - `docs/images/rack.html`, and `docs/images/rack.png`, 1760 × 904 pixels and about 205 KiB, which `scripts/render-images.ts` rendered with Google Chrome on 2026-11-21. `bun run render:images` runs it.
 - `test/readme.test.ts`: the hot-reload example from the README's code blocks under `rack dev`, with the edit that the README describes, and the image's tag, size, and hash. An edit of `rack.html` without a new rendering failed it, as it should.
 - `docs/design.md`: single executables are no longer among what isn't built, and the workaround of Bun's missed files covers builds too.
 - `AGENTS.md`: `docs/images/`, `scripts/render-images.ts`, and the command `bun run render:images`.
+- [The README's image under "How it works", not at its top](261121_051335-readme-image-under-how-it-works.md) moves the image, at the user's word, from the top of the README.
 
 ## Confirmation
 

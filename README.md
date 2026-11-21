@@ -1,6 +1,3 @@
-<img src="docs/images/rack.png" width="880" alt="A rack of four devices, each in a Worker of its own: http-panel, web, notes, and sqlite, above the main thread, which runs none of them. web is in a hot swap from firmware 9c1e7a to 4b7a20 while the others keep serving. Three cards: hot swaps, faults stay put, and safe updates.">
-<!-- docs/images/rack.html da8810b0ded6 -->
-
 # rack42u
 
 **Replace any part of a running Bun program while the rest keep serving.** You build the program from **devices**, one file each, and mount them in a **rack**, one process, where any device can be swapped, reloaded, restarted, plugged in, or unplugged on its own.
@@ -61,6 +58,9 @@ curl localhost:3000     # Hello again
 - **In an app of your own**, the command is `rack dev`, as [Getting started](docs/getting-started.md#change-a-device-while-it-runs) shows.
 
 ## How it works
+
+<img src="docs/images/rack.png" width="880" alt="A rack of four devices, each in a Worker of its own: http-panel, web, notes, and sqlite, above the main thread, which runs none of them. web is in a hot swap from firmware 9c1e7a to 4b7a20 while the others keep serving. Three cards: hot swaps, faults stay put, and safe updates.">
+<!-- docs/images/rack.html da8810b0ded6 -->
 
 - **[Devices](docs/concepts.md#devices)** run in Workers of their own, so a crash, a leak, or a blocked event loop stays in its device.
 - **[Connectors](docs/concepts.md#connectors-and-ports)** are the contracts between devices, such as `notes/v1`, with a schema for everything that crosses. No device imports another.

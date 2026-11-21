@@ -68,7 +68,8 @@ describe("the README's hot-reload example", () => {
   }, 30_000);
 });
 
-// @doc README.md#rack42u
+// @doc README.md#how-it-works
+// @decision .agents/decisions/261121_051335-readme-image-under-how-it-works.md
 describe("the README's image", () => {
   test("is the rendering of docs/images/rack.html, at the size that render:images gives it", async () => {
     const tag = /<img src="docs\/images\/rack\.png"[^>]* alt="([^"]+)">/.exec(README);
