@@ -96,7 +96,7 @@ See [A rack in one executable](../guides/running.md#a-rack-in-one-executable).
 
 | Bound | Value | Beyond it |
 |---|---|---|
-| Watches | One recursive watch of the base directory | A watch that can't start, such as at the system's limit of watches, logs `cannot watch <dir>`, and the rack runs on: changes apply at `ctl reload`. |
+| Watches | Two: a recursive watch of the base directory, and one of its parent, which notices the base directory's own removal on every system | A watch of the base directory that can't start, such as at the system's limit of watches, logs `cannot watch <dir>`, and the rack runs on: changes apply at `ctl reload`. A parent that can't be watched logs a warning, and the base directory's watch goes on. |
 | The wait before a reload | 100 ms after the last change, and at most 1 s after the first | |
 | Reloads | One at a time, and one more waiting, which applies the changes made during the one that runs | |
 | Builds per reload | One per device file, as at `ctl reload` | |

@@ -6,12 +6,12 @@
  * @decision .agents/decisions/261120_221450-watching-outside-files.md#tests
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import type { LogEntry } from "rack42u";
 import { DEBOUNCE_MS, isDeviceFileOrJson, MAX_WAIT_MS, watchAndReload } from "../src/dev.ts";
-import { waitFor } from "./fixtures/app.ts";
+import { WINDOWS, waitFor } from "./fixtures/app.ts";
 
 /** A rack that records when each reload starts, and holds them while `hold` is set. */
 class StubRack {
@@ -110,6 +110,52 @@ describe("watchAndReload", () => {
     await Bun.write(join(dir, "data", "settings.json"), "{}");
     await waitFor(() => rack.starts.length === 1);
   }, 10_000);
+
+  // Bun 1.4.4 on macOS reports a watched directory's own removal only to its parent's watch.
+  // @decision .agents/decisions/261121_034144-watching-the-parent-directory.md
+  test.each(["removed", "renamed away"])(
+    "stops watching when its base directory is %s",
+    async (what) => {
+      const rack = new StubRack();
+      const { dir, logs } = await watched(rack);
+      if (what === "removed") await rm(dir, { recursive: true });
+      else await rename(dir, `${dir}-moved`);
+      dirs.push(`${dir}-moved`);
+      const stopped = await waitFor(() =>
+        logs.find((entry) => entry.message.startsWith("stopped watching")),
+      );
+      expect([stopped.level, stopped.message]).toEqual([
+        "error",
+        `stopped watching ${dir}${sep}: it was removed`,
+      ]);
+    },
+    10_000,
+  );
+
+  // @decision .agents/decisions/261121_034144-watching-the-parent-directory.md
+  test.skipIf(WINDOWS)(
+    "warns when the base directory's parent can't be read, and watches the base directory anyway",
+    async () => {
+      const parent = await mkdtemp(join(tmpdir(), "rack42u-test-watch-parent-"));
+      dirs.push(parent);
+      const dir = join(parent, "base");
+      await mkdir(dir);
+      // The parent can be passed through to the base directory, but not read.
+      await chmod(parent, 0o311);
+      const rack = new StubRack();
+      const logs: LogEntry[] = [];
+      try {
+        stops.push(watchAndReload(rack, { baseDir: dir, log: (entry) => logs.push(entry) }));
+        expect(logs.map((entry) => entry.level)).toEqual(["warn", "info"]);
+        expect(logs[0]?.message).toStartWith(`cannot watch ${parent}${sep} for the removal of`);
+        await Bun.write(join(dir, "device.ts"), "export {};\n");
+        await waitFor(() => rack.starts.length === 1);
+      } finally {
+        await chmod(parent, 0o755);
+      }
+    },
+    10_000,
+  );
 
   test("logs a watch that can't start, and stops nothing", async () => {
     const rack = new StubRack();

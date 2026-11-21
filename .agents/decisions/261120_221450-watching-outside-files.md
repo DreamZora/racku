@@ -116,6 +116,7 @@ None.
   - `test/executable.test.ts`: the executable with `--watch`, and without it.
   - `test/cli.test.ts`: a removed base directory of `rack dev`.
   - `test/reference.test.ts`: the executable's two flags of its own in the reference.
+- [A watching rack also watches its base directory's parent](261121_034144-watching-the-parent-directory.md) replaces the bound of one watch, and how a removed base directory is noticed: the first run of `check.yml` on macOS found no event for it.
 - Documentation: `--watch` in [The command line of an executable](../../docs/reference/cli.md#the-command-line-of-an-executable); "On command, or as files change" in [A rack in one executable](../../docs/guides/running.md#a-rack-in-one-executable); the wait and the failures in [Hot reload with rack dev](../../docs/guides/running.md#hot-reload-with-rack-dev); and [Watching](../../docs/reference/limits.md#watching) in the limits.
 
 ## Confirmation

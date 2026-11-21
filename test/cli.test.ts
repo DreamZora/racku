@@ -541,9 +541,11 @@ export default rack("cli", {
     await cli.waitFor(/reload: no firmware changed/);
   });
 
-  // Bun 1.4.4 reports the removal of a watched directory without a file name, which ended
-  // rack dev at once with code 1 when its watcher took every name for a string.
+  // Bun 1.4.4 reports the removal of a watched directory without a file name on Linux, which
+  // ended rack dev at once with code 1 when its watcher took every name for a string; on macOS,
+  // only the parent's watch reports it.
   // @decision .agents/decisions/261120_221450-watching-outside-files.md#failure-modes
+  // @decision .agents/decisions/261121_034144-watching-the-parent-directory.md
   test("stops watching when its base directory is removed, and still stops in order", async () => {
     const created = await app();
     // Run from elsewhere, since a system may refuse to remove a process's working directory.
@@ -555,7 +557,8 @@ export default rack("cli", {
     await cli.closeInput();
     expect(await cli.exited()).toBe(0);
     expect(cli.output).toContain("rack cli stopped");
-  });
+    // Longer than the wait for the log, so that a failure prints the rack's output.
+  }, 30_000);
 
   test("reports a device that fails to build and keeps serving", async () => {
     const created = await app();

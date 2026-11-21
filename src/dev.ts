@@ -10,9 +10,10 @@
  * @decision .agents/decisions/261115_222025-p0-api-details.md#command-line
  * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
  * @decision .agents/decisions/261120_221450-watching-outside-files.md
+ * @decision .agents/decisions/261121_034144-watching-the-parent-directory.md
  */
 import { type FSWatcher, statSync, watch } from "node:fs";
-import { extname, resolve, sep } from "node:path";
+import { basename, dirname, extname, resolve, sep } from "node:path";
 import { buildFirmware } from "./firmware.ts";
 import type { LogEntry } from "./log.ts";
 import { isRackManifest, type RackManifest } from "./manifest.ts";
@@ -81,10 +82,13 @@ export interface WatchOptions {
  * last change, and at most {@link MAX_WAIT_MS} after the first. One reload runs at a time, and
  * changes during one start one more after it.
  *
+ * It also watches the parent of `baseDir`, without recursion, for the base directory's own
+ * removal, which Bun 1.4.4 on macOS reports only there.
+ *
  * Watching never throws, and never ends the rack. A watch that can't start logs
  * `cannot watch <dir>`; a base directory that is removed, or a watch that fails, stops watching
- * and logs `stopped watching <dir>`; a reload that fails logs `reload failed`, and watching goes
- * on.
+ * and logs `stopped watching <dir>`; a parent that can't be watched logs a warning, and watching
+ * goes on; a reload that fails logs `reload failed`, and watching goes on.
  *
  * @param running The rack to reload.
  * @param options Directory, manifest path, which changes count, and logger.
@@ -112,15 +116,22 @@ export function watchAndReload(
   let closed = false;
   let manifestChanged = false;
   let watcher: FSWatcher | undefined;
+  /** The parent's watch, for the base directory's own removal. */
+  let parentWatcher: FSWatcher | undefined;
+
+  const closeWatch = (closing: FSWatcher | undefined) => {
+    try {
+      closing?.close();
+    } catch {
+      // A watch that already failed has nothing left to close.
+    }
+  };
 
   const close = () => {
     closed = true;
     clearTimeout(timer);
-    try {
-      watcher?.close();
-    } catch {
-      // A watch that already failed has nothing left to close.
-    }
+    closeWatch(watcher);
+    closeWatch(parentWatcher);
   };
 
   // @decision .agents/decisions/261120_221450-watching-outside-files.md#failure-modes
@@ -203,9 +214,60 @@ export function watchAndReload(
   watcher.on("error", (error: unknown) => {
     stopWatching(goneReason(baseDir) ?? (error instanceof Error ? error.message : String(error)));
   });
+  parentWatcher = watchParent(
+    baseDir,
+    () => {
+      if (closed) return;
+      const gone = goneReason(baseDir);
+      if (gone !== undefined) stopWatching(gone);
+    },
+    (reason) =>
+      log("warn", `cannot watch ${dirname(baseDir)}${sep} for the removal of ${where}: ${reason}`),
+  );
   log("info", `watching ${where} for changes`);
 
   return close;
+}
+
+/**
+ * Watches the parent of `dir`, without recursion, and calls `changed` at each event that names
+ * `dir`, or names nothing. Bun 1.4.4 on macOS drops the events of a watch about the watched
+ * directory itself, such as its removal, which so reaches only the parent's watch.
+ *
+ * @param failed Called with the reason when the parent can't be watched.
+ * @returns The parent's watch; `undefined` for a directory without a parent, or when the parent
+ *   can't be watched. A watch that fails later closes itself.
+ * @decision .agents/decisions/261121_034144-watching-the-parent-directory.md
+ */
+function watchParent(
+  dir: string,
+  changed: () => void,
+  failed: (reason: string) => void,
+): FSWatcher | undefined {
+  const parent = dirname(dir);
+  if (parent === dir) return undefined;
+  // Without regard to case, as macOS and Windows usually name files: a sibling that differs only
+  // in case costs one more check of `dir`, which `changed` makes.
+  const name = basename(dir).toLowerCase();
+  let parentWatcher: FSWatcher;
+  try {
+    parentWatcher = watch(parent, { recursive: false }, (_event, filename) => {
+      if (filename === null || filename === undefined) changed();
+      else if (filename.toString().toLowerCase() === name) changed();
+    });
+  } catch (error) {
+    failed(error instanceof Error ? error.message : String(error));
+    return undefined;
+  }
+  parentWatcher.on("error", () => {
+    // The base directory's own watch goes on, and reports what it can.
+    try {
+      parentWatcher.close();
+    } catch {
+      // A watch that failed has nothing left to close.
+    }
+  });
+  return parentWatcher;
 }
 
 /**
