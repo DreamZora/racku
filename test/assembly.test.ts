@@ -7,6 +7,8 @@
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#plan-file
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import { rack, slot } from "rack42u";
 import { memkv } from "rack42u/std";
 import { planRack } from "../src/rack.ts";
@@ -18,6 +20,7 @@ import {
   tempApp,
   useControlDir,
   useRacks,
+  waitFor,
 } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -455,6 +458,45 @@ describe("the rack command with scanned racks", () => {
     expect(await dev.exited()).toBe(0);
     // Four rack processes, one after the other: on a Windows runner, more than Bun's default
     // of 5 s.
+  }, 30_000);
+
+  // @doc docs/guides/racks.md#the-plan-file
+  test("rack dev writes the plan file when the plan changes, and leaves it as it is otherwise", async () => {
+    const app = await exampleApp();
+    const dev = new Cli(["dev"], app.dir);
+    running.push(dev);
+    await dev.waitFor(/watching /);
+    const file = join(app.dir, "demo.plan");
+    const plan = async () => [await app.read("demo.plan"), (await stat(file)).mtimeMs] as const;
+    // Reloads run one at a time, and a reload writes the plan file, if at all, before it ends. So
+    // once an edit of e has swapped e, every reload before it has ended.
+    let edits = 0;
+    const editE = async () => {
+      edits += 1;
+      await app.write("devices/e.ts", counter("e", "E").replace("let n = 0;", `let n = ${edits};`));
+      const swaps = () => dev.output.match(/\[rack\] info e swapped/g)?.length ?? 0;
+      await waitFor(() => swaps() >= edits, 15_000);
+    };
+
+    // The watcher counts every write as a change, so a write of the same plan would set off
+    // another reload, and that one another write, without end.
+    const started = await plan();
+    await app.write("devices/d.ts", counter("d", "D").replace("let n = 0;", "let n = 100;"));
+    await dev.waitFor(/\[rack\] info a-d swapped/);
+    await editE();
+    expect(await plan()).toEqual(started);
+
+    // b needs D too: the plan gains a shared d, and the file the new plan.
+    await app.write("devices/b.ts", consumer("b", { e: "E", d: "D" }));
+    await dev.waitFor(/\[rack\] info b swapped/);
+    await editE();
+    const changed = await plan();
+    expect(changed[0]).toMatch(/^U\d+ d d -$/m);
+    expect(changed[0]).toMatch(/^U\d+ b b - .*\bd=d\.d\b/m);
+    // The watcher saw that write too, and the reload it set off found the same plan.
+    await editE();
+    expect(await plan()).toEqual(changed);
+    expect(dev.process.exitCode).toBeNull();
   }, 30_000);
 });
 

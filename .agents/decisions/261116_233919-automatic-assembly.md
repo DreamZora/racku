@@ -243,6 +243,7 @@ If D needed A through a need named `back`, assembly would fail with `cycle: a.d 
   - `start()` takes `plan: true | "update" | false`.
   - `"update"` is how `rack dev` rewrites the plan file, and `README.md` documents it as well.
 - **Changed plans while running.** `reload()` of a scanned rack moves to a changed plan as [Hot swaps, cold swaps, and restarts](261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan) describes. Under `rack start`, it does so only once the plan file records the new plan.
+  - Under `rack dev`, `#writePlanFile` writes the plan file only when its text changes, since the watcher counts every write as a change. Until 2026-11-21, every reload wrote it, so the first change of a file in a scanned rack under `rack dev` set off reloads without end. A test in `test/assembly.test.ts` checks that a reload with the same plan leaves the file as it is.
 - **Tests:**
   - `test/plan.test.ts` covers the planner and the plan file.
   - `test/assembly.test.ts` covers scanned racks through Workers and through the `rack` command.

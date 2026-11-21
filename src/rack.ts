@@ -1450,6 +1450,20 @@ class Rack implements InstanceHost {
     return join(this.#baseDir, `${this.#manifest.name}.plan`);
   }
 
+  /**
+   * Writes the plan file, unless it already holds the text: the watcher of `rack dev` counts every
+   * write as a change, so a reload that wrote the same plan again would set off another reload,
+   * without end.
+   */
+  async #writePlanFile(text: string): Promise<void> {
+    const path = this.#planPath();
+    // A file that is missing, or that can't be read, is written anew.
+    const current = await Bun.file(path)
+      .text()
+      .catch(() => undefined);
+    if (current !== text) await Bun.write(path, text);
+  }
+
   /** Rejects management operations that would change a scanned rack outside its plan. */
   #requireHandPlaced(): void {
     if (this.#manifest.scan !== undefined) {
@@ -2049,7 +2063,7 @@ class Rack implements InstanceHost {
       if (complete) {
         this.#plan = plan;
         if (this.#planMode === "update") {
-          await Bun.write(this.#planPath(), formatPlan(this.#manifest.name, plan));
+          await this.#writePlanFile(formatPlan(this.#manifest.name, plan));
         }
       } else {
         this.#plan = this.#runningPlan(plan);

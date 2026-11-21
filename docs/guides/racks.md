@@ -89,6 +89,6 @@ The rack keeps the plan in `<rack name>.plan` next to the manifest, one line per
 
 - The first start writes it. After that, `rack start` follows the file as written while it fits the devices. When it no longer fits, `rack start` refuses to start and lists the differences.
 - A changed priority alone doesn't change the order `rack start` follows.
-- `rack dev` rewrites the file whenever the devices or the priorities give another plan, and applies a new order to the running rack by moving slot numbers.
+- `rack dev` rewrites the file whenever the devices or the priorities give another plan, and leaves it as it is otherwise. It applies a new order to the running rack by moving slot numbers.
 - `rack plan` prints the plan without starting the rack. `rack plan --write` writes the file, and `rack plan --check` exits with code 1 while the file is missing or no longer fits, for CI.
 - `rack start --no-plan`, `rack dev --no-plan`, and `start(manifest, { plan: false })` run without a plan file; the graph and the priorities alone decide the order.
