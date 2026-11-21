@@ -113,7 +113,9 @@ describe("links", () => {
   test("a held slot gets no call until the switch, and the queued calls then arrive in order", async () => {
     const { running } = await startRack(PUMP_RACK);
     // A slow call keeps the old instance draining, so the hold lasts until it ends.
-    const slow = running.call("counter.counter", "slowInc", 300);
+    const slowMs = 300;
+    const slowSentAt = performance.now();
+    const slow = running.call("counter.counter", "slowInc", slowMs);
     await Bun.sleep(20);
     const pumped = running.call("pump.pump", "incs", { n: 100, gapMs: 5 }) as Promise<{
       values: number[];
@@ -126,6 +128,7 @@ describe("links", () => {
       const inc = pump?.needs.counter?.inc;
       return inc?.kind === "rpc" && inc.queued > 0 && inc.queued;
     });
+    const queuedAt = performance.now();
     expect(queued).toBeGreaterThan(0);
     await swapped;
     const { values, maxMs } = await pumped;
@@ -136,7 +139,11 @@ describe("links", () => {
       expect(values[i] as number).toBeGreaterThan(values[i - 1] as number);
     }
     expect(await running.call("counter.counter", "get", undefined)).toMatchObject({ n: 101 });
-    expect(maxMs).toBeGreaterThan(100);
+    // A call that the metrics found queued was sent before queuedAt, and is answered only after
+    // the slow call ends, slowMs after it was sent at the earliest. The bound is measured, since
+    // when the hold begins depends on how long the new instance takes to start; 5 ms allow for
+    // the granularity of timers.
+    expect(maxMs).toBeGreaterThan(slowSentAt + slowMs - queuedAt - 5);
   });
 
   // @decision .agents/decisions/261116_024226-backplane-links.md#faults-and-resets
