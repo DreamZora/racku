@@ -32,6 +32,7 @@
     "format": "biome check --write .",
     "check:decisions": "bun scripts/check-decisions.ts",
     "check:docs": "bun scripts/check-docs.ts",
+    "render:images": "bun scripts/render-images.ts",
     "check": "bun run typecheck && bun run lint && bun run check:decisions && bun run check:docs && bun test"
   },
   "dependencies": {

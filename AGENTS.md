@@ -199,6 +199,7 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 | Apply formatting and safe lint fixes | `bun run format` |
 | Check decision records and `@decision` references | `bun run check:decisions` |
 | Check the documentation, its links, and the `@doc` references of tests | `bun run check:docs` |
+| Render the README's image from `docs/images/rack.html`, and write its hash into the README | `bun run render:images` |
 | Run the type check, lint, decision gate, documentation gate, and tests in order | `bun run check` |
 | Run the example app | `bun src/cli.ts start examples/shop-api/rack.ts` |
 | Run the example app with hot reload | `bun src/cli.ts dev examples/shop-api/rack.ts` |
@@ -226,7 +227,8 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 
 ```text
 AGENTS.md            this file; CLAUDE.md is a symlink to it
-README.md            the front page of the documentation; test/example.test.ts runs its example
+README.md            the front page of the documentation; test/example.test.ts runs its quick start,
+                     and test/readme.test.ts its hot-reload example and the image's rendering
 docs/                user documentation; README.md is its map
   getting-started.md an app of one's own; test/getting-started.test.ts installs and runs it
   concepts.md        how a rack works
@@ -234,6 +236,8 @@ docs/                user documentation; README.md is its map
   guides/            how to do one thing; test/guides.test.ts runs the app they build
   reference/         the API, the rack command, error codes, reports, and limits;
                      test/reference.test.ts holds them to the code
+  images/            rack.html, the source of the README's image, and rack.png, which
+                     bun run render:images renders with Chrome or Chromium
 LICENSE              MIT
 package.json         manifest, exports, bin, and scripts
 tsconfig.json        TypeScript configuration
@@ -274,7 +278,8 @@ skills/rack42u/      the skill for agents that build apps on rack42u, which apps
                      node_modules; it names documents by their path in an app, such as
                      node_modules/rack42u/docs/concepts.md, which bun run check:docs checks
 scripts/             project scripts: check-decisions.ts, the decision gate; check-docs.ts, the
-                     documentation gate; and markdown.ts, the headings and anchors both read
+                     documentation gate; markdown.ts, the headings and anchors both read; and
+                     render-images.ts, which renders the README's image
 .github/workflows/   check.yml, the CI jobs on Linux, macOS, and Windows; net-tool.yml, which
                      builds net-tool's installers on the three and smoke-tests them
 .github/ISSUE_TEMPLATE/  the issue forms: trial, bug, documentation, and feature
