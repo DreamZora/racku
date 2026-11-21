@@ -236,6 +236,11 @@ The user left this to the Agent on 2026-11-20: "Decide for yourself when it is a
 - The root's type check and lint cover `app/scripts/`, and still skip the rest of `app/`.
 - `test/net-tool.test.ts` covers the compiled rack, with both origins of a built app.
 - Checked on Linux x64 on 2026-11-21: `bun run bundle` built only the `.deb`, 53.41 MiB; the smoke test passed with `--app` under `xvfb-run`; a debug build ran the rack from source, and its window connected; and the Devices dialog worked in Chromium, with the shell's commands stubbed.
+- The workflow's runs on 2026-11-21:
+  - 44885337803, the first, from the push of the workflow: Linux and Windows passed. On macOS, the smoke test asked `ctl status` at the panel's `listening`, 358 ms before `control listening`; it now waits for both.
+  - 44886078755: macOS and Windows passed. On Linux, `ctl reload` failed to build the replacement with "Could not resolve: ../connectors.ts", Bun's cache of directory entries, which `retryMissedImports` now works around.
+  - 44887767874, on 29f8d76: all three passed, in 6, 6, and 11 minutes on Linux, macOS, and Windows. Their artifacts: the `.deb`, 53 MiB, the `.dmg`, 41 MiB, and the NSIS setup, 41 MiB.
+- The window's look follows the redesign that the user asked for on 2026-11-21: a sidebar with the form and the sockets, a session panel with its log and composer, control bytes by their ASCII names, and a dark mode that follows the system, with no new package.
 
 ## Confirmation
 
