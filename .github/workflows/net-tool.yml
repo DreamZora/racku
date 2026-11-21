@@ -1,0 +1,84 @@
+# The installers of examples/net-tool, built and smoke-tested on Linux, macOS, and Windows, as
+# .agents/decisions/261120_203926-net-tool-installers.md decides. Its "When the workflow runs"
+# says when a run starts by hand.
+name: net-tool
+
+on:
+  # A change to this file is checked only by running it, and GitHub starts a workflow by hand
+  # only once it is on the default branch or has run once.
+  push:
+    branches-ignore: [main]
+    paths: [.github/workflows/net-tool.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The minimum Bun version, as check.yml names it. test/bun-version.test.ts checks that every place
+# that names it names the same version.
+env:
+  BUN_MINIMUM: "1.4.4"
+  RUST: "1.99.0"
+
+# A new run builds everything an unfinished run of the same branch would.
+concurrency:
+  group: net-tool-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installer:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            system: linux
+            runner: ubuntu-latest
+            installer: examples/net-tool/app/src-tauri/target/release/bundle/deb/*.deb
+          - name: macOS
+            system: macos
+            runner: macos-latest
+            installer: examples/net-tool/app/src-tauri/target/release/bundle/dmg/*.dmg
+          - name: Windows
+            system: windows
+            runner: windows-latest
+            installer: examples/net-tool/app/src-tauri/target/release/bundle/nsis/*-setup.exe
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_MINIMUM }}
+      - name: Rust
+        shell: bash
+        run: rustup toolchain install "$RUST" --profile minimal && rustup default "$RUST"
+      - name: Tauri's system packages, and Xvfb
+        if: matrix.system == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: examples/net-tool/app
+      - run: bun run bundle
+        working-directory: examples/net-tool/app
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: net-tool-${{ matrix.system }}
+          path: ${{ matrix.installer }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Smoke test
+        working-directory: examples/net-tool/app
+        shell: bash
+        run: ${{ matrix.system == 'linux' && 'xvfb-run -a ' || '' }}bun scripts/smoke.ts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: net-tool-${{ matrix.system }}-logs
+          path: examples/net-tool/app/src-tauri/target/smoke/
+          if-no-files-found: ignore
+          retention-days: 7

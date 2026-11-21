@@ -25,6 +25,11 @@ test("the minimum Bun version is the same in every place that names it", async (
 
   const workflow = await read(".github/workflows/check.yml");
   expect(/^ {2}BUN_MINIMUM: "(.+)"$/m.exec(workflow)?.[1]).toBe(minimum);
+  // The installers of examples/net-tool build on the minimum too.
+  // @decision .agents/decisions/261120_203926-net-tool-installers.md#the-installer-workflow
+  const installers = await read(".github/workflows/net-tool.yml");
+  expect(/^ {2}BUN_MINIMUM: "(.+)"$/m.exec(installers)?.[1]).toBe(minimum);
+  expect(installers).toContain(`bun-version: ${MINIMUM}`);
 
   const readme = await read("README.md");
   expect(readme).toContain(`[Bun](https://bun.sh) ${minimum} or later.`);
