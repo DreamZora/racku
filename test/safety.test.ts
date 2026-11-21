@@ -192,7 +192,13 @@ describe("passive fallback", () => {
     await waitFor(
       () => counterStatus(running)?.firmware === v1 && counterStatus(running)?.state === "degraded",
     );
-    expect(running.history("counter")[0]).toMatchObject({ cause: "fallback", from: v2, to: v1 });
+    // The slot reports the fallback once the known-good instance is installed, and the history
+    // records it once the fallback has finished.
+    const newest = await waitFor(() => {
+      const [record] = running.history("counter");
+      return record?.cause === "fallback" && record;
+    });
+    expect(newest).toMatchObject({ cause: "fallback", from: v2, to: v1 });
   });
 
   test("a fallback reports the slot degraded, with the crash, from the moment the known-good instance is installed", async () => {
