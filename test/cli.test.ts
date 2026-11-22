@@ -20,8 +20,8 @@ import {
   WINDOWS,
 } from "./fixtures/app.ts";
 
-const MANIFEST = `import { rack, slot } from "rack42u";
-import { httpPanel } from "rack42u/std";
+const MANIFEST = `import { rack, slot } from "racku";
+import { httpPanel } from "racku/std";
 
 export default rack("cli", {
   slots: {
@@ -130,7 +130,7 @@ describe("rack start", () => {
 
   // @doc docs/reference/cli.md#exit-codes
   test("a second signal during shutdown exits at once with code 1", async () => {
-    const created = await app(`import { rack, slot } from "rack42u";
+    const created = await app(`import { rack, slot } from "racku";
 export default rack("slow", {
   slots: { 1: slot("./devices/lifecycle.ts", { config: { slowDeactivateMs: 5000 } }) },
 });
@@ -147,7 +147,7 @@ export default rack("slow", {
 
   // @doc docs/reference/cli.md#exit-codes
   test("exits with code 1 when the rack fails to start", async () => {
-    const created = await app(`import { rack, slot } from "rack42u";
+    const created = await app(`import { rack, slot } from "racku";
 export default rack("broken", { slots: { 1: slot("./devices/missing.ts") } });
 `);
     const cli = run(["start"], created.dir);
@@ -207,7 +207,7 @@ describe("configuration from the program", () => {
 });
 
 /** A device that logs a `bigint`, a warning, and circular details. */
-const NOISY = `import { device } from "rack42u";
+const NOISY = `import { device } from "racku";
 
 export default device({
   model: "noisy",
@@ -340,7 +340,7 @@ describe("running under another program", () => {
   // @doc docs/reference/cli.md#flags-of-rack-start-and-rack-dev
   // @doc docs/reference/cli.md#exit-codes
   test("a stop during a shutdown that rack ctl stop began ends it at once with code 1", async () => {
-    const created = await app(`import { rack, slot } from "rack42u";
+    const created = await app(`import { rack, slot } from "racku";
 export default rack("slow", {
   slots: { 1: slot("./devices/lifecycle.ts", { config: { slowDeactivateMs: 5000 } }) },
 });
@@ -361,7 +361,7 @@ export default rack("slow", {
 });
 
 describe("the rack bin", () => {
-  // In an app that depends on rack42u, the package's `rack` command runs the CLI.
+  // In an app that depends on racku, the package's `rack` command runs the CLI.
   // @decision .agents/decisions/261118_015204-windows.md#changes-to-the-repository-and-the-tests
   // @doc README.md#quick-start
   test("runs the CLI through what bun link writes to node_modules/.bin", async () => {
@@ -372,12 +372,12 @@ describe("the rack bin", () => {
     const env = { ...process.env, BUN_INSTALL: bunInstall };
     // The links that bun link makes into this repository.
     const links = [
-      join(bunInstall, "install", "global", "node_modules", "rack42u"),
-      join(created.dir, "node_modules", "rack42u"),
+      join(bunInstall, "install", "global", "node_modules", "racku"),
+      join(created.dir, "node_modules", "racku"),
     ];
     try {
       expect(Bun.spawnSync([process.execPath, "link"], { cwd: ROOT, env }).exitCode).toBe(0);
-      const linked = Bun.spawnSync([process.execPath, "link", "rack42u"], {
+      const linked = Bun.spawnSync([process.execPath, "link", "racku"], {
         cwd: created.dir,
         env,
       });
@@ -448,8 +448,8 @@ describe("rack dev", () => {
   // its own file, as it had when the rack started.
   test("applies an edited manifest that reads a file next to it", async () => {
     const manifest = (comment: string) => `import { readFileSync } from "node:fs";
-import { rack, slot } from "rack42u";
-import { httpPanel } from "rack42u/std";
+import { rack, slot } from "racku";
+import { httpPanel } from "racku/std";
 ${comment}
 const routes = JSON.parse(readFileSync(new URL("./routes.json", import.meta.url), "utf8"));
 const { url, dir, dirname, path, filename } = {
@@ -504,8 +504,8 @@ export default rack("cli", {
   // @doc docs/guides/running.md#a-layout-that-follows-data
   test("doesn't read the manifest again when only a file that it reads changes", async () => {
     const created = await app(`import { readFileSync } from "node:fs";
-import { rack, slot } from "rack42u";
-import { httpPanel } from "rack42u/std";
+import { rack, slot } from "racku";
+import { httpPanel } from "racku/std";
 
 const routes = JSON.parse(readFileSync(new URL("./routes.json", import.meta.url), "utf8"));
 

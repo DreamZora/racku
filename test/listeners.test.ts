@@ -32,7 +32,7 @@ import {
   slot,
   start,
   wholeResponse,
-} from "rack42u";
+} from "racku";
 import { errorOf, FIXTURES, useRacks, waitFor } from "./fixtures/app.ts";
 import { rawHead } from "./fixtures/net.ts";
 import { blockingPipe } from "./fixtures/pipe.ts";
@@ -45,12 +45,12 @@ const ONE = { cert: "certs/one.crt", key: "certs/one.key" };
 const TWO = { cert: "certs/two.crt", key: "certs/two.key" };
 
 afterEach(() => {
-  delete process.env.RACK42U_TEST_LISTENER;
+  delete process.env.RACKU_TEST_LISTENER;
 });
 
 /** Steers the next instance of the listener device, which copies the environment as it starts. */
 function steer(value: Record<string, unknown>): void {
-  process.env.RACK42U_TEST_LISTENER = JSON.stringify(value);
+  process.env.RACKU_TEST_LISTENER = JSON.stringify(value);
 }
 
 const listenerRack = (config: Record<string, unknown> = {}, file = "./devices/listener.ts") => ({
@@ -429,7 +429,7 @@ describe("listeners", () => {
 
   // @doc docs/guides/listeners.md#swaps-and-faults
   test("a thread stuck in native code keeps its port, and status() lists its listeners", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "rack42u-test-"));
+    const dir = await mkdtemp(join(tmpdir(), "racku-test-"));
     const pipe = await blockingPipe(dir);
     try {
       steer({ jam: pipe.path });
@@ -449,7 +449,7 @@ describe("listeners", () => {
         Bun.sleep(1_000).then(() => "no answer"),
       ]);
       expect(unanswered).toBe("no answer");
-      delete process.env.RACK42U_TEST_LISTENER;
+      delete process.env.RACKU_TEST_LISTENER;
       expect(await pipe.release()).toBe(true);
       await waitFor(() => statusOf(running).stuck.length === 0, 10_000);
       await running.restart("listener", { cascade: false });
@@ -912,7 +912,7 @@ describe("fileResponse", () => {
     ).toLowerCase();
 
   test("a device that answers a file through its own listener sends it from disk, with its Content-Length", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "rack42u-files-"));
+    const dir = await mkdtemp(join(tmpdir(), "racku-files-"));
     try {
       const size = 3 * 1024 * 1024;
       const path = join(dir, "photo.bin");

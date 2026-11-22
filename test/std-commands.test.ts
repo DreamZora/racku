@@ -5,8 +5,8 @@
  * @decision .agents/decisions/261121_065823-hot-plug-directories.md#the-commands-connector
  */
 import { describe, expect, test } from "bun:test";
-import { slot } from "rack42u";
-import { commands } from "rack42u/std";
+import { slot } from "racku";
+import { commands } from "racku/std";
 import * as z from "zod";
 import { errorOf, useRacks } from "./fixtures/app.ts";
 

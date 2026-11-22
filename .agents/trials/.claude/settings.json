@@ -1,5 +1,10 @@
 {
-  "claudeMdExcludes": ["**/rack42u/CLAUDE.md", "**/rack42u/AGENTS.md"],
+  "claudeMdExcludes": [
+    "**/rack42u/CLAUDE.md",
+    "**/rack42u/AGENTS.md",
+    "**/racku/CLAUDE.md",
+    "**/racku/AGENTS.md"
+  ],
   "permissions": {
     "defaultMode": "dontAsk",
     "allow": [
@@ -7,7 +12,7 @@
       "Skill",
       "TaskStop",
       "Monitor",
-      "Read(//**/skills/rack42u/**)",
+      "Read(//**/skills/racku/**)",
       "Edit(/**)",
       "Bash(bun *)",
       "Bash(bunx *)",

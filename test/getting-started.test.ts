@@ -1,5 +1,5 @@
 /**
- * Builds the app of docs/getting-started.md as the guide says, outside this repository: rack42u
+ * Builds the app of docs/getting-started.md as the guide says, outside this repository: racku
  * installed as a git dependency, from a repository that holds the files under test, the guide's
  * files, its commands, and the answers it shows. So the guide and this test change together.
  *
@@ -17,7 +17,7 @@ import { ROOT } from "./fixtures/app.ts";
 import { typecheck } from "./fixtures/typecheck.ts";
 
 const GUIDE = await Bun.file(join(ROOT, "docs", "getting-started.md")).text();
-const WORK = await mkdtemp(join(tmpdir(), "rack42u-start-"));
+const WORK = await mkdtemp(join(tmpdir(), "racku-start-"));
 afterAll(async () => {
   await rm(WORK, { recursive: true, force: true });
 });
@@ -53,7 +53,7 @@ async function exec(
 
 /** Copies the files under test into a new repository, and returns its URL and its commit. */
 async function repository(): Promise<{ url: string; commit: string }> {
-  const dir = join(WORK, "rack42u");
+  const dir = join(WORK, "racku");
   const listed = await exec(
     ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
     ROOT,
@@ -66,7 +66,7 @@ async function repository(): Promise<{ url: string; commit: string }> {
   }
   const git = (...args: string[]) =>
     exec(
-      ["git", "-c", "user.name=rack42u test", "-c", "user.email=test@rack42u.invalid", ...args],
+      ["git", "-c", "user.name=racku test", "-c", "user.email=test@racku.invalid", ...args],
       dir,
     );
   for (const args of [
@@ -93,14 +93,14 @@ async function exists(path: string): Promise<boolean> {
 
 /**
  * Reads a skill copied into an app, and follows the paths in the app that it names, such as
- * `node_modules/rack42u/docs/guides/devices.md#hooks`, and its relative links.
+ * `node_modules/racku/docs/guides/devices.md#hooks`, and its relative links.
  *
  * @returns What it followed, and what led to no file, directory, or heading.
  */
 async function follow(app: string, skill: string): Promise<{ followed: string[]; lost: string[] }> {
   const text = await Bun.file(skill).text();
   const targets = [
-    ...[...text.matchAll(/`(node_modules\/rack42u\/[^`\s]*)`/g)].map(([, ref = ""]) => ({
+    ...[...text.matchAll(/`(node_modules\/racku\/[^`\s]*)`/g)].map(([, ref = ""]) => ({
       ref,
       base: app,
     })),
@@ -201,7 +201,7 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
   });
   await Bun.write(join(app, "package.json"), manifest ?? "");
 
-  // Add rack42u as the guide does, from the repository of the files under test.
+  // Add racku as the guide does, from the repository of the files under test.
   const add = command("bun add ").split(" ");
   const shown = add.find((word) => word.startsWith("git+ssh://")) ?? "";
   expect(shown).toMatch(/^git\+ssh:\/\/git@github\.com\/DreamZora\/rack42u\.git#v\d+\.\d+\.\d+$/);
@@ -216,30 +216,30 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
     code: 0,
     output: "",
   });
-  // package.json keeps the ref as typed, here a commit, which pins rack42u in it.
+  // package.json keeps the ref as typed, here a commit, which pins racku in it.
   const dependencies = (await Bun.file(join(app, "package.json")).json()).dependencies;
-  expect(dependencies.rack42u).toBe(`${url}#${commit}`);
+  expect(dependencies.racku).toBe(`${url}#${commit}`);
 
   // The skill that the guide copies into the app comes with the package, and once copied, what
   // it names leads to the documentation the app installed. The test copies as the command does,
   // since Bun's shell has no cp of its own on every system.
   expect(command("mkdir -p .claude/skills")).toBe(
-    "mkdir -p .claude/skills && cp -r node_modules/rack42u/skills/rack42u .claude/skills/",
+    "mkdir -p .claude/skills && cp -r node_modules/racku/skills/racku .claude/skills/",
   );
   const skills = join(app, ".claude", "skills");
   await mkdir(skills, { recursive: true });
-  await cp(join(app, "node_modules", "rack42u", "skills", "rack42u"), join(skills, "rack42u"), {
+  await cp(join(app, "node_modules", "racku", "skills", "racku"), join(skills, "racku"), {
     recursive: true,
   });
-  const skill = join(skills, "rack42u", "SKILL.md");
-  expect(await Bun.file(skill).text()).toStartWith("---\nname: rack42u\n");
-  // The skill adds rack42u with the guide's command, at a tag of the agent's choice.
+  const skill = join(skills, "racku", "SKILL.md");
+  expect(await Bun.file(skill).text()).toStartWith("---\nname: racku\n");
+  // The skill adds racku with the guide's command, at a tag of the agent's choice.
   expect(await Bun.file(skill).text()).toContain(
     `\`${command("bun add ").replace(/#v\d+\.\d+\.\d+ /, "#<tag> ")}\``,
   );
   const { followed, lost } = await follow(app, skill);
-  expect(followed).toContain("node_modules/rack42u/docs/getting-started.md");
-  expect(followed).toContain("node_modules/rack42u/docs/guides/devices.md#the-context");
+  expect(followed).toContain("node_modules/racku/docs/getting-started.md");
+  expect(followed).toContain("node_modules/racku/docs/guides/devices.md#the-context");
   expect(lost).toEqual([]);
 
   const port = await freePort();
@@ -297,7 +297,7 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
   expect(await dev.stop()).toBe(0);
 }, 120_000);
 
-// @doc docs/getting-started.md#add-rack42u
+// @doc docs/getting-started.md#add-racku
 test("bun add, in a directory without a package.json, changes the nearest one above it", async () => {
   const outer = join(WORK, "outer");
   const app = join(outer, "app");
@@ -321,14 +321,14 @@ test("bun add, in a directory without a package.json, changes the nearest one ab
   expect(Object.keys(changed.dependencies ?? {})).toEqual(["tiny"]);
 }, 60_000);
 
-// @doc docs/getting-started.md#add-rack42u
+// @doc docs/getting-started.md#add-racku
 test("bun add keeps a branch or HEAD in package.json, and only bun.lock holds the commit", async () => {
   const dep = join(WORK, "pinned");
   await mkdir(dep, { recursive: true });
   await Bun.write(join(dep, "package.json"), JSON.stringify({ name: "pinned", version: "1.0.0" }));
   const git = async (...args: string[]) => {
     const result = await exec(
-      ["git", "-c", "user.name=rack42u test", "-c", "user.email=test@rack42u.invalid", ...args],
+      ["git", "-c", "user.name=racku test", "-c", "user.email=test@racku.invalid", ...args],
       dep,
     );
     if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${result.output}`);

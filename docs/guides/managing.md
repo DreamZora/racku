@@ -20,12 +20,12 @@ rack ctl stop                            # shut down in order, like Ctrl-C
 ## Who can connect
 
 Nothing listens on the network.
-- On Linux and macOS, the endpoint is a Unix socket in a directory that only your user can enter: `$XDG_RUNTIME_DIR/rack42u/`, or `~/.local/state/rack42u/control/`. Only your user and root can connect.
+- On Linux and macOS, the endpoint is a Unix socket in a directory that only your user can enter: `$XDG_RUNTIME_DIR/racku/`, or `~/.local/state/racku/control/`. Only your user and root can connect.
   - A socket left behind by a rack that crashed is replaced.
   - While a rack answers on the socket, a second rack for the same directory refuses to start.
 - With `--control-port <port>`, and by default on Windows, the endpoint listens on loopback TCP, `127.0.0.1`.
   - Every request needs the rack's token as `Authorization: Bearer <token>`. The token is random on each start, unless `RACK_CONTROL_TOKEN` sets it.
-  - The rack writes the address and the token to a control file in the same private directory. On Windows, that directory is `%LOCALAPPDATA%\rack42u\control\`.
+  - The rack writes the address and the token to a control file in the same private directory. On Windows, that directory is `%LOCALAPPDATA%\racku\control\`.
   - The endpoint refuses requests that carry an `Origin` header or a `Host` other than its own, so a web page cannot drive it.
   - `rack ctl --url <url> --token <token>` reaches such a rack from anywhere on the machine.
 

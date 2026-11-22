@@ -6,7 +6,7 @@
  * @decision .agents/decisions/261116_213839-transfer-and-shared-buffers.md#shared-buffers
  */
 import { describe, expect, test } from "bun:test";
-import { slot } from "rack42u";
+import { slot } from "racku";
 import { codeOf, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();

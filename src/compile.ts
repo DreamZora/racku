@@ -4,9 +4,9 @@
  * device that the manifest mounts, and the packages that the app declares and the firmware
  * imports, for firmware built from outside files.
  *
- * The firmware is built as an executable builds outside files: rack42u comes from the Worker
+ * The firmware is built as an executable builds outside files: racku comes from the Worker
  * host, and `import.meta` paths are the executable's, which the same plugin gives the manifest
- * and the modules of rack42u in the executable; see `packaged.ts`.
+ * and the modules of racku in the executable; see `packaged.ts`.
  *
  * @decision .agents/decisions/261120_011627-single-executables.md#compiling-a-rack
  */
@@ -25,7 +25,7 @@ import type { RackManifest } from "./manifest.ts";
 import { fileKey, type PackagedTable } from "./packaged.ts";
 import { deviceFiles } from "./rack.ts";
 
-/** rack42u's own directory, whose `src/` the executable's entries import. */
+/** racku's own directory, whose `src/` the executable's entries import. */
 const PACKAGE_DIR = realpathSync(join(import.meta.dir, ".."));
 
 /** Options of {@link compileRack}. */
@@ -99,7 +99,7 @@ export async function compileRack(
     }
 
     const declared = new Set(await declaredDependencies(appDir));
-    declared.delete("rack42u");
+    declared.delete("racku");
     const found = new Set<string>();
     const devices: PackagedTable["devices"] = {};
     const listed: CompileResult["devices"] = [];
@@ -168,12 +168,12 @@ export async function compileRack(
       join(work, "worker.ts"),
       [
         'import "./prelude.ts";',
-        `import * as rack42u from ${src("index.ts")};`,
+        `import * as racku from ${src("index.ts")};`,
         `import { HOST_MODULES } from ${src("packaged.ts")};`,
         `import * as std from ${src("std/index.ts")};`,
         `import ${src("worker.ts")};`,
-        "// Firmware takes rack42u from here, so it shares the host's copy.",
-        '(globalThis as Record<symbol, unknown>)[HOST_MODULES] = { rack42u, "rack42u/std": std };',
+        "// Firmware takes racku from here, so it shares the host's copy.",
+        '(globalThis as Record<symbol, unknown>)[HOST_MODULES] = { racku, "racku/std": std };',
         "",
       ].join("\n"),
     );

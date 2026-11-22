@@ -355,7 +355,7 @@ function before(
  */
 export function formatPlan(rackName: string, plan: Plan): string {
   const lines = [
-    `# rack42u plan of rack ${rackName}: slot, instance, model, owner, and wiring.`,
+    `# racku plan of rack ${rackName}: slot, instance, model, owner, and wiring.`,
     "# Written by `rack dev` and `rack plan --write`; do not edit by hand.",
   ];
   for (const instance of plan.instances) lines.push(formatInstance(instance));

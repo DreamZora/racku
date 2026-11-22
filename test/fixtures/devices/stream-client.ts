@@ -1,4 +1,4 @@
-import { type CallOptions, device, RackError } from "rack42u";
+import { type CallOptions, device, RackError } from "racku";
 import { StreamClient, Streams } from "../connectors.ts";
 
 interface Upload {

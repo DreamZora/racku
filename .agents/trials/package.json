@@ -1,5 +1,5 @@
 {
-  "name": "rack42u-trials",
+  "name": "racku-trials",
   "private": true,
-  "description": "Stops Bun's search for a package.json in this folder, so that a bun add run outside an app's folder changes this file, never rack42u's own. Each trial app has a package.json of its own."
+  "description": "Stops Bun's search for a package.json in this folder, so that a bun add run outside an app's folder changes this file, never racku's own. Each trial app has a package.json of its own."
 }

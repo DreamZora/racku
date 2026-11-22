@@ -1,12 +1,12 @@
 # AGENTS.md
 
-rack42u is a 42U rack-style component framework built on Bun, made of a rack runtime and a set of standard base components. The design requires every device to support hot swap and hot reload while running.
+racku is a 42U rack-style component framework built on Bun, made of a rack runtime and a set of standard base components. The design requires every device to support hot swap and hot reload while running.
 
 This file defines the project background, architectural constraints, and working method. Commit conventions, tags, and general rules such as "a documented capability must have a test" come from the global `~/.fcode/AGENTS.md`; they are not repeated here.
 
 ## Current state
 
-- P0 is complete as scoped by [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md): the `rack42u` and `rack42u/std` entry points, the rack runtime with the `sled` form, firmware builds, swaps, crash resets, the HTTP panel, the `memkv` and `sqlite` standard devices, the `rack start` and `rack dev` commands, the example app `examples/shop-api`, and `README.md`.
+- P0 is complete as scoped by [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md): the `racku` and `racku/std` entry points, the rack runtime with the `sled` form, firmware builds, swaps, crash resets, the HTTP panel, the `memkv` and `sqlite` standard devices, the `rack start` and `rack dev` commands, the example app `examples/shop-api`, and `README.md`.
 - Details that the earlier decisions left open are fixed by [P0 standard connectors, rack handle shapes, and test fixtures](.agents/decisions/261115_222025-p0-api-details.md).
 - Calls and events between devices travel on direct links between Workers, as [Backplane protocol with direct links between devices](.agents/decisions/261116_024226-backplane-links.md) decides; the main thread sets up the links and routes only calls from outside the rack. `rack.metrics()` reads the call and event counters each Worker keeps, as [Call and event metrics](.agents/decisions/261116_035534-call-metrics.md) decides.
 - Calls and results can move `ArrayBuffer`s instead of copying them, and `SharedArrayBuffer`s are shared under rules the README states, as [Transfer and shared buffers for binary data](.agents/decisions/261116_213839-transfer-and-shared-buffers.md) decides.
@@ -26,26 +26,27 @@ This file defines the project background, architectural constraints, and working
 - P3 is complete, and merged into `main` on 2026-11-20. Its nine accepted decisions are implemented:
   - [Byte streams in calls between devices](.agents/decisions/261118_071155-backplane-streams.md): calls carry `ReadableStream`s of bytes, with flow control by credit.
   - [Panels as devices, with listeners that survive swaps](.agents/decisions/261118_070617-panels-as-devices.md): devices open HTTP and WebSocket listeners with `ctx.serve`, which the rack hands over across swaps, and the rack's main thread holds no panel.
-  - [The standard HTTP panel device, with WebSocket and TLS](.agents/decisions/261118_071513-http-panel-device.md): `httpPanel()` in `rack42u/std`, the `http/v2` connector, needs that a device computes from its configuration with `patched()`, and certificates that load without a restart, in place of the manifest's `panel` section.
+  - [The standard HTTP panel device, with WebSocket and TLS](.agents/decisions/261118_071513-http-panel-device.md): `httpPanel()` in `racku/std`, the `http/v2` connector, needs that a device computes from its configuration with `patched()`, and certificates that load without a restart, in place of the manifest's `panel` section.
   - [A configurable stream threshold, with bodies sent whole read by Bun](.agents/decisions/261118_165318-stream-threshold.md): `streamThreshold` in the panel and in `httpHandler`, 256 KiB by default, decides which bodies go whole and which stream, and a request body sent whole must arrive within `idleTimeout`.
   - [Panel responses no slower than the main-thread panel](.agents/decisions/261118_195832-faster-panel-responses.md): `httpHandler`'s default `streamThreshold` of 16 MiB.
-  - [A test bench for one device](.agents/decisions/261118_173457-device-test-bench.md): `rack42u/bench`, which runs one device in a rack of its own, with stubs for its needs that the test implements.
+  - [A test bench for one device](.agents/decisions/261118_173457-device-test-bench.md): `racku/bench`, which runs one device in a rack of its own, with stubs for its needs that the test implements.
   - [Running a rack under another program](.agents/decisions/261118_173838-running-under-another-program.md): `--stop-on-stdin-close` and `--log json` for `rack start` and `rack dev`.
-  - [examples/net-tool, a TCP and UDP tool on Tauri 2 and Quasar](.agents/decisions/261118_173845-net-tool-example.md): the first project on rack42u, run from source.
-  - [Content-Length for every response body of known size, without Bun's slow path](.agents/decisions/261118_215039-content-length-for-known-sizes.md): `wholeResponse()` in `rack42u`, with which the panel answers, so a body of bytes or text keeps its `Content-Length` at every size, sent from 15 KiB on as a direct stream that Bun writes in one piece.
-- rack42u has no formal release yet, and it follows Bun by a minimum version; [Versions](#versions) holds the rules for both.
-- The documentation that [A README that explains rack42u, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md) decides is in place: `README.md` as the front page, and `docs/` with getting started, concepts, design, twelve guides, and five references, which tests hold to the code and `bun run check:docs` checks.
-- [A skill for rack42u, trial apps built by independent agents, and their problems filed as GitHub issues](.agents/decisions/261119_074252-trial-apps.md) is in place: the skill in `skills/rack42u/`, the issue forms, and `.agents/trials/` with four app specs and the workflow `rack42u-trials`. The user runs a round from a Claude Code session in `.agents/trials/`; the Agent then commits the round, in a commit of its own, and files its issues, as that decision says. Two rounds have run, and their issues, #1 to #22, are fixed on `main`.
+  - [examples/net-tool, a TCP and UDP tool on Tauri 2 and Quasar](.agents/decisions/261118_173845-net-tool-example.md): the first project on racku, run from source.
+  - [Content-Length for every response body of known size, without Bun's slow path](.agents/decisions/261118_215039-content-length-for-known-sizes.md): `wholeResponse()` in `racku`, with which the panel answers, so a body of bytes or text keeps its `Content-Length` at every size, sent from 15 KiB on as a direct stream that Bun writes in one piece.
+- racku has no formal release yet, and it follows Bun by a minimum version; [Versions](#versions) holds the rules for both.
+- The documentation that [A README that explains racku, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md) decides is in place: `README.md` as the front page, and `docs/` with getting started, concepts, design, twelve guides, and five references, which tests hold to the code and `bun run check:docs` checks.
+- [A skill for racku, trial apps built by independent agents, and their problems filed as GitHub issues](.agents/decisions/261119_074252-trial-apps.md) is in place: the skill in `skills/racku/`, the issue forms, and `.agents/trials/` with four app specs and the workflow `racku-trials`. The user runs a round from a Claude Code session in `.agents/trials/`; the Agent then commits the round, in a commit of its own, and files its issues, as that decision says. Two rounds have run, and their issues, #1 to #22, are fixed on `main`.
 - The issues of the first trials led to three decisions, all implemented:
-  - [Files that a device answers with, sent with their length](.agents/decisions/261119_205344-file-responses.md): `fileResponse()` in `rack42u`, which a listener and the HTTP panel send from disk with their `Content-Length`.
+  - [Files that a device answers with, sent with their length](.agents/decisions/261119_205344-file-responses.md): `fileResponse()` in `racku`, which a listener and the HTTP panel send from disk with their `Content-Length`.
   - [Faults that tests inject into a device](.agents/decisions/261119_205416-injected-faults.md): `injectFault()` on the rack handle, with `faultInjection`, and on the bench.
   - [Firmware keeps the import.meta paths of its sources](.agents/decisions/261119_213017-firmware-import-meta.md): a device reads a file next to its source.
-- rack42u works around two bugs of Bun 1.4.4, which aren't reported to Bun yet: [Watching two Bun bugs before reporting them](.agents/decisions/261119_031624-watching-bun-bugs.md) holds the reports, and the watch lasts until 2027-01-19.
+- racku works around two bugs of Bun 1.4.4, which aren't reported to Bun yet: [Watching two Bun bugs before reporting them](.agents/decisions/261119_031624-watching-bun-bugs.md) holds the reports, and the watch lasts until 2027-01-19.
 - Of what the P0 decision lists as not in P0, P1 covers editing the manifest of a running rack and replacing several devices together for a contract change, as [Hot swaps, cold swaps, and restarts](.agents/decisions/261116_233956-cold-swaps-and-restarts.md) decides. P2 adds the watchdog, and replaces the breaker and thermal with bounded backlogs. P3's decisions cover the WebSocket panel. Everything else on that list still needs its own decision before work starts, except the `inline` form, which [The main thread runs no devices, and what child processes, connected racks, and single executables must meet](.agents/decisions/261119_054850-main-thread-runs-no-devices.md) drops. That decision also sets what the decisions for the `chassis` form, connected racks, and `bun build --compile` packaging must meet: transports, one authentication method for sockets and TCP, and devices outside an executable with a fallback to the ones inside it.
 - P4 is under way, and its work so far is on `main`. Its first decision, [A rack in one executable, which runs devices from files beside it and falls back to the ones inside](.agents/decisions/261120_011627-single-executables.md), is implemented: `rack compile` packages a rack into one executable, which runs a device from a file in its base directory when there is one, and falls back to the device packaged inside.
   - [Executables that apply changed device files on command, or as they change with --watch](.agents/decisions/261120_221450-watching-outside-files.md) is implemented: an executable with `--watch` reloads its rack as device files and JSON in its base directory change, with the watcher of `rack dev`, which no longer ends when its base directory is removed. [A watching rack also watches its base directory's parent](.agents/decisions/261121_034144-watching-the-parent-directory.md), so that it notices that removal on macOS too.
   - [Installers for net-tool, whose shell runs the rack as a sidecar compiled by rack compile](.agents/decisions/261120_203926-net-tool-installers.md) is implemented: `bun run bundle` in `examples/net-tool/app` builds a `.deb`, a `.dmg`, or an NSIS setup whose shell runs the compiled rack, with a Devices dialog and the setting `replaceDevices`, manual or automatic; `.github/workflows/net-tool.yml` builds and smoke-tests the three.
   - [Hot-plug directories, whose devices come and go with their files, and the contracts through which hosts reach them](.agents/decisions/261121_065823-hot-plug-directories.md) is implemented: `hotplug` in scanned manifests, whose devices start on their own and are left out when they can't run; every needs, which reach every device below that provides a connector; the standard connector `commands/v1`; the bench's stubs by device name; and the watch of the hot-plug directories under `rack start`.
+- The project and its package are named racku, as [The project and its package are named racku](.agents/decisions/261122_044025-the-name-racku.md) decides. The repository keeps the name rack42u until the user renames it, and so do the informal tags up to v0.6.0 and the decisions before that one.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
 
 ## Project positioning
@@ -174,17 +175,17 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 5. Run the checks closest to the change first, then widen them with the scope; see [Commands](#commands). Report only commands that actually ran, with their results.
    - CI runs only for pushes to `main` and manual runs, so `bun run check` before each commit is what checks a branch. A change to platform behavior, such as paths, sockets, signals, or file modes, needs a manual run on its branch before it merges; ask the user to start one.
    - The installer workflow, `net-tool.yml`, needs no asking: the Agent starts its runs by the rule of [When the workflow runs](.agents/decisions/261120_203926-net-tool-installers.md#when-the-workflow-runs), which the user left to it, and says why in its report.
-6. Finish by updating `## Implementation` in the affected decisions and the documentation they affect, in `README.md` and `docs/`. A test that confirms what a section of the documentation says names it as `@doc <document>#<anchor>`, and every section of `docs/guides/` and `docs/reference/` needs such a test, as [A README that explains rack42u, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md#tests-that-hold-the-documentation) decides; `bun run check:docs` checks it. Commits follow the global rules and list the relevant decisions in `Context:`.
+6. Finish by updating `## Implementation` in the affected decisions and the documentation they affect, in `README.md` and `docs/`. A test that confirms what a section of the documentation says names it as `@doc <document>#<anchor>`, and every section of `docs/guides/` and `docs/reference/` needs such a test, as [A README that explains racku, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md#tests-that-hold-the-documentation) decides; `bun run check:docs` checks it. Commits follow the global rules and list the relevant decisions in `Context:`.
 
 ## Versions
 
-[Informal versions until the first release, and the Bun versions rack42u follows](.agents/decisions/261119_054816-versions-and-bun.md) decides these rules.
+[Informal versions until the first release, and the Bun versions racku follows](.agents/decisions/261119_054816-versions-and-bun.md) decides these rules.
 
-- rack42u has no formal release yet. Until the user cuts the first one, every version is informal: any may break the API, a version is tagged only at the user's word, and the repository stays private. Apps depend on rack42u through git.
-- rack42u names a minimum Bun version, not a pinned one, and supports every later release.
+- racku has no formal release yet. Until the user cuts the first one, every version is informal: any may break the API, a version is tagged only at the user's word, and the repository stays private. Apps depend on racku through git.
+- racku names a minimum Bun version, not a pinned one, and supports every later release.
   - The minimum is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
   - `engines.bun` names it as `>=1.4.4`. `@types/bun`, `.github/workflows/check.yml` and `net-tool.yml`, the README's Requirements, and this file name the same version, and `test/bun-version.test.ts` checks that they agree.
-  - CI tests the minimum on Linux, macOS, and Windows, and the latest Bun release on Linux. A failure on the latest release is a defect: fix rack42u, or work around the bug of Bun and record it.
+  - CI tests the minimum on Linux, macOS, and Windows, and the latest Bun release on Linux. A failure on the latest release is a defect: fix racku, or work around the bug of Bun and record it.
   - Until the first formal release, move the minimum whenever work needs it, such as for a fix, an API, or a workaround that can go. Move the six places in one change, run CI by hand on its branch, and say why in the commit. After the release, a major version can still raise its minimum, in a minor version.
   - Use only the Bun APIs that the minimum has. Code that exists for a bug of a Bun release names the bug and the release.
 
@@ -233,7 +234,7 @@ README.md            the front page of the documentation; test/example.test.ts r
 docs/                user documentation; README.md is its map
   getting-started.md an app of one's own; test/getting-started.test.ts installs and runs it
   concepts.md        how a rack works
-  design.md          why rack42u is built this way, and its limits
+  design.md          why racku is built this way, and its limits
   guides/            how to do one thing; test/guides.test.ts runs the app they build
   reference/         the API, the rack command, error codes, reports, and limits;
                      test/reference.test.ts holds them to the code
@@ -246,7 +247,7 @@ biome.json           formatter and linter configuration
 bun.lock             lockfile
 .gitattributes       LF line endings in every checkout, Windows included
 src/                 framework source
-  index.ts           entry point of rack42u
+  index.ts           entry point of racku
   cli.ts             the rack command (start, dev, plan, compile, ctl); commands.ts holds what an
                      executable shares with it, and dev.ts the file watcher
   compile.ts         rack compile: packages a rack, its firmware, and packages into one executable
@@ -264,8 +265,8 @@ src/                 framework source
   streams.ts         both ends of the byte streams in calls, on a link or the data channel
   listeners.ts       the listeners that devices open with ctx.serve, in the Worker host
   firmware.ts        per-device Bun.build with content hashes
-  bench.ts           entry point of rack42u/bench: one device in a rack of its own, with stubs
-  std/               entry point of rack42u/std and the standard devices
+  bench.ts           entry point of racku/bench: one device in a rack of its own, with stubs
+  std/               entry point of racku/std and the standard devices
     http.ts          the http/v2 connector and httpHandler
     http-panel.ts    the standard HTTP panel device
     commands.ts      the commands/v1 connector and commands(), through which devices offer calls
@@ -276,9 +277,9 @@ examples/net-tool/   a TCP and UDP tool: its rack, devices, and connector, which
   app/               the window, Vue 3 and Quasar with its own package.json, src-tauri/, the
                      Tauri shell, and scripts/, which builds the sidecar and smoke-tests an
                      installer; the root's type check and lint cover only scripts/
-skills/rack42u/      the skill for agents that build apps on rack42u, which apps copy from
+skills/racku/        the skill for agents that build apps on racku, which apps copy from
                      node_modules; it names documents by their path in an app, such as
-                     node_modules/rack42u/docs/concepts.md, which bun run check:docs checks
+                     node_modules/racku/docs/concepts.md, which bun run check:docs checks
 scripts/             project scripts: check-decisions.ts, the decision gate; check-docs.ts, the
                      documentation gate; markdown.ts, the headings and anchors both read; and
                      render-images.ts, which renders the README's image
@@ -290,9 +291,9 @@ scripts/             project scripts: check-decisions.ts, the decision gate; che
                      its README.md says how to run a round, and its .gitignore what stays out
 ```
 
-- `docs/` holds user documentation only, laid out as [A README that explains rack42u, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md#the-documentation) decides.
+- `docs/` holds user documentation only, laid out as [A README that explains racku, and complete documentation that tests hold to the code](.agents/decisions/261119_055008-documentation.md#the-documentation) decides.
 - The code layout for P0 is fixed by [P0 scope, repository layout, and toolchain on Bun 1.4.4](.agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md); `test/fixtures/` by [P0 standard connectors, rack handle shapes, and test fixtures](.agents/decisions/261115_222025-p0-api-details.md#test-fixtures).
-- Device files, including `src/std/memkv.ts`, `src/std/sqlite.ts`, and `src/std/http-panel.ts`, import the framework as `rack42u` and `rack42u/std`, never by relative path, so firmware keeps it external.
+- Device files, including `src/std/memkv.ts`, `src/std/sqlite.ts`, and `src/std/http-panel.ts`, import the framework as `racku` and `racku/std`, never by relative path, so firmware keeps it external.
 
 ## Maintaining this file
 

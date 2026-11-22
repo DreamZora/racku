@@ -25,7 +25,7 @@ afterEach(async () => {
 
 /** Writes `files`, keyed by path relative to the root, into a new temporary repository. */
 async function repo(files: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "rack42u-docs-gate-"));
+  const root = await mkdtemp(join(tmpdir(), "racku-docs-gate-"));
   roots.push(root);
   for (const [path, content] of Object.entries(files)) {
     await mkdir(dirname(join(root, path)), { recursive: true });
@@ -158,32 +158,32 @@ describe("the documentation gate", () => {
   // @decision .agents/decisions/261119_074252-trial-apps.md#the-skill
   test("checks the skills under skills/: links that stay in their folder, and paths in an app", async () => {
     const skill = [
-      "# rack42u",
+      "# racku",
       "",
       "[ok](reference.md#more) [gone](missing.md) [out](../../docs/guides/devices.md#hooks)",
-      "`node_modules/rack42u/docs/guides/devices.md#hooks` `node_modules/rack42u/` `node_modules/rack42u/src`",
-      "`node_modules/rack42u/docs/nothing.md` `node_modules/rack42u/docs/guides/devices.md#nope`",
-      "`node_modules/rack42u/../x.md` `node_modules/other/x.md` `rack42u/docs/nothing.md`",
+      "`node_modules/racku/docs/guides/devices.md#hooks` `node_modules/racku/` `node_modules/racku/src`",
+      "`node_modules/racku/docs/nothing.md` `node_modules/racku/docs/guides/devices.md#nope`",
+      "`node_modules/racku/../x.md` `node_modules/other/x.md` `racku/docs/nothing.md`",
       "",
     ].join("\n");
     const { problems, links } = await checkDocs(
       await repo({
-        "README.md": "# App\n\nIn an app: `node_modules/rack42u/docs/gone.md`.\n",
+        "README.md": "# App\n\nIn an app: `node_modules/racku/docs/gone.md`.\n",
         "docs/README.md": MAP,
         "docs/guides/devices.md": GUIDE,
         "src/index.ts": "",
-        "skills/rack42u/SKILL.md": skill,
-        "skills/rack42u/reference.md": "# Reference\n\n## More\n\n[back](SKILL.md)\n",
+        "skills/racku/SKILL.md": skill,
+        "skills/racku/reference.md": "# Reference\n\n## More\n\n[back](SKILL.md)\n",
         "test/a.test.ts": tests("docs/guides/devices.md#hooks", "docs/guides/devices.md#errors"),
       }),
     );
     expect(problems.map(formatProblem)).toEqual([
-      "README.md:3: node_modules/rack42u/docs/gone.md leads to nothing: docs/gone.md doesn't exist",
-      "skills/rack42u/SKILL.md:3: missing.md leads to nothing: skills/rack42u/missing.md doesn't exist",
-      "skills/rack42u/SKILL.md:3: ../../docs/guides/devices.md#hooks leaves the skill's folder, which an app copies on its own; name the file by its path in an app, `node_modules/rack42u/docs/guides/devices.md#hooks`",
-      "skills/rack42u/SKILL.md:5: node_modules/rack42u/docs/nothing.md leads to nothing: docs/nothing.md doesn't exist",
-      "skills/rack42u/SKILL.md:5: node_modules/rack42u/docs/guides/devices.md#nope leads to nothing: docs/guides/devices.md has no #nope",
-      "skills/rack42u/SKILL.md:6: node_modules/rack42u/../x.md leads outside the package",
+      "README.md:3: node_modules/racku/docs/gone.md leads to nothing: docs/gone.md doesn't exist",
+      "skills/racku/SKILL.md:3: missing.md leads to nothing: skills/racku/missing.md doesn't exist",
+      "skills/racku/SKILL.md:3: ../../docs/guides/devices.md#hooks leaves the skill's folder, which an app copies on its own; name the file by its path in an app, `node_modules/racku/docs/guides/devices.md#hooks`",
+      "skills/racku/SKILL.md:5: node_modules/racku/docs/nothing.md leads to nothing: docs/nothing.md doesn't exist",
+      "skills/racku/SKILL.md:5: node_modules/racku/docs/guides/devices.md#nope leads to nothing: docs/guides/devices.md has no #nope",
+      "skills/racku/SKILL.md:6: node_modules/racku/../x.md leads outside the package",
     ]);
     // The map's link, the README's path, the skill's 3 links and 6 paths, and the reference's link.
     expect(links).toBe(12);

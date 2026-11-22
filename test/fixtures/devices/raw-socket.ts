@@ -1,4 +1,4 @@
-import { device } from "rack42u";
+import { device } from "racku";
 import { RawSocket } from "../connectors.ts";
 
 /** Opens a TCP echo server of its own with `Bun.listen`, which the rack neither sees nor hands over. */

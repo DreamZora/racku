@@ -6,7 +6,7 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#wiring-and-routing
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { type RackEvent, slot } from "rack42u";
+import { type RackEvent, slot } from "racku";
 import {
   codeOf,
   FIXTURES,
@@ -212,13 +212,13 @@ describe("links", () => {
   });
 });
 
-/** Starts Workers with `RACK42U_TEST_CRASH_AFTER_ACTIVATE_MS` set while `body` runs. */
+/** Starts Workers with `RACKU_TEST_CRASH_AFTER_ACTIVATE_MS` set while `body` runs. */
 async function crashingAfterActivate<T>(ms: number, body: () => Promise<T>): Promise<T> {
-  process.env.RACK42U_TEST_CRASH_AFTER_ACTIVATE_MS = String(ms);
+  process.env.RACKU_TEST_CRASH_AFTER_ACTIVATE_MS = String(ms);
   try {
     return await body();
   } finally {
-    delete process.env.RACK42U_TEST_CRASH_AFTER_ACTIVATE_MS;
+    delete process.env.RACKU_TEST_CRASH_AFTER_ACTIVATE_MS;
   }
 }
 
@@ -309,7 +309,7 @@ describe("links through crashes and busy instances", () => {
     const watch = (
       needs: boolean,
       restore: string,
-    ) => `import { connector, device, rpc } from "rack42u";
+    ) => `import { connector, device, rpc } from "racku";
 import * as v from "valibot";
 import { Probe } from "../connectors.ts";
 

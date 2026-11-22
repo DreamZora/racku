@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SlotStatus, UpdateRecord } from "rack42u";
+import type { SlotStatus, UpdateRecord } from "racku";
 import { Cli, type TempApp, tempApp, useControlDir, WINDOWS, waitFor } from "./fixtures/app.ts";
 
 useControlDir();
@@ -21,8 +21,8 @@ useControlDir();
  * and so carries inside the executable, a database at a path relative to the base directory, and
  * two devices of the app, `store` below `hello`.
  */
-const RACK = `import { rack, slot } from "rack42u";
-import { httpPanel, sqlite } from "rack42u/std";
+const RACK = `import { rack, slot } from "racku";
+import { httpPanel, sqlite } from "racku/std";
 import routes from "./routes.json";
 
 const named = await Bun.file(new URL("./name.txt", import.meta.url)).text().catch(() => "world");
@@ -41,8 +41,8 @@ export default rack("hello", {
 
 /** The store: `kv/v1` in memory. */
 function storeSource(more: { activate?: string } = {}): string {
-  return `import { device } from "rack42u";
-import { Kv } from "rack42u/std";
+  return `import { device } from "racku";
+import { Kv } from "racku/std";
 
 const values = new Map<string, string>();
 
@@ -83,8 +83,8 @@ interface HelloChanges {
  * which copy answered, and fails with a code of its own on `/fail`.
  */
 function helloSource(from: string, more: HelloChanges = {}): string {
-  return `import { device, RackError } from "rack42u";
-import { Http, httpHandler, Kv } from "rack42u/std";
+  return `import { device, RackError } from "racku";
+import { Http, httpHandler, Kv } from "racku/std";
 import * as v from "valibot";
 ${more.imports ?? ""}
 export default device({
@@ -152,7 +152,7 @@ afterAll(async () => {
 
 /** A base directory for one run of the executable, with the files given. */
 async function baseDir(files: Record<string, string> = {}): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "rack42u-test-base-"));
+  const dir = await mkdtemp(join(tmpdir(), "racku-test-base-"));
   bases.push(dir);
   for (const [path, content] of Object.entries(files)) await Bun.write(join(dir, path), content);
   return dir;
@@ -257,7 +257,7 @@ describe("an executable from rack compile", () => {
       "devices/suffix.ts": 'export const SUFFIX = "!";\n',
     });
     const { cli, url } = await run(dir);
-    // The file imports valibot, which the executable carries, rack42u from the Worker host, and
+    // The file imports valibot, which the executable carries, racku from the Worker host, and
     // a file of its own, which its firmware bundles.
     expect(await greet(url)).toEqual({ text: "Hello, world!", from: "outside" });
     expect(cli.output).toContain(`hello runs ${join(dir, "devices", "hello.ts")}`);
@@ -283,7 +283,7 @@ describe("an executable from rack compile", () => {
       "fails to be wired",
       {
         imports: [
-          'import { connector, rpc } from "rack42u";',
+          'import { connector, rpc } from "racku";',
           'const Nothing = connector("nothing/v1", { get: rpc(v.string(), v.string()) });',
         ].join("\n"),
         needs: ", nothing: Nothing",
@@ -509,8 +509,8 @@ describe("rack compile", () => {
     try {
       await scanned.write(
         "rack.ts",
-        `import { rack } from "rack42u";
-import { httpPanel } from "rack42u/std";
+        `import { rack } from "racku";
+import { httpPanel } from "racku/std";
 
 export default rack("scanned", {
   devices: ["./devices", httpPanel({ port: 0, routes: { "/*": "hello.http" } })],

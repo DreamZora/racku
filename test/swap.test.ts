@@ -8,8 +8,8 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { slot } from "rack42u";
-import { httpPanel } from "rack42u/std";
+import { slot } from "racku";
+import { httpPanel } from "racku/std";
 import {
   codeOf,
   errorOf,

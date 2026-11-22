@@ -11,8 +11,8 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { device, RackError } from "rack42u";
-import { Sql } from "rack42u/std";
+import { device, RackError } from "racku";
+import { Sql } from "racku/std";
 import * as v from "valibot";
 
 const MEMORY = ":memory:";

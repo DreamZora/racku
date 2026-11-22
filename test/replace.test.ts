@@ -9,7 +9,7 @@
  * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#contract-changes
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { slot } from "rack42u";
+import { slot } from "racku";
 import { errorOf, type TempApp, tempApp, useRacks } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -19,7 +19,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
-const CONNECTORS = `import { connector, rpc } from "rack42u";
+const CONNECTORS = `import { connector, rpc } from "racku";
 import * as v from "valibot";
 
 export const Count = connector("demo.count/v1", {
@@ -36,7 +36,7 @@ export const Client = connector("demo.client/v1", { seen: rpc(v.undefined(), v.s
 function printer(options: { cold: boolean; version?: string; extra?: string }): string {
   return `import { closeSync, openSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { device } from "rack42u";
+import { device } from "racku";
 import { Count } from "../connectors.ts";
 
 const VERSION = "${options.version ?? "v1"}";
@@ -63,7 +63,7 @@ export default device({
 }
 
 /** A store that answers with an id of its own instance, and counts. */
-const STORE = `import { device } from "rack42u";
+const STORE = `import { device } from "racku";
 import { Count, Store } from "../connectors.ts";
 
 const id = crypto.randomUUID();
@@ -84,7 +84,7 @@ export default device({
 `;
 
 /** A client that reads the store's id in powerOn and reports it. */
-const CLIENT = `import { device } from "rack42u";
+const CLIENT = `import { device } from "racku";
 import { Client, Store } from "../connectors.ts";
 
 export default device({
@@ -278,7 +278,7 @@ describe("contract changes", () => {
       "devices/store.ts",
       STORE.replace(
         'import { Count, Store } from "../connectors.ts";',
-        'import { connector, rpc } from "rack42u";\nimport * as v from "valibot";\nimport { Count } from "../connectors.ts";\n\nconst Store = connector("demo.store/v2", { id: rpc(v.undefined(), v.string()) });',
+        'import { connector, rpc } from "racku";\nimport * as v from "valibot";\nimport { Count } from "../connectors.ts";\n\nconst Store = connector("demo.store/v2", { id: rpc(v.undefined(), v.string()) });',
       ),
     );
     const [result] = await running.reload();

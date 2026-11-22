@@ -5,7 +5,7 @@
  * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { type RackSpec, rack, slot } from "rack42u";
+import { type RackSpec, rack, slot } from "racku";
 import { errorOf, type TempApp, tempApp, useRacks } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -15,7 +15,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
-const CONNECTORS = `import { connector, rpc } from "rack42u";
+const CONNECTORS = `import { connector, rpc } from "racku";
 import * as v from "valibot";
 
 const counter = (id: string) => connector(id, { inc: rpc(v.undefined(), v.number()) });
@@ -29,7 +29,7 @@ export const Label = connector("demo.label/v1", { label: rpc(v.undefined(), v.st
 `;
 
 function counter(model: string, connector: string): string {
-  return `import { device } from "rack42u";
+  return `import { device } from "racku";
 import { D, E, F } from "../connectors.ts";
 
 let n = 0;
@@ -46,7 +46,7 @@ function consumer(model: string, needs: Record<string, string>): string {
   const list = Object.entries(needs)
     .map(([need, connector]) => `${need}: ${connector}`)
     .join(", ");
-  return `import { device, own } from "rack42u";
+  return `import { device, own } from "racku";
 import { D, E, F, Poke } from "../connectors.ts";
 
 export default device({
@@ -58,7 +58,7 @@ export default device({
 `;
 }
 
-const LABEL = `import { device } from "rack42u";
+const LABEL = `import { device } from "racku";
 import * as v from "valibot";
 import { Label } from "../connectors.ts";
 

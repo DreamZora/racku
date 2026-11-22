@@ -3,7 +3,7 @@
  *
  * @decision .agents/decisions/261115_222025-p0-api-details.md#test-fixtures
  */
-import { connector, event, rpc, stream } from "rack42u";
+import { connector, event, rpc, stream } from "racku";
 import * as v from "valibot";
 
 export const Hook = v.picklist([

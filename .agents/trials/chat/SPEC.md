@@ -1,6 +1,6 @@
 # chat: a chat room over WebSocket
 
-Build this app on rack42u, in this folder. The folder's `CLAUDE.md`, one level up, says how to work here.
+Build this app on racku, in this folder. The folder's `CLAUDE.md`, one level up, says how to work here.
 
 ## What it does
 

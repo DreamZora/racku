@@ -17,7 +17,7 @@ import {
   slot,
   type UpdateCause,
   type UpdateRecord,
-} from "rack42u";
+} from "racku";
 import { errorOf, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -27,7 +27,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
-const CONNECTORS = `import { connector, rpc } from "rack42u";
+const CONNECTORS = `import { connector, rpc } from "racku";
 import * as v from "valibot";
 
 export const Count = connector("demo.count/v1", {
@@ -41,7 +41,7 @@ export const Client = connector("demo.client/v1", { seen: rpc(v.undefined(), v.s
 
 /** A counter whose version shows in its answers; it can crash on demand or on every inc. */
 function counter(version: string, options: { crashOnInc?: boolean; needsBase?: boolean } = {}) {
-  return `import { device } from "rack42u";
+  return `import { device } from "racku";
 import { Base, Count } from "../connectors.ts";
 
 let n = 0;
@@ -68,7 +68,7 @@ export default device({
 `;
 }
 
-const BASE = `import { device } from "rack42u";
+const BASE = `import { device } from "racku";
 import { Base } from "../connectors.ts";
 
 export default device({
@@ -79,7 +79,7 @@ export default device({
 `;
 
 /** A store that can crash on demand; its connector file decides its contract. */
-const STORE = `import { device } from "rack42u";
+const STORE = `import { device } from "racku";
 import { Count, Store } from "../connectors.ts";
 
 const id = crypto.randomUUID();
@@ -99,7 +99,7 @@ export default device({
 });
 `;
 
-const CLIENT = `import { device } from "rack42u";
+const CLIENT = `import { device } from "racku";
 import { Client, Store } from "../connectors.ts";
 
 export default device({

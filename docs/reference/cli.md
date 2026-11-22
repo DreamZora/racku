@@ -90,6 +90,6 @@ An executable that `rack compile` made starts the rack it packaged, as `rack sta
 | Variable | Meaning |
 |---|---|
 | `RACK_CONTROL_TOKEN` | The token of the TCP management endpoint, for `rack start` and `rack dev`, in place of a random one; `rack ctl` sends it, unless `--token` gives another. |
-| `XDG_RUNTIME_DIR` | On Linux and macOS, the management endpoint's socket and control file live in `$XDG_RUNTIME_DIR/rack42u/`. |
-| `XDG_STATE_HOME` | Without `XDG_RUNTIME_DIR`, they live in `$XDG_STATE_HOME/rack42u/control/`, and without either in `~/.local/state/rack42u/control/`. |
-| `LOCALAPPDATA` | On Windows, the control file lives in `%LOCALAPPDATA%\rack42u\control\`. |
+| `XDG_RUNTIME_DIR` | On Linux and macOS, the management endpoint's socket and control file live in `$XDG_RUNTIME_DIR/racku/`. |
+| `XDG_STATE_HOME` | Without `XDG_RUNTIME_DIR`, they live in `$XDG_STATE_HOME/racku/control/`, and without either in `~/.local/state/racku/control/`. |
+| `LOCALAPPDATA` | On Windows, the control file lives in `%LOCALAPPDATA%\racku\control\`. |

@@ -6,8 +6,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { rack, slot, start } from "rack42u";
-import { httpPanel } from "rack42u/std";
+import { rack, slot, start } from "racku";
+import { httpPanel } from "racku/std";
 import { codeOf, errorOf, FIXTURES, Recorder, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -250,14 +250,14 @@ describe("device context", () => {
   // @decision .agents/decisions/261112_043034-device-api.md#device-context
   // @doc docs/guides/devices.md#the-environment
   test("each Worker receives a copy of the environment at its creation", async () => {
-    process.env.RACK42U_TEST_ENV = "copied";
+    process.env.RACKU_TEST_ENV = "copied";
     try {
       const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
-      process.env.RACK42U_TEST_ENV = "changed later";
+      process.env.RACKU_TEST_ENV = "changed later";
       const info = (await running.call("probe.probe", "info", undefined)) as { env: string };
       expect(info.env).toBe("copied");
     } finally {
-      delete process.env.RACK42U_TEST_ENV;
+      delete process.env.RACKU_TEST_ENV;
     }
   });
 
@@ -266,9 +266,7 @@ describe("device context", () => {
   test("the rack main thread never evaluates device code", async () => {
     const { running } = await startRack({ slots: { 1: slot("./devices/probe.ts") } });
     expect(await running.call("probe.probe", "echo", "hi")).toBe("hi");
-    expect(
-      (globalThis as { __rack42uDeviceLoaded?: boolean }).__rack42uDeviceLoaded,
-    ).toBeUndefined();
+    expect((globalThis as { __rackuDeviceLoaded?: boolean }).__rackuDeviceLoaded).toBeUndefined();
   });
 
   // @decision .agents/decisions/261112_035943-hot-swap.md#lifecycle

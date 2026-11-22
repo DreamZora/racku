@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "rack42u",
+      "name": "racku",
       "dependencies": {
         "@standard-schema/spec": "1.1.0",
         "valibot": "1.5.0",

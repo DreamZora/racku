@@ -44,7 +44,7 @@ A program written in Bun can instead run a rack inside itself with `start()`, wi
 A program starts a rack with `start()`. This one runs the app that the guides build, the greeter, and calls it twice:
 
 ```ts
-import { start } from "rack42u";
+import { start } from "racku";
 import manifest from "./rack.ts";
 
 const running = await start(manifest, { baseDir: import.meta.dir });
@@ -53,7 +53,7 @@ await fetch("http://localhost:3000/greet?name=Grace").then((r) => r.text()); // 
 await running.stop();
 ```
 
-[`start()`](../reference/api.md#start) takes the options, and returns the handle, that the [API reference](../reference/api.md) lists. Management operations run one at a time, in the order they were called. Firmware is written to `.rack/firmware/` under the base directory, and imports rack42u and the app's packages from there, so the base directory lies inside the app; keep `.rack/` out of version control.
+[`start()`](../reference/api.md#start) takes the options, and returns the handle, that the [API reference](../reference/api.md) lists. Management operations run one at a time, in the order they were called. Firmware is written to `.rack/firmware/` under the base directory, and imports racku and the app's packages from there, so the base directory lies inside the app; keep `.rack/` out of version control.
 
 The rack prints its log on the console, one line per entry, unless the `logger` option of `start()` takes the entries: `logger: () => {}` keeps the console quiet, and `logger: (entry) => entries.push(entry)` collects them, so that a check can look for one, such as `<device> swapped`. [The log](../reference/reports.md#the-log) lists what the rack writes.
 
@@ -62,8 +62,8 @@ The rack prints its log on the console, one line per entry, unless the `logger` 
 `reload(manifest)` moves a running rack to another manifest, as [Changed plans and edited manifests](updates.md#changed-plans-and-edited-manifests) describes, so a program can change which devices run as its data changes, such as one device for each entry of a file. The rack tells devices apart by name: a device whose name stays keeps running, even in another slot, unless its firmware or configuration changed. A new name is plugged, and a name that left is unplugged. This program runs one greeter of the guides' app for each language:
 
 ```ts
-import { rack, slot, start } from "rack42u";
-import { memkv } from "rack42u/std";
+import { rack, slot, start } from "racku";
+import { memkv } from "racku/std";
 
 /** One greeter per language, named after its language, above the store they share. */
 function layout(greetings: Record<string, string>) {
@@ -93,7 +93,7 @@ await running.stop();
 
 ## A rack in one executable
 
-`rack compile` packages a rack into one executable: the manifest, rack42u, the firmware of every device that the manifest mounts, and the packages that the firmware imports. The executable runs where Bun isn't installed, such as beside the window of a desktop app, and a device in it can still be replaced there by a file:
+`rack compile` packages a rack into one executable: the manifest, racku, the firmware of every device that the manifest mounts, and the packages that the firmware imports. The executable runs where Bun isn't installed, such as beside the window of a desktop app, and a device in it can still be replaced there by a file:
 
 ```sh
 rack compile rack.ts --outfile dist/greeter          # about 100 MiB, most of it Bun
@@ -108,8 +108,8 @@ rack compile rack.ts --outfile dist/greeter          # about 100 MiB, most of it
   - The rack itself writes there only the firmware of outside files, in `.rack/firmware/`.
 - **Outside files.** Each device file of the app, outside `node_modules`, has an outside file: the file at the same path under the base directory, such as `devices/greeter.ts`.
   - When the rack starts, and at each `reload()` and `swap(name)`, a device runs its outside file when there is one, and its packaged firmware otherwise.
-  - rack42u's own devices, and devices from other packages, run only from their packaged firmware. Outside files replace packaged devices; they add none.
-  - The executable builds an outside file as `rack compile` built the packaged firmware: its firmware imports rack42u, and the packages that the packaged firmware imports, from the executable. Any other import must resolve from the file's place, and its firmware bundles it.
+  - racku's own devices, and devices from other packages, run only from their packaged firmware. Outside files replace packaged devices; they add none.
+  - The executable builds an outside file as `rack compile` built the packaged firmware: its firmware imports racku, and the packages that the packaged firmware imports, from the executable. Any other import must resolve from the file's place, and its firmware bundles it.
 - **On command, or as files change.** While the rack runs, a changed outside file applies at `ctl reload`, or at `ctl swap <device>`. With `--watch`, it also applies as it changes: the executable watches its base directory, and reloads the rack as `ctl reload` does, when and with the bounds that [Hot reload with rack dev](#hot-reload-with-rack-dev) describes.
   - A change counts when the file's name ends in `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`, or `.json`, outside `node_modules`, and outside files and directories whose names start with a dot, such as `.rack/` and `.env`. So the data that devices keep in the base directory, such as a database, starts no reloads. A device that writes code or JSON there keeps it in a directory whose name starts with a dot.
   - A change to another kind of file that firmware imports, such as `.txt`, applies at the next `ctl reload`.
@@ -128,7 +128,7 @@ rack compile rack.ts --outfile dist/greeter          # about 100 MiB, most of it
 
 ## Windows
 
-rack42u runs on Windows as it does on Linux and macOS, with these differences:
+racku runs on Windows as it does on Linux and macOS, with these differences:
 
 - **Stopping.** Ctrl-C and Ctrl-Break stop `rack start` and `rack dev` in order, as `rack ctl stop` does. Windows has no `SIGTERM`. A process ended from outside, such as by Task Manager or `taskkill /F`, ends at once, as with `SIGKILL` elsewhere. Closing its console window ends the rack without an orderly shutdown, as a hangup does elsewhere.
 - **The management endpoint** listens on loopback TCP with a token, since Windows has no Unix sockets. See [Managing a running rack](managing.md).

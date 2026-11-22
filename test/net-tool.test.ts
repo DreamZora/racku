@@ -11,8 +11,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RackError, type SlotStatus } from "rack42u";
-import { type Bench, bench, stub } from "rack42u/bench";
+import { RackError, type SlotStatus } from "racku";
+import { type Bench, bench, stub } from "racku/bench";
 import {
   base64ToBytes,
   bytesToBase64,
@@ -543,7 +543,7 @@ describe("the net tool's rack as the sidecar of a built app", () => {
 
   /** Runs the sidecar as the shell of a built app runs it, in a base directory of its own. */
   async function start(watch: boolean): Promise<{ cli: Cli; base: string; panel: string }> {
-    const base = await mkdtemp(join(tmpdir(), "rack42u-test-net-tool-"));
+    const base = await mkdtemp(join(tmpdir(), "racku-test-net-tool-"));
     bases.push(base);
     const command = [sidecar, "--base-dir", base, "--stop-on-stdin-close", "--log", "json"];
     const cli = new Cli(

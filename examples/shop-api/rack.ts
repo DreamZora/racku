@@ -5,8 +5,8 @@
  * Run it from the repository root with `bun src/cli.ts start examples/shop-api/rack.ts`, or with
  * `dev` instead of `start` to hot-reload devices as you edit them. Set PORT to change the port.
  */
-import { rack, slot } from "rack42u";
-import { httpPanel, memkv, sqlite } from "rack42u/std";
+import { rack, slot } from "racku";
+import { httpPanel, memkv, sqlite } from "racku/std";
 
 export default rack("shop", {
   slots: {

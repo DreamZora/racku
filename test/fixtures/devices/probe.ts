@@ -1,9 +1,9 @@
-import { device, RackError } from "rack42u";
+import { device, RackError } from "racku";
 import * as v from "valibot";
 import { Probe } from "../connectors.ts";
 
 // Lets a test prove that the rack main thread never evaluates device code.
-(globalThis as { __rack42uDeviceLoaded?: boolean }).__rack42uDeviceLoaded = true;
+(globalThis as { __rackuDeviceLoaded?: boolean }).__rackuDeviceLoaded = true;
 
 const aborts: string[] = [];
 
@@ -42,7 +42,7 @@ export default device({
           u: ctx.slot.u,
           firmware: ctx.firmware,
           baseDir: ctx.baseDir,
-          env: process.env.RACK42U_TEST_ENV ?? null,
+          env: process.env.RACKU_TEST_ENV ?? null,
           config: ctx.config ?? null,
         }),
         // Deliberately violates the output schema.

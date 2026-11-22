@@ -27,8 +27,8 @@ import {
   patched,
   RackError,
   wholeResponse,
-} from "rack42u";
-import { Http } from "rack42u/std";
+} from "racku";
+import { Http } from "racku/std";
 import * as v from "valibot";
 
 const MiB = 1024 * 1024;
@@ -53,14 +53,14 @@ const MESSAGES_IN_FLIGHT = 16;
  * shorten it through the environment, which a Worker copies as it starts, so as not to wait.
  * Exported for the tests of its default.
  */
-export const SYNC_MS = Number(process.env.RACK42U_TEST_PANEL_SYNC_MS) || 30_000;
+export const SYNC_MS = Number(process.env.RACKU_TEST_PANEL_SYNC_MS) || 30_000;
 
 const whole = (low: number, high: number) =>
   v.pipe(v.number(), v.integer(), v.minValue(low), v.maxValue(high));
 const Pair = v.object({ cert: v.string(), key: v.string(), serverName: v.optional(v.string()) });
 
 /**
- * The configuration of the panel, with its defaults; `HttpPanelConfig` in `rack42u/std`
+ * The configuration of the panel, with its defaults; `HttpPanelConfig` in `racku/std`
  * describes the fields. Exported for the tests of its defaults.
  */
 export const PanelConfig = v.object({

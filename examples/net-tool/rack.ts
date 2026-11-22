@@ -5,8 +5,8 @@
  *
  * @decision .agents/decisions/261118_173845-net-tool-example.md#the-rack
  */
-import { rack, slot } from "rack42u";
-import { httpPanel } from "rack42u/std";
+import { rack, slot } from "racku";
+import { httpPanel } from "racku/std";
 
 /** The development server's origin, and the built app's on macOS and Linux, and on Windows. */
 const ORIGINS = ["http://localhost:5173", "tauri://localhost", "http://tauri.localhost"];

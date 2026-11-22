@@ -34,8 +34,8 @@ import {
   type SlotStatus,
   type StartOptions,
   slot,
-} from "rack42u";
-import { Http, type HttpPanelConfig, httpHandler, httpPanel } from "rack42u/std";
+} from "racku";
+import { Http, type HttpPanelConfig, httpHandler, httpPanel } from "racku/std";
 import * as v from "valibot";
 import { describeConnector } from "../src/connector.ts";
 import { planRack } from "../src/rack.ts";
@@ -67,7 +67,7 @@ const ROUTES = {
 const temporary: string[] = [];
 const apps: TempApp[] = [];
 afterEach(async () => {
-  delete process.env.RACK42U_TEST_PANEL_SYNC_MS;
+  delete process.env.RACKU_TEST_PANEL_SYNC_MS;
   setSystemTime();
   await Promise.all(temporary.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   await Promise.all(apps.splice(0).map((app) => app.remove()));
@@ -516,7 +516,7 @@ describe("http-panel files", () => {
     ).toLowerCase();
 
   test("a file that a device answers with goes out from disk with its Content-Length, above streamThreshold", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "rack42u-files-"));
+    const dir = await mkdtemp(join(tmpdir(), "racku-files-"));
     try {
       // Above httpHandler's streamThreshold of 16 MiB, where a stream would go out chunked.
       const size = 20 * MiB;
@@ -541,7 +541,7 @@ describe("http-panel files", () => {
   });
 
   test("a file that can't be read gets 502 with RACK_DEVICE_FAULT, and its path goes to the log only", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "rack42u-files-"));
+    const dir = await mkdtemp(join(tmpdir(), "racku-files-"));
     try {
       const { rec, get } = await panelRack();
       const unreadable = [join(dir, "gone.bin"), dir];
@@ -761,7 +761,7 @@ describe("http-panel swaps", () => {
 
   for (const how of ["reset", "restart"] as const) {
     test(`after a ${how} of the device behind a route, its sockets close with 1011, also ones that never send`, async () => {
-      process.env.RACK42U_TEST_PANEL_SYNC_MS = "200";
+      process.env.RACKU_TEST_PANEL_SYNC_MS = "200";
       const { running, rec, url, get } = await panelRack();
       const talks = await socketTo(url, "/chat?name=talks");
       const quiet = await socketTo(url, "/chat?name=quiet");
@@ -779,7 +779,7 @@ describe("http-panel swaps", () => {
   }
 
   test("after a panel crash, the device runs its close handler for the panel's sockets with 1006", async () => {
-    process.env.RACK42U_TEST_PANEL_SYNC_MS = "200";
+    process.env.RACKU_TEST_PANEL_SYNC_MS = "200";
     const routes = { "/chat": "chat.http", "/chat/*": "chat.http" };
     const { running, rec } = await startRack({
       slots: { 1: CHAT, 2: slot("./devices/crashing-panel.ts", { config: { port: 0, routes } }) },
@@ -801,7 +801,7 @@ describe("http-panel swaps", () => {
   });
 
   test("a socket that opens or closes while the panel checks its sockets stays as it is", async () => {
-    process.env.RACK42U_TEST_PANEL_SYNC_MS = "100";
+    process.env.RACKU_TEST_PANEL_SYNC_MS = "100";
     const { url } = await panelRack();
     const open = [];
     for (let i = 0; i < 10; i++) {
@@ -823,7 +823,7 @@ describe("http-panel swaps", () => {
 
 /** A directory with copies of the test certificates, which a test may overwrite. */
 async function certificates() {
-  const dir = await mkdtemp(join(tmpdir(), "rack42u-test-certs-"));
+  const dir = await mkdtemp(join(tmpdir(), "racku-test-certs-"));
   temporary.push(dir);
   for (const name of ["one", "two", "three"]) {
     for (const ext of ["crt", "key"]) {
@@ -1382,8 +1382,8 @@ describe("http/v2 and httpHandler", () => {
   });
 
   // @doc docs/guides/http.md#mounting-the-panel
-  test("Http and httpHandler come from rack42u/std, not rack42u", async () => {
-    const core = await import("rack42u");
+  test("Http and httpHandler come from racku/std, not racku", async () => {
+    const core = await import("racku");
     expect("Http" in core).toBe(false);
     expect("httpHandler" in core).toBe(false);
   });

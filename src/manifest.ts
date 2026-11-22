@@ -14,8 +14,8 @@ import { posix } from "node:path";
 import { isConnectorId, isIdentifierName } from "./connector.ts";
 import { RackError } from "./errors.ts";
 
-const SLOT: unique symbol = Symbol.for("rack42u.slot");
-const RACK: unique symbol = Symbol.for("rack42u.rack");
+const SLOT: unique symbol = Symbol.for("racku.slot");
+const RACK: unique symbol = Symbol.for("racku.rack");
 const DEVICE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 /** Options of {@link slot}. */
@@ -159,7 +159,7 @@ export function rack(name: string, spec: RackSpec): RackManifest {
   if ((spec as { panel?: unknown }).panel !== undefined) {
     throw new RackError(
       "RACK_MANIFEST",
-      `rack ${name}: the panel section is gone; mount httpPanel() from rack42u/std in a slot, or list it in a scanned rack's devices and roots`,
+      `rack ${name}: the panel section is gone; mount httpPanel() from racku/std in a slot, or list it in a scanned rack's devices and roots`,
     );
   }
   if (spec.devices !== undefined) {

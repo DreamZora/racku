@@ -1,5 +1,5 @@
 /**
- * Entry point of `rack42u/bench`: runs one device in a rack of its own, with stubs that a test
+ * Entry point of `racku/bench`: runs one device in a rack of its own, with stubs that a test
  * implements for its needs, and records what the device does.
  *
  * The bench writes a stub device file for each need, and a probe device file above the device
@@ -45,7 +45,7 @@ const STREAM_LIMIT = 16 * 1024 * 1024;
 
 /** A schema that accepts any value: stub and probe devices leave validation to the test. */
 const ANY: StandardSchemaV1 = {
-  "~standard": { version: 1, vendor: "rack42u", validate: (value: unknown) => ({ value }) },
+  "~standard": { version: 1, vendor: "racku", validate: (value: unknown) => ({ value }) },
 };
 
 /** A stream that crossed read whole: where it was in its value, and its bytes. */
@@ -643,7 +643,7 @@ export async function bench<N extends BenchNeeds = Record<never, Stub>>(
   const stubs = stubsFor(name, fru, needs);
 
   const id = randomBytes(8).toString("hex");
-  const channelName = `rack42u-bench-${id}`;
+  const channelName = `racku-bench-${id}`;
   const dir = join(baseDir, ".rack", "bench", id);
   const channel = new BroadcastChannel(channelName);
   const events = new Records<BenchEvent>();
@@ -877,7 +877,7 @@ async function writeRack(
 
 /** The two lines of a device file that the bench writes. */
 function deviceFile(factory: "stubDevice" | "probeDevice", spec: unknown): string {
-  return `import { ${factory} } from "rack42u/bench";\nexport default ${factory}(${JSON.stringify(spec)});\n`;
+  return `import { ${factory} } from "racku/bench";\nexport default ${factory}(${JSON.stringify(spec)});\n`;
 }
 
 function isDeviceName(name: string): boolean {

@@ -1,4 +1,4 @@
-import { device } from "rack42u";
+import { device } from "racku";
 import * as v from "valibot";
 import { Busy } from "../connectors.ts";
 
@@ -14,7 +14,7 @@ function spin(ms: number): void {
 
 /**
  * A provider for race tests. `activateDelayMs` slows `activate` down. An instance whose Worker
- * starts while `RACK42U_TEST_CRASH_AFTER_ACTIVATE_MS` is set exits that long after `activate`.
+ * starts while `RACKU_TEST_CRASH_AFTER_ACTIVATE_MS` is set exits that long after `activate`.
  */
 export default device({
   model: "busy",
@@ -32,7 +32,7 @@ export default device({
   async activate(ctx) {
     ctx.log.info("busy activating");
     if (ctx.config.activateDelayMs !== undefined) await Bun.sleep(ctx.config.activateDelayMs);
-    const crashAfter = process.env.RACK42U_TEST_CRASH_AFTER_ACTIVATE_MS;
+    const crashAfter = process.env.RACKU_TEST_CRASH_AFTER_ACTIVATE_MS;
     if (crashAfter !== undefined) setTimeout(() => process.exit(4), Number(crashAfter));
   },
 });

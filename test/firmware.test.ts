@@ -9,8 +9,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { rack, slot, start } from "rack42u";
-import { bench } from "rack42u/bench";
+import { rack, slot, start } from "racku";
+import { bench } from "racku/bench";
 import {
   buildFirmware,
   explainMissingPackage,
@@ -64,7 +64,7 @@ describe("buildFirmware", () => {
     const { dir } = await app();
     const firmware = await buildFirmware(join(dir, "devices/counter.ts"), dir);
     const code = await Bun.file(firmware.path).text();
-    expect(code).toMatch(/from\s*"rack42u"/);
+    expect(code).toMatch(/from\s*"racku"/);
     expect(code).toMatch(/from\s*"valibot"/);
     // Bundled framework code would carry the connector() implementation.
     expect(code).not.toContain("must look like");
@@ -79,7 +79,7 @@ describe("buildFirmware", () => {
     await created.write("lib/greeting.ts", 'export const greeting = "first";\n');
     await created.write(
       "devices/greeter.ts",
-      'import { device } from "rack42u";\nimport { greeting } from "@lib/greeting.ts";\nexport default device({ model: greeting });\n',
+      'import { device } from "racku";\nimport { greeting } from "@lib/greeting.ts";\nexport default device({ model: greeting });\n',
     );
     const source = join(created.dir, "devices/greeter.ts");
     const before = await buildFirmware(source, created.dir);
@@ -118,13 +118,13 @@ describe("a base directory outside the app", () => {
     await Promise.all(outside.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
   async function outsideDir(): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "rack42u-outside-"));
+    const dir = await mkdtemp(join(tmpdir(), "racku-outside-"));
     outside.push(dir);
     return dir;
   }
   function expectExplained(error: { code: string; message: string }, baseDir: string): void {
     expect(error.code).toBe("RACK_MANIFEST");
-    expect(error.message).toMatch(/Cannot find package '(rack42u|valibot)'/);
+    expect(error.message).toMatch(/Cannot find package '(racku|valibot)'/);
     expect(error.message).toContain(
       `so the base directory, ${baseDir}, must lie inside the app, below the node_modules`,
     );
@@ -153,8 +153,8 @@ describe("a base directory outside the app", () => {
     expect(explainMissingPackage(missing("valibot"), firmware, "/elsewhere")).toContain(
       "below the node_modules that holds valibot",
     );
-    expect(explainMissingPackage(missing("rack42u"), firmware, "/elsewhere")).toContain(
-      "below the node_modules that holds rack42u",
+    expect(explainMissingPackage(missing("racku"), firmware, "/elsewhere")).toContain(
+      "below the node_modules that holds racku",
     );
     // A package that the device file can't import either is missing from the app.
     expect(explainMissingPackage(missing("not-installed-anywhere"), firmware, "/elsewhere")).toBe(
@@ -290,11 +290,11 @@ describe("importFirmware", () => {
   test("fails at once for a bundle not on disk, one that throws, and one missing a module", async () => {
     const { dir } = await app();
     await Bun.write(join(dir, "throws.js"), 'throw new Error("broken at load");\n');
-    await Bun.write(join(dir, "needs-absent.js"), 'import "rack42u-absent";\nexport default 1;\n');
+    await Bun.write(join(dir, "needs-absent.js"), 'import "racku-absent";\nexport default 1;\n');
     const cases = [
       ["absent.js", "Cannot find module"],
       ["throws.js", "broken at load"],
-      ["needs-absent.js", "Cannot find package 'rack42u-absent'"],
+      ["needs-absent.js", "Cannot find package 'racku-absent'"],
     ] as const;
     for (const [file, message] of cases) {
       let attempts = 0;
@@ -330,7 +330,7 @@ describe("importFirmware", () => {
             const path = join(dir, ".rack", "firmware", `w${index}-${round}.js`);
             await Bun.write(
               path,
-              `import { device } from "rack42u";\nexport default typeof device === "function" ? ${round} : -1;\n`,
+              `import { device } from "racku";\nexport default typeof device === "function" ? ${round} : -1;\n`,
             );
             return ask(worker, Bun.pathToFileURL(path).href);
           }),

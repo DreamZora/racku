@@ -1,14 +1,14 @@
 export const meta = {
-  name: 'rack42u-trials',
-  description: 'Build the four trial apps on rack42u, two at a time, and merge the problems they meet into issues.json',
-  whenToUse: 'When the user asks, in .agents/trials/ of the rack42u repository, to run a round of trials. Pass the token budget the user names as args, such as "2M", or { budget, apps } to run only some apps; the workflow does not start without a budget.',
+  name: 'racku-trials',
+  description: 'Build the four trial apps on racku, two at a time, and merge the problems they meet into issues.json',
+  whenToUse: 'When the user asks, in .agents/trials/ of the racku repository, to run a round of trials. Pass the token budget the user names as args, such as "2M", or { budget, apps } to run only some apps; the workflow does not start without a budget.',
   phases: [
     { title: 'Trials', detail: 'one agent per app, two at a time', model: 'sonnet' },
     { title: 'Merge', detail: 'the problems of every app, merged into issues.json', model: 'sonnet' },
   ],
 }
 
-// The trials of rack42u, as .agents/decisions/261119_074252-trial-apps.md decides: four apps, two
+// The trials of racku, as .agents/decisions/261119_074252-trial-apps.md decides: four apps, two
 // at a time, on Sonnet 5.5, within the token budget that the user gives the run.
 
 const ROUNDS = [
@@ -36,7 +36,7 @@ const PROBLEM = {
       description: 'The section of the skill or of the documentation, or the part of the API, and what it lacked',
     },
     workaround: { type: 'string', description: 'How the agent went on' },
-    readSource: { type: 'boolean', description: "Whether the agent had to read rack42u's source to go on" },
+    readSource: { type: 'boolean', description: "Whether the agent had to read racku's source to go on" },
     cost: { type: 'string', enum: COST },
   },
   required: ['title', 'doing', 'happened', 'expected', 'fellShort', 'where', 'workaround', 'readSource', 'cost'],
@@ -46,7 +46,7 @@ const RESULT = {
   type: 'object',
   properties: {
     app: { type: 'string' },
-    commit: { type: 'string', description: 'The rack42u commit that the app installed' },
+    commit: { type: 'string', description: 'The racku commit that the app installed' },
     works: { type: 'array', items: { type: 'string' } },
     doesNotWork: { type: 'array', items: { type: 'string' } },
     checks: {
@@ -70,7 +70,7 @@ const ISSUE = {
     title: { type: 'string', description: 'The title of the issue, without a prefix' },
     kind: { type: 'string', enum: ['bug', 'documentation', 'enhancement'] },
     apps: { type: 'array', items: { type: 'string' }, description: 'The apps that met the problem' },
-    commit: { type: 'string', description: 'The rack42u commit that the apps installed' },
+    commit: { type: 'string', description: 'The racku commit that the apps installed' },
     doing: { type: 'string' },
     happened: { type: 'string', description: 'The commands and output of every app that met it, as they were' },
     expected: { type: 'string' },
@@ -115,22 +115,22 @@ const MERGED = {
 function trialPrompt(app) {
   return [
     `Build the trial app \`${app}\`, in the subfolder \`${app}/\` of this folder, as \`${app}/SPEC.md\` asks.`,
-    `This folder's CLAUDE.md says how to work: what you may know of rack42u, how to add it, which commands you may run, and how to keep \`${app}/TRIAL.md\`. Write each problem into \`${app}/TRIAL.md\` when you meet it.`,
+    `This folder's CLAUDE.md says how to work: what you may know of racku, how to add it, which commands you may run, and how to keep \`${app}/TRIAL.md\`. Write each problem into \`${app}/TRIAL.md\` when you meet it.`,
     `When the app is done, or when you can't take it further, finish \`${app}/TRIAL.md\` with its summary.`,
-    'Then answer with the result: the rack42u commit you installed, what works and what does not, whether each check of the spec passes, and every problem of TRIAL.md, in its fields.',
+    'Then answer with the result: the racku commit you installed, what works and what does not, whether each check of the spec passes, and every problem of TRIAL.md, in its fields.',
   ].join('\n\n')
 }
 
 function mergePrompt(results) {
   return [
-    'These are the results of a round of trials, in which agents built apps on rack42u, knowing it only from its skill and its documentation:',
+    'These are the results of a round of trials, in which agents built apps on racku, knowing it only from its skill and its documentation:',
     '```json\n' + JSON.stringify(results, null, 2) + '\n```',
     "You can also read each app's `TRIAL.md` in its subfolder of this folder, but change nothing there.",
-    'Merge the problems into the list of issues to file for rack42u, one per distinct problem:',
+    'Merge the problems into the list of issues to file for racku, one per distinct problem:',
     [
       '- Problems that several apps met, with one cause, are one issue: it names every app, and keeps the commands and output of each.',
       "- A problem that only the trial agent's own mistake caused is an issue only when the skill or the documentation could have prevented it. Otherwise leave it out, and say why.",
-      '- `kind` is `bug` when rack42u does not do what its documentation says; `documentation` when the skill or the documentation is wrong, unclear, or missing something; and `enhancement` when the API or an error message should change.',
+      '- `kind` is `bug` when racku does not do what its documentation says; `documentation` when the skill or the documentation is wrong, unclear, or missing something; and `enhancement` when the API or an error message should change.',
       '- Keep commands and output as they were: they are the evidence.',
     ].join('\n'),
     'Write the result to `issues.json` in this folder, as the JSON you answer with, and answer with it.',

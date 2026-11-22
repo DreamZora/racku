@@ -2,13 +2,13 @@
 
 ## The bench
 
-`rack42u/bench` runs one device in a rack of its own, with a stub for each of its needs that the test implements, and records what the device does. For the greeter of [Devices](devices.md):
+`racku/bench` runs one device in a rack of its own, with a stub for each of its needs that the test implements, and records what the device does. For the greeter of [Devices](devices.md):
 
 ```ts
 // devices/greeter.test.ts
 import { expect, test } from "bun:test";
-import { bench, stub } from "rack42u/bench";
-import { Kv } from "rack42u/std";
+import { bench, stub } from "racku/bench";
+import { Kv } from "racku/std";
 
 test("greeter greets and remembers the last name", async () => {
   const store = new Map<string, string>();
@@ -41,7 +41,7 @@ test("greeter greets and remembers the last name", async () => {
 
 A need without a stub, a stub of another connector, and a stub for a need the device doesn't have fail with `RACK_MANIFEST`. Otherwise `bench()` fails as `start()` does.
 
-A test that gives the bench a base directory of its own, such as for the files that the device writes, makes it inside the app, such as in a folder that git ignores: firmware imports rack42u and the app's packages from the base directory, and a base directory outside the app fails with `RACK_MANIFEST`, whose message says so.
+A test that gives the bench a base directory of its own, such as for the files that the device writes, makes it inside the app, such as in a folder that git ignores: firmware imports racku and the app's packages from the base directory, and a base directory outside the app fails with `RACK_MANIFEST`, whose message says so.
 
 ## Stubs
 
@@ -81,8 +81,8 @@ A swap hands the device's in-memory state from its old instance to its new one, 
 // devices/greeter-swap.test.ts
 import { expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
-import { bench, stub } from "rack42u/bench";
-import { Kv } from "rack42u/std";
+import { bench, stub } from "racku/bench";
+import { Kv } from "racku/std";
 
 test("greeter greets on across swaps", async () => {
   await using greeter = await bench(new URL("./greeter.ts", import.meta.url), {

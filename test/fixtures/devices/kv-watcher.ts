@@ -1,5 +1,5 @@
-import { device } from "rack42u";
-import { Kv } from "rack42u/std";
+import { device } from "racku";
+import { Kv } from "racku/std";
 import * as v from "valibot";
 import { Watcher } from "../connectors.ts";
 

@@ -6,8 +6,8 @@
  * @decision .agents/decisions/261118_173845-net-tool-example.md#the-windows-protocol
  */
 import { createHash, timingSafeEqual } from "node:crypto";
-import { device, isRackError } from "rack42u";
-import { Http, type HttpHandler, httpHandler } from "rack42u/std";
+import { device, isRackError } from "racku";
+import { Http, type HttpHandler, httpHandler } from "racku/std";
 import * as v from "valibot";
 import { Address, Net } from "../connectors.ts";
 

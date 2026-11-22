@@ -1,4 +1,4 @@
-import { device, type RackError } from "rack42u";
+import { device, type RackError } from "racku";
 import { Busy, Client } from "../connectors.ts";
 
 function spin(ms: number): void {

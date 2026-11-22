@@ -1,4 +1,4 @@
-import { device, RackError } from "rack42u";
+import { device, RackError } from "racku";
 import { Streams } from "../connectors.ts";
 
 /** Bytes the instance's sources made. */

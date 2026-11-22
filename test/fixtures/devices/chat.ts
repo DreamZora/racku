@@ -1,5 +1,5 @@
-import { device, RackError } from "rack42u";
-import { Http, type HttpHandler, httpHandler } from "rack42u/std";
+import { device, RackError } from "racku";
+import { Http, type HttpHandler, httpHandler } from "racku/std";
 import * as v from "valibot";
 
 type Data = { name: string };

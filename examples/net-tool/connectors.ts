@@ -3,7 +3,7 @@
  *
  * @decision .agents/decisions/261118_173845-net-tool-example.md#netv1
  */
-import { connector, event, rpc } from "rack42u";
+import { connector, event, rpc } from "racku";
 import * as v from "valibot";
 
 const Port = v.pipe(v.number(), v.integer(), v.minValue(0), v.maxValue(65_535));

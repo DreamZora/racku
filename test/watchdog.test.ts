@@ -8,7 +8,7 @@
  * @decision .agents/decisions/261117_062959-watchdog.md#configuration-and-observation
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { type RackHandle, slot } from "rack42u";
+import { type RackHandle, slot } from "racku";
 import { crashWindow } from "../src/rack.ts";
 import {
   Cli,
@@ -40,7 +40,7 @@ async function pipeIn(created: TempApp): Promise<BlockingPipe> {
   return pipe;
 }
 
-const CONNECTORS = `import { connector, rpc } from "rack42u";
+const CONNECTORS = `import { connector, rpc } from "racku";
 import * as v from "valibot";
 
 export const Probe = connector("demo.probe/v1", {
@@ -59,7 +59,7 @@ export const Probe = connector("demo.probe/v1", {
  */
 function probe(options: { activate?: string; deactivate?: string; version?: string } = {}) {
   return `import { readFileSync } from "node:fs";
-import { device } from "rack42u";
+import { device } from "racku";
 import { Probe } from "../connectors.ts";
 
 const VERSION = "${options.version ?? "v1"}";
@@ -413,7 +413,7 @@ describe("configuration and observation", () => {
     const created = await app(probe());
     await created.write(
       "rack.ts",
-      'import { rack, slot } from "rack42u";\n\nexport default rack("probe", { slots: { 1: slot("./devices/probe.ts") } });\n',
+      'import { rack, slot } from "racku";\n\nexport default rack("probe", { slots: { 1: slot("./devices/probe.ts") } });\n',
     );
     const watched = new Cli(["start"], created.dir);
     processes.push(watched);

@@ -6,8 +6,8 @@
 
 ```ts
 // devices/web.ts
-import { device } from "rack42u";
-import { Http, httpHandler } from "rack42u/std";
+import { device } from "racku";
+import { Http, httpHandler } from "racku/std";
 import { Greeter } from "../connectors.ts";
 
 export default device({

@@ -1,5 +1,5 @@
 /**
- * Entry point of `rack42u`: connectors, devices, rack manifests, and the rack runtime.
+ * Entry point of `racku`: connectors, devices, rack manifests, and the rack runtime.
  *
  * @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#repository-layout
  * @decision .agents/decisions/261112_043034-device-api.md

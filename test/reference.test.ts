@@ -61,7 +61,7 @@ function exportsOf(text: string): string[] {
   return found.sort();
 }
 
-// @doc docs/reference/api.md#rack42u
+// @doc docs/reference/api.md#racku
 // @doc docs/reference/api.md#connectors
 // @doc docs/reference/api.md#devices
 // @doc docs/reference/api.md#errors
@@ -72,19 +72,19 @@ function exportsOf(text: string): string[] {
 // @doc docs/reference/api.md#metrics
 // @doc docs/reference/api.md#logs
 // @doc docs/reference/api.md#schemas
-// @doc docs/reference/api.md#rack42ustd
+// @doc docs/reference/api.md#rackustd
 // @doc docs/reference/api.md#standard-connectors
 // @doc docs/reference/api.md#standard-devices
 // @doc docs/reference/api.md#http-handlers
-// @doc docs/reference/api.md#rack42ubench
+// @doc docs/reference/api.md#rackubench
 // @doc docs/reference/api.md#the-bench
 // @doc docs/reference/api.md#device-files-of-the-bench
 test("the API reference lists every export of the three entry points, and nothing else", async () => {
   const api = await read("docs/reference/api.md");
   const entries = {
-    rack42u: "src/index.ts",
-    "rack42u/std": "src/std/index.ts",
-    "rack42u/bench": "src/bench.ts",
+    racku: "src/index.ts",
+    "racku/std": "src/std/index.ts",
+    "racku/bench": "src/bench.ts",
   };
   for (const [entry, file] of Object.entries(entries)) {
     const start = api.indexOf(`\n## ${entry}\n`);

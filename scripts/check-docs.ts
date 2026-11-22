@@ -11,7 +11,7 @@
  *   `docs/`.
  * - A skill's links stay in its own folder, since an app copies that folder away from the rest of
  *   the package. A skill names the documentation by its path in an app instead, in code such as
- *   `node_modules/rack42u/docs/guides/devices.md#hooks`: every such path, in any document, leads
+ *   `node_modules/racku/docs/guides/devices.md#hooks`: every such path, in any document, leads
  *   to a file, a directory, or a heading of this repository.
  *
  * Run it from the repository root with `bun run check:docs`. It prints one
@@ -69,7 +69,7 @@ const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 /** A skill's folder, `skills/<name>/`, which an app copies on its own. */
 const SKILL_FOLDER = /^skills\/[^/]+\//;
 /** A path in an app to a file of the installed package, and its anchor. */
-const PACKAGE_PATH = /^node_modules\/rack42u\/([^\s#]*)(?:#(\S+))?$/;
+const PACKAGE_PATH = /^node_modules\/racku\/([^\s#]*)(?:#(\S+))?$/;
 
 /**
  * Checks the documentation under a repository root against its tests and its links.
@@ -211,7 +211,7 @@ async function checkLink(
       return `${target} leads outside the repository`;
     const skill = SKILL_FOLDER.exec(document.file)?.[0];
     if (skill !== undefined && !`${resolved}/`.startsWith(skill)) {
-      const path = `node_modules/rack42u/${resolved}${anchor === undefined ? "" : `#${anchor}`}`;
+      const path = `node_modules/racku/${resolved}${anchor === undefined ? "" : `#${anchor}`}`;
       return `${target} leaves the skill's folder, which an app copies on its own; name the file by its path in an app, \`${path}\``;
     }
     if (!(await exists(join(root, resolved))))
@@ -227,7 +227,7 @@ async function checkLink(
 
 /**
  * Checks a path in an app to a file of the installed package, such as
- * `node_modules/rack42u/docs/guides/devices.md#hooks`, against this repository.
+ * `node_modules/racku/docs/guides/devices.md#hooks`, against this repository.
  *
  * @returns The problem, or `undefined` when the path leads to a file, a directory, or a heading.
  */

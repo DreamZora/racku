@@ -8,7 +8,7 @@ A connector lists RPC methods (`rpc(input, output)`) and events (`event(payload)
 
 ```ts
 // connectors.ts
-import { connector, event, rpc } from "rack42u";
+import { connector, event, rpc } from "racku";
 import * as v from "valibot";
 
 export const Greeter = connector("acme.greeter/v1", {

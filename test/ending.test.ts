@@ -12,7 +12,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { type RackHandle, type SlotStatus, type StartOptions, slot } from "rack42u";
+import { type RackHandle, type SlotStatus, type StartOptions, slot } from "racku";
 import { errorOf, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 import { type BlockingPipe, blockingPipe } from "./fixtures/pipe.ts";
 
@@ -26,7 +26,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
-const CONNECTORS = `import { connector, rpc } from "rack42u";
+const CONNECTORS = `import { connector, rpc } from "racku";
 import * as v from "valibot";
 
 export const Jam = connector("demo.jam/v1", {
@@ -55,7 +55,7 @@ interface JamOptions {
  */
 function jam(app: TempApp, options: JamOptions = {}): string {
   return `import { appendFileSync, readFileSync } from "node:fs";
-import { device } from "rack42u";
+import { device } from "racku";
 import { Jam } from "../connectors.ts";
 
 const VERSION = ${JSON.stringify(options.version ?? "v1")};

@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { type RackManifest, rack, start } from "rack42u";
+import { type RackManifest, rack, start } from "racku";
 import { compileRack } from "../src/compile.ts";
 import { planRack, reloadHotplug } from "../src/rack.ts";
 import {
@@ -114,13 +114,13 @@ describe("hot-plug directories", () => {
     await app.write(
       "plugins/greedy.ts",
       tool("greedy", "text", "\n  needs: { tools: every(Tool) },").replace(
-        'import { device } from "rack42u";',
-        'import { device, every } from "rack42u";',
+        'import { device } from "racku";',
+        'import { device, every } from "racku";',
       ),
     );
     await app.write(
       "plugins/failing.ts",
-      `import { device } from "rack42u";
+      `import { device } from "racku";
 import { Tool } from "../connectors.ts";
 
 export default device({
@@ -249,7 +249,7 @@ export default device({
     );
     await app.write(
       "devices/extra.ts",
-      `import { device } from "rack42u";
+      `import { device } from "racku";
 import { Extra } from "../connectors.ts";
 export default device({ model: "extra", provides: { extra: Extra }, powerOn: () => ({ extra: { ping: () => "pong" } }) });
 `,
@@ -338,7 +338,7 @@ describe("the rack command with hot-plug directories", () => {
     const app = await hotplugApp();
     await app.write(
       "rack.ts",
-      `import { rack } from "rack42u";\n\nexport default rack("app", ${JSON.stringify(SPEC)});\n`,
+      `import { rack } from "racku";\n\nexport default rack("app", ${JSON.stringify(SPEC)});\n`,
     );
     const cli = new Cli(["dev"], app.dir);
     running.push(cli);
@@ -356,7 +356,7 @@ describe("the rack command with hot-plug directories", () => {
     const app = await hotplugApp();
     await app.write(
       "rack.ts",
-      `import { rack } from "rack42u";\n\nexport default rack("app", ${JSON.stringify(SPEC)});\n`,
+      `import { rack } from "racku";\n\nexport default rack("app", ${JSON.stringify(SPEC)});\n`,
     );
     const cli = new Cli(["start"], app.dir);
     running.push(cli);
@@ -441,7 +441,7 @@ describe("the tools app of the hot-plug guide", () => {
       // A new file runs at the next reload, which the watch of rack start or rack dev starts.
       await app.write(
         "tools/plugins/twice.ts",
-        `import { device } from "rack42u";
+        `import { device } from "racku";
 import { Transform } from "../connectors.ts";
 
 export default device({

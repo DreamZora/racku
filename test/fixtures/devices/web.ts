@@ -1,5 +1,5 @@
-import { device, fileResponse } from "rack42u";
-import { Http, httpHandler } from "rack42u/std";
+import { device, fileResponse } from "racku";
+import { Http, httpHandler } from "racku/std";
 
 // Tests that exercise `rack dev` edit this line in a copy of the file.
 const GREETING = "hello";

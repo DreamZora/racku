@@ -40,8 +40,8 @@ export type Ports = Record<string, Connector>;
 /** Ports of a device that declares none. */
 export type NoPorts = Record<never, Connector>;
 
-/** Brand of own needs; a global symbol, because a bundle may carry its own copy of rack42u. */
-const OWN: unique symbol = Symbol.for("rack42u.own");
+/** Brand of own needs; a global symbol, because a bundle may carry its own copy of racku. */
+const OWN: unique symbol = Symbol.for("racku.own");
 
 /** A need that asks for a copy of its provider that serves only this instance; see {@link own}. */
 export interface Own<C extends Connector = Connector> {
@@ -50,8 +50,8 @@ export interface Own<C extends Connector = Connector> {
   readonly connector: C;
 }
 
-/** Brand of patched needs; a global symbol, because a bundle may carry its own copy of rack42u. */
-const PATCHED: unique symbol = Symbol.for("rack42u.patched");
+/** Brand of patched needs; a global symbol, because a bundle may carry its own copy of racku. */
+const PATCHED: unique symbol = Symbol.for("racku.patched");
 
 /** A need wired to the port at an address; see {@link patched}. */
 export interface Patched<C extends Connector = Connector> {
@@ -62,8 +62,8 @@ export interface Patched<C extends Connector = Connector> {
   readonly address: string;
 }
 
-/** Brand of every needs; a global symbol, because a bundle may carry its own copy of rack42u. */
-const EVERY: unique symbol = Symbol.for("rack42u.every");
+/** Brand of every needs; a global symbol, because a bundle may carry its own copy of racku. */
+const EVERY: unique symbol = Symbol.for("racku.every");
 
 /** A need for every device below that provides a connector; see {@link every}. */
 export interface Every<C extends Connector = Connector> {
@@ -509,7 +509,7 @@ export interface DeviceSpec<
 }
 
 /** Brand of device definitions; a global symbol, because a bundle may carry its own copy. */
-export const DEVICE: unique symbol = Symbol.for("rack42u.device");
+export const DEVICE: unique symbol = Symbol.for("racku.device");
 
 /** A device definition, the default export of a device file. */
 export interface DeviceDefinition<

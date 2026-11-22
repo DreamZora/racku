@@ -1,4 +1,4 @@
-import { connector, device, rpc } from "rack42u";
+import { connector, device, rpc } from "racku";
 import { z } from "zod";
 
 /**

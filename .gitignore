@@ -112,7 +112,7 @@ dist
 # TernJS port file
 .tern-port
 
-# rack42u runtime output (firmware bundles)
+# racku runtime output (firmware bundles)
 .rack/
 
 # The net tool's Tauri shell: build output and generated schemas

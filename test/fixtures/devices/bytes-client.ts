@@ -1,4 +1,4 @@
-import { device, type RackError } from "rack42u";
+import { device, type RackError } from "racku";
 import { Bytes, BytesClient } from "../connectors.ts";
 
 /** Calls the bytes provider from inside the rack, and writes into shared buffers it receives. */

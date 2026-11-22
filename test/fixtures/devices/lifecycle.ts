@@ -1,4 +1,4 @@
-import { type DeviceLog, device } from "rack42u";
+import { type DeviceLog, device } from "racku";
 import * as v from "valibot";
 import { Hook, Life } from "../connectors.ts";
 

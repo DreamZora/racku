@@ -1,4 +1,4 @@
-import { device } from "rack42u";
+import { device } from "racku";
 import panel from "../../../src/std/http-panel.ts";
 import { PanelControl } from "../connectors.ts";
 

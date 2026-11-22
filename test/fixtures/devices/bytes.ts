@@ -1,4 +1,4 @@
-import { device, RackError } from "rack42u";
+import { device, RackError } from "racku";
 import { Bytes } from "../connectors.ts";
 
 let kept: Uint8Array<ArrayBuffer> | undefined;

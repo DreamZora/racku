@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { device } from "rack42u";
+import { device } from "racku";
 import { Located } from "../connectors.ts";
 import { helperPaths } from "./_located/where.ts";
 

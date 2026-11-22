@@ -9,7 +9,7 @@
  * - a file in the app's directory, outside `node_modules`, has its path from that directory, with
  *   `/`, such as `devices/greeter.ts`; in the executable, that path under the base directory is
  *   where its outside file goes;
- * - any other file, such as one of rack42u's own devices, has `~/` and that path, with `_up_` for
+ * - any other file, such as one of racku's own devices, has `~/` and that path, with `_up_` for
  *   each `..`; in the executable, it has that path under the executable's root, where no file
  *   is.
  *
@@ -52,13 +52,13 @@ export interface Packaged {
 }
 
 /** The symbol under which the Worker host of an executable puts the modules that firmware imports. */
-export const HOST_MODULES: unique symbol = Symbol.for("rack42u.hostModules");
+export const HOST_MODULES: unique symbol = Symbol.for("racku.hostModules");
 
 /** The symbol of the function that packaged code calls for its `import.meta` paths. */
-const IMPORT_META: unique symbol = Symbol.for("rack42u.importMeta");
+const IMPORT_META: unique symbol = Symbol.for("racku.importMeta");
 
 /** The symbol of the base directory that the function names app files under, in each thread. */
-const BASE_DIR: unique symbol = Symbol.for("rack42u.baseDir");
+const BASE_DIR: unique symbol = Symbol.for("racku.baseDir");
 
 const KEY_UP = "_up_";
 
@@ -124,7 +124,7 @@ export function setBaseDir(baseDir: string): void {
  * @param what The path: `url`, `dir`, `dirname`, `path`, or `filename`.
  */
 export function importMetaExpression(key: string, what: string): string {
-  return `globalThis[Symbol.for("rack42u.importMeta")](${JSON.stringify(key)}, ${JSON.stringify(what)})`;
+  return `globalThis[Symbol.for("racku.importMeta")](${JSON.stringify(key)}, ${JSON.stringify(what)})`;
 }
 
 /**

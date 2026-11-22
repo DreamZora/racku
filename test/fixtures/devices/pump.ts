@@ -1,4 +1,4 @@
-import { device } from "rack42u";
+import { device } from "racku";
 import { Counter, Probe, Pump } from "../connectors.ts";
 
 /** Calls a probe and a counter below it when asked to. */

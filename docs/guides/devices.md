@@ -8,8 +8,8 @@ A device file default-exports `device({...})`. `powerOn` returns the implementat
 
 ```ts
 // devices/greeter.ts
-import { device } from "rack42u";
-import { Kv } from "rack42u/std";
+import { device } from "racku";
+import { Kv } from "racku/std";
 import * as v from "valibot";
 import { Greeter } from "../connectors.ts";
 

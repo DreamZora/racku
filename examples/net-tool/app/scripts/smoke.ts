@@ -17,7 +17,7 @@ import { cp, mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-const ID = "dev.rack42u.net-tool";
+const ID = "dev.racku.net-tool";
 const WINDOWS = process.platform === "win32";
 const MACOS = process.platform === "darwin";
 const EXE = WINDOWS ? ".exe" : "";

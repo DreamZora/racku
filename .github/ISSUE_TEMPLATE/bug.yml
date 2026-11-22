@@ -1,11 +1,11 @@
 name: Bug
-description: rack42u doesn't do what its documentation says.
+description: racku doesn't do what its documentation says.
 labels: ["bug"]
 body:
   - type: input
     id: version
     attributes:
-      label: rack42u version or commit
+      label: racku version or commit
     validations:
       required: true
   - type: input

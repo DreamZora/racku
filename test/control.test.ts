@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { existsSync } from "node:fs";
 import { chmod, mkdir, stat, symlink, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { type SlotStatus, slot } from "rack42u";
+import { type SlotStatus, slot } from "racku";
 import { type ControlFile, controlPaths, controlTransport } from "../src/control.ts";
 import {
   Cli,
@@ -50,7 +50,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
-const MANIFEST = `import { rack, slot } from "rack42u";
+const MANIFEST = `import { rack, slot } from "racku";
 
 export default rack("ctl", { slots: { 1: slot("./devices/counter.ts") } });
 `;
@@ -293,15 +293,15 @@ describe("transports by platform", () => {
     };
     try {
       process.env.LOCALAPPDATA = "C:\\Users\\ada\\AppData\\Local";
-      expect(controlPaths("/app", "win32").dir).toContain("rack42u");
+      expect(controlPaths("/app", "win32").dir).toContain("racku");
       expect(controlPaths("/app", "win32").dir.startsWith(process.env.LOCALAPPDATA)).toBe(true);
       process.env.XDG_RUNTIME_DIR = "/run/user/1000";
-      expect(controlPaths("/app", "linux").dir).toBe("/run/user/1000/rack42u");
+      expect(controlPaths("/app", "linux").dir).toBe("/run/user/1000/racku");
       delete process.env.XDG_RUNTIME_DIR;
       process.env.XDG_STATE_HOME = "/var/state/ada";
-      expect(controlPaths("/app", "linux").dir).toBe("/var/state/ada/rack42u/control");
+      expect(controlPaths("/app", "linux").dir).toBe("/var/state/ada/racku/control");
       delete process.env.XDG_STATE_HOME;
-      expect(controlPaths("/app", "linux").dir).toContain(".local/state/rack42u/control");
+      expect(controlPaths("/app", "linux").dir).toContain(".local/state/racku/control");
       expect(controlPaths("/app", "linux").socket).not.toContain("/app/");
     } finally {
       if (saved.local === undefined) delete process.env.LOCALAPPDATA;
@@ -368,7 +368,7 @@ describe.skipIf(!WINDOWS)("Windows defaults", () => {
       await rack.waitFor(/control listening/);
       expect(rack.output).toMatch(/control listening .*http:\/\/127\.0\.0\.1:\d+/);
       const paths = controlPaths(created.dir);
-      expect(paths.file.startsWith(join(local, "rack42u", "control"))).toBe(true);
+      expect(paths.file.startsWith(join(local, "racku", "control"))).toBe(true);
       const { url } = (await Bun.file(paths.file).json()) as ControlFile;
       expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
       const status = run(["ctl", "status"], created.dir, { LOCALAPPDATA: local });

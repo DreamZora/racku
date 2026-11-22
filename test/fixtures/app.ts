@@ -17,7 +17,7 @@ import {
   rack,
   type StartOptions,
   start,
-} from "rack42u";
+} from "racku";
 
 /** The repository root. */
 export const ROOT = join(import.meta.dir, "..", "..");
@@ -58,7 +58,7 @@ const CONSOLE_HOST = join(import.meta.dir, "console-host.ts");
 const CONTROL_PARENT = WINDOWS ? tmpdir() : "/tmp";
 
 /** The name of a test run's runtime directory, before the id of the run's process. */
-const CONTROL_PREFIX = "rack42u-test-control-";
+const CONTROL_PREFIX = "racku-test-control-";
 
 /**
  * The runtime directory of the `rack` processes that tests start, so their management sockets
@@ -134,9 +134,9 @@ export interface TempApp {
  * @param from Directory that `copy` paths are relative to inside the app; defaults to the root.
  */
 export async function tempApp(copy: string[] = [], from = ROOT): Promise<TempApp> {
-  const dir = await mkdtemp(join(tmpdir(), "rack42u-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "racku-test-"));
   await mkdir(join(dir, "node_modules", "@standard-schema"), { recursive: true });
-  await symlink(ROOT, join(dir, "node_modules", "rack42u"), "dir");
+  await symlink(ROOT, join(dir, "node_modules", "racku"), "dir");
   await symlink(join(ROOT, "node_modules", "valibot"), join(dir, "node_modules", "valibot"), "dir");
   await symlink(
     join(ROOT, "node_modules", "@standard-schema", "spec"),
@@ -146,10 +146,10 @@ export async function tempApp(copy: string[] = [], from = ROOT): Promise<TempApp
   await Bun.write(
     join(dir, "package.json"),
     JSON.stringify({
-      name: "rack42u-test-app",
+      name: "racku-test-app",
       private: true,
       type: "module",
-      dependencies: { rack42u: "*", valibot: "*" },
+      dependencies: { racku: "*", valibot: "*" },
     }),
   );
   for (const path of copy) {

@@ -1,12 +1,12 @@
 name: Feature
-description: Something rack42u should do that it doesn't.
+description: Something racku should do that it doesn't.
 labels: ["enhancement"]
 body:
   - type: textarea
     id: problem
     attributes:
       label: The problem
-      description: What you want to build, and where rack42u stops you.
+      description: What you want to build, and where racku stops you.
     validations:
       required: true
   - type: textarea

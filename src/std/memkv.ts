@@ -7,8 +7,8 @@
  * @decision .agents/decisions/261115_222025-p0-api-details.md#standard-devices
  * @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
  */
-import { device } from "rack42u";
-import { Kv } from "rack42u/std";
+import { device } from "racku";
+import { Kv } from "racku/std";
 import * as v from "valibot";
 
 const Entries = v.array(v.tuple([v.string(), v.string()]));

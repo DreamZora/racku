@@ -4,10 +4,10 @@
  *
  * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
  */
-import type { RackHandle } from "rack42u";
+import type { RackHandle } from "racku";
 import { type TempApp, tempApp } from "./app.ts";
 
-export const CONNECTORS = `import { connector, event, rpc } from "rack42u";
+export const CONNECTORS = `import { connector, event, rpc } from "racku";
 import * as v from "valibot";
 
 /** What every tool does: turn a text into another. */
@@ -32,7 +32,7 @@ export const Host = connector("test.host/v1", {
 
 /** A tool whose `run` answers with `expression`, of `text`, and emits `ran` with it. */
 export function tool(model: string, expression: string, extra = ""): string {
-  return `import { device } from "rack42u";
+  return `import { device } from "racku";
 import { Tool } from "../connectors.ts";
 
 export default device({
@@ -51,7 +51,7 @@ export default device({
 `;
 }
 
-export const HOST = `import { device, every, RackError } from "rack42u";
+export const HOST = `import { device, every, RackError } from "racku";
 import { Host, Tool } from "../connectors.ts";
 
 const heard: string[] = [];

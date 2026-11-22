@@ -60,8 +60,8 @@ const OPERATIONS: Record<string, readonly [min: number, max: number]> = {
 
 /**
  * Where a rack's endpoint lives, from its base directory:
- * - Windows: the control file under `%LOCALAPPDATA%\\rack42u\\control\\`.
- * - Elsewhere: `$XDG_RUNTIME_DIR/rack42u/`, or `~/.local/state/rack42u/control/`, for both the
+ * - Windows: the control file under `%LOCALAPPDATA%\\racku\\control\\`.
+ * - Elsewhere: `$XDG_RUNTIME_DIR/racku/`, or `~/.local/state/racku/control/`, for both the
  *   socket and the control file. These paths stay short, under the socket path limits.
  *
  * Their names come from a hash of the directory's real path, so every path that leads to the
@@ -76,17 +76,13 @@ export function controlPaths(
   const { join } = platform === "win32" ? win32 : posix;
   let dir: string;
   if (platform === "win32") {
-    dir = join(
-      process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"),
-      "rack42u",
-      "control",
-    );
+    dir = join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "racku", "control");
   } else if (process.env.XDG_RUNTIME_DIR) {
-    dir = join(process.env.XDG_RUNTIME_DIR, "rack42u");
+    dir = join(process.env.XDG_RUNTIME_DIR, "racku");
   } else {
     dir = join(
       process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"),
-      "rack42u",
+      "racku",
       "control",
     );
   }

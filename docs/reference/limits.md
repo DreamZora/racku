@@ -1,6 +1,6 @@
 # Limits
 
-Every queue, backlog, retry, record, and wait in rack42u has a fixed bound, and every timeout a defined outcome. This page lists them, with their defaults and what happens beyond them; the guides that it links to explain each.
+Every queue, backlog, retry, record, and wait in racku has a fixed bound, and every timeout a defined outcome. This page lists them, with their defaults and what happens beyond them; the guides that it links to explain each.
 
 ## Timeouts
 

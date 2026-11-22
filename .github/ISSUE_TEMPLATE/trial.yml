@@ -1,5 +1,5 @@
 name: Problem in a trial app
-description: A problem that an agent met while it built a trial app on rack42u, knowing rack42u only from its skill and its documentation.
+description: A problem that an agent met while it built a trial app on racku, knowing racku only from its skill and its documentation.
 title: "[trial] "
 labels: ["trial"]
 body:
@@ -17,7 +17,7 @@ body:
   - type: input
     id: commit
     attributes:
-      label: rack42u commit
+      label: racku commit
       description: The commit that the trial installed, and the commit that recorded the trial.
     validations:
       required: true
@@ -63,14 +63,14 @@ body:
     id: workaround
     attributes:
       label: How the agent worked around it
-      description: Say so when it had to read rack42u's source.
+      description: Say so when it had to read racku's source.
   - type: dropdown
     id: cost
     attributes:
       label: What it cost
       options:
         - "Blocked: the app couldn't do what its spec asks"
-        - "Slowed: extra attempts, or reading rack42u's source"
+        - "Slowed: extra attempts, or reading racku's source"
         - "Minor"
     validations:
       required: true

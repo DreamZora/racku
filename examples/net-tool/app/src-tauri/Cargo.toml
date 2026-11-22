@@ -1,7 +1,7 @@
 [package]
 name = "net-tool"
 version = "0.1.0"
-description = "A TCP and UDP tool on rack42u, Tauri 2, and Quasar"
+description = "A TCP and UDP tool on racku, Tauri 2, and Quasar"
 license = "MIT"
 edition = "2021"
 publish = false

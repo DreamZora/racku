@@ -1,5 +1,5 @@
 /**
- * Entry point of `rack42u/std`: the standard connectors and the factories that mount the
+ * Entry point of `racku/std`: the standard connectors and the factories that mount the
  * standard devices.
  *
  * @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#p0-scope

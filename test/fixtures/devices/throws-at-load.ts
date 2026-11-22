@@ -1,4 +1,4 @@
-import { device } from "rack42u";
+import { device } from "racku";
 
 /** A device file whose top-level code throws, so it fails to load. */
 throw new Error("broken at load");

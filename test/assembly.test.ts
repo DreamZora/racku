@@ -9,8 +9,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { rack, slot } from "rack42u";
-import { memkv } from "rack42u/std";
+import { rack, slot } from "racku";
+import { memkv } from "racku/std";
 import { planRack } from "../src/rack.ts";
 import {
   Cli,
@@ -31,7 +31,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
-const CONNECTORS = `import { connector, rpc } from "rack42u";
+const CONNECTORS = `import { connector, rpc } from "racku";
 import * as v from "valibot";
 
 const counter = (id: string) => connector(id, { inc: rpc(v.undefined(), v.number()) });
@@ -45,7 +45,7 @@ export const Poke = connector("demo.poke/v1", { inc: rpc(v.string(), v.number())
 
 /** A device that counts the calls to the one port it provides. */
 function counter(model: string, connector: string, extra = ""): string {
-  return `import { device } from "rack42u";
+  return `import { device } from "racku";
 import { Back, D, E, F } from "../connectors.ts";
 
 let n = 0;
@@ -63,7 +63,7 @@ function consumer(model: string, needs: Record<string, string>, extra = ""): str
   const list = Object.entries(needs)
     .map(([need, connector]) => `${need}: ${connector}`)
     .join(", ");
-  return `import { device, own } from "rack42u";
+  return `import { device, own } from "racku";
 import { Back, D, E, F, Poke } from "../connectors.ts";
 
 export default device({
@@ -88,14 +88,14 @@ async function exampleApp(): Promise<TempApp> {
   await app.write("devices/f.ts", counter("f", "F"));
   await app.write(
     "rack.ts",
-    `import { rack } from "rack42u";\n\nexport default rack("demo", { devices: ["./devices"], roots: ["a", "b", "c"] });\n`,
+    `import { rack } from "racku";\n\nexport default rack("demo", { devices: ["./devices"], roots: ["a", "b", "c"] });\n`,
   );
   return app;
 }
 
 const SPEC = { devices: ["./devices"], roots: ["a", "b", "c"] };
 
-const PLAN = `# rack42u plan of rack test: slot, instance, model, owner, and wiring.
+const PLAN = `# racku plan of rack test: slot, instance, model, owner, and wiring.
 # Written by \`rack dev\` and \`rack plan --write\`; do not edit by hand.
 U1 a-d d a
 U2 a-f f a
@@ -176,8 +176,8 @@ describe("scanned racks", () => {
     const app = await exampleApp();
     await app.write(
       "devices/k.ts",
-      `import { device } from "rack42u";
-import { Kv } from "rack42u/std";
+      `import { device } from "racku";
+import { Kv } from "racku/std";
 import { Poke } from "../connectors.ts";
 
 export default device({
@@ -216,7 +216,7 @@ export default device({
     apps.push(app);
     await app.write(
       "devices/g.ts",
-      `import { connector, device, rpc } from "rack42u";
+      `import { connector, device, rpc } from "racku";
 import * as v from "valibot";
 
 export const L = connector("demo.l/v1", { label: rpc(v.undefined(), v.string()) });
@@ -232,7 +232,7 @@ export default device({
     for (const model of ["h", "i"]) {
       await app.write(
         `devices/${model}.ts`,
-        `import { connector, device, own, rpc } from "rack42u";
+        `import { connector, device, own, rpc } from "racku";
 import * as v from "valibot";
 import { L } from "./g.ts";
 
@@ -417,7 +417,7 @@ describe("the plan file", () => {
     expect(both.output).toContain("--write and --check exclude each other");
     await app.write(
       "placed.ts",
-      `import { rack, slot } from "rack42u";\n\nexport default rack("placed", { slots: { 1: slot("./devices/d.ts") } });\n`,
+      `import { rack, slot } from "racku";\n\nexport default rack("placed", { slots: { 1: slot("./devices/d.ts") } });\n`,
     );
     const placed = new Cli(["plan", "placed.ts", "--write"], app.dir);
     expect(await placed.exited()).toBe(1);

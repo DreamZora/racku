@@ -2,7 +2,7 @@
  * The device of the listener tests, which serves HTTP and WebSocket on listeners of its own.
  * `devices/listener.ts` mounts it without a state handover, `devices/listener-state.ts` with one.
  *
- * A test steers the next instance through `RACK42U_TEST_LISTENER` in the environment, which a
+ * A test steers the next instance through `RACKU_TEST_LISTENER` in the environment, which a
  * Worker copies when it starts: JSON with `fail`, the hook the instance fails, `activateMs`, how
  * long its `activate` takes, and `jam`, a pipe that `/jam` blocks the thread on.
  */
@@ -18,7 +18,7 @@ import {
   RackError,
   type ServeOptions,
   wholeResponse,
-} from "rack42u";
+} from "racku";
 import * as v from "valibot";
 import { ListenerControl, PairPaths } from "./connectors.ts";
 
@@ -51,7 +51,7 @@ export const ListenerConfig = v.optional(
 type Config = v.InferOutput<typeof ListenerConfig>;
 type Data = { id: number };
 
-const steer = JSON.parse(process.env.RACK42U_TEST_LISTENER ?? "{}") as {
+const steer = JSON.parse(process.env.RACKU_TEST_LISTENER ?? "{}") as {
   fail?: string;
   activateMs?: number;
   jam?: string;

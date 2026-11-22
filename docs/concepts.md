@@ -1,6 +1,6 @@
 # Concepts
 
-rack42u names its parts after a server rack. The names make the parts easy to picture; they don't set what the parts do. This page explains each part and how the parts work together, and links to the guide that shows how to use it.
+racku names its parts after a server rack. The names make the parts easy to picture; they don't set what the parts do. This page explains each part and how the parts work together, and links to the guide that shows how to use it.
 
 | Term | Meaning |
 |---|---|

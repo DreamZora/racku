@@ -4,7 +4,7 @@
  *
  * @decision .agents/decisions/261118_173845-net-tool-example.md#netv1
  */
-import { device, RackError } from "rack42u";
+import { device, RackError } from "racku";
 import * as v from "valibot";
 import { type Address, Net, type SocketInfo } from "../connectors.ts";
 

@@ -58,7 +58,7 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test
 
-  # The newest Bun release, so that one that breaks rack42u fails a run instead of an app.
+  # The newest Bun release, so that one that breaks racku fails a run instead of an app.
   linux-latest:
     name: Linux, latest Bun
     runs-on: ubuntu-latest

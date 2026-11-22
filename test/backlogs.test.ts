@@ -9,8 +9,8 @@
  * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { type RackHandle, slot } from "rack42u";
-import { httpPanel } from "rack42u/std";
+import { type RackHandle, slot } from "racku";
+import { httpPanel } from "racku/std";
 import { errorOf, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -20,7 +20,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
-const CONNECTORS = `import { connector, event, rpc } from "rack42u";
+const CONNECTORS = `import { connector, event, rpc } from "racku";
 import * as v from "valibot";
 
 export const Slow = connector("demo.slow/v1", {
@@ -40,7 +40,7 @@ export const Fan = connector("demo.fan/v1", {
 
 /** A provider that answers after a while, blocks its event loop, counts work, and emits. */
 function slow(extra = ""): string {
-  return `import { device } from "rack42u";
+  return `import { device } from "racku";
 import { Slow } from "../connectors.ts";
 
 let runs = 0;
@@ -72,7 +72,7 @@ export default device({
 }
 
 /** A consumer that fans calls out to the provider, and counts the events it takes. */
-const FAN = `import { device } from "rack42u";
+const FAN = `import { device } from "racku";
 import { Fan, Slow } from "../connectors.ts";
 
 let received = 0;
@@ -111,8 +111,8 @@ export default device({
 `;
 
 /** An HTTP device that answers after 300 ms, and refuses /busy with its own limit. */
-const WEB = `import { device, RackError } from "rack42u";
-import { Http, httpHandler } from "rack42u/std";
+const WEB = `import { device, RackError } from "racku";
+import { Http, httpHandler } from "racku/std";
 
 export default device({
   model: "web",

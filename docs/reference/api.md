@@ -1,8 +1,8 @@
 # API
 
-rack42u has three entry points: `rack42u`, `rack42u/std`, and `rack42u/bench`. This page lists every export of each, in a table per topic, with links to the guides that show how to use them. Every export also has a JSDoc comment in the source, with its parameters, its return value, its errors, and when it may be called, which editors show.
+racku has three entry points: `racku`, `racku/std`, and `racku/bench`. This page lists every export of each, in a table per topic, with links to the guides that show how to use them. Every export also has a JSDoc comment in the source, with its parameters, its return value, its errors, and when it may be called, which editors show.
 
-## rack42u
+## racku
 
 The rack runtime: connectors, devices, manifests, starting a rack, and its handle.
 
@@ -101,7 +101,7 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 | `PlacedRackSpec` | type | A rack whose devices are placed in slots by hand, with its `size`, its `slots`, and its `patch` list. |
 | `ScannedRackSpec` | type | A rack whose devices are scanned from directories, and placed by its plan. |
 | `ScanSpec` | type | How a scanned rack finds and plans its devices: `devices`, `roots`, `use`, and `config`. |
-| `SlotSpec` | type | A device to mount, as `slot()` and the factories of `rack42u/std` return it. |
+| `SlotSpec` | type | A device to mount, as `slot()` and the factories of `racku/std` return it. |
 | `SlotOptions` | type | The options of `slot()`: `name` and `config`. |
 
 ### start()
@@ -110,7 +110,7 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 
 | `start` option | Default | Meaning |
 |---|---|---|
-| `baseDir` | working directory | Where relative paths resolve and `.rack/` is written. It lies inside the app, below the `node_modules` that holds rack42u: firmware in `.rack/firmware/` imports rack42u and the app's packages from there, and one outside the app fails to load with `RACK_MANIFEST`. |
+| `baseDir` | working directory | Where relative paths resolve and `.rack/` is written. It lies inside the app, below the `node_modules` that holds racku: firmware in `.rack/firmware/` imports racku and the app's packages from there, and one outside the app fails to load with `RACK_MANIFEST`. |
 | `logger` | one line per entry on the console | Receives every log entry. |
 | `callTimeout` | 30 000 ms | Timeout of calls that set none. |
 | `hookTimeout` | 30 000 ms | Timeout of boot, each lifecycle hook, and each `metrics()` request. |
@@ -196,7 +196,7 @@ The types of what the methods take and return:
 |---|---|---|
 | `StandardSchemaV1` | type | The Standard Schema interface, which the schemas of connectors and configurations implement, as valibot's and zod's do. |
 
-## rack42u/std
+## racku/std
 
 The standard connectors, and the factories that mount the standard devices. See [Storage devices](../guides/storage.md) and [The HTTP panel](../guides/http.md).
 
@@ -241,7 +241,7 @@ The standard connectors, and the factories that mount the standard devices. See 
 | `Command` | type | One command of the table: `title`, `description`, `input` and `output` schemas, and `run`. |
 | `CommandInfo` | type | One command as `list()` describes it: `name`, `title`, `description`, and the JSON Schemas of its `input` and `output`. |
 
-## rack42u/bench
+## racku/bench
 
 The test bench, which runs one device in a rack of its own. See [Testing a device](../guides/testing.md).
 

@@ -9,7 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import type { LogEntry } from "rack42u";
+import type { LogEntry } from "racku";
 import { DEBOUNCE_MS, isDeviceFileOrJson, MAX_WAIT_MS, watchAndReload } from "../src/dev.ts";
 import { WINDOWS, waitFor } from "./fixtures/app.ts";
 
@@ -50,7 +50,7 @@ async function watched(
   rack: StubRack,
   counts?: (path: string) => boolean,
 ): Promise<{ dir: string; logs: LogEntry[] }> {
-  const dir = await mkdtemp(join(tmpdir(), "rack42u-test-watch-"));
+  const dir = await mkdtemp(join(tmpdir(), "racku-test-watch-"));
   dirs.push(dir);
   const logs: LogEntry[] = [];
   stops.push(
@@ -136,7 +136,7 @@ describe("watchAndReload", () => {
   test.skipIf(WINDOWS)(
     "warns when the base directory's parent can't be read, and watches the base directory anyway",
     async () => {
-      const parent = await mkdtemp(join(tmpdir(), "rack42u-test-watch-parent-"));
+      const parent = await mkdtemp(join(tmpdir(), "racku-test-watch-parent-"));
       dirs.push(parent);
       const dir = join(parent, "base");
       await mkdir(dir);
@@ -160,7 +160,7 @@ describe("watchAndReload", () => {
   test("logs a watch that can't start, and stops nothing", async () => {
     const rack = new StubRack();
     const logs: LogEntry[] = [];
-    const missing = join(tmpdir(), `rack42u-test-watch-missing-${process.pid}`);
+    const missing = join(tmpdir(), `racku-test-watch-missing-${process.pid}`);
     const stop = watchAndReload(rack, { baseDir: missing, log: (entry) => logs.push(entry) });
     expect(logs.map((entry) => entry.level)).toEqual(["error"]);
     expect(logs[0]?.message).toStartWith(`cannot watch ${missing}`);

@@ -5,7 +5,7 @@
  * @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { device, patched, RackError, type RackHandle, rack, slot } from "rack42u";
+import { device, patched, RackError, type RackHandle, rack, slot } from "racku";
 import { errorOf, FIXTURES, type TempApp, tempApp, useRacks } from "./fixtures/app.ts";
 import { Probe } from "./fixtures/connectors.ts";
 

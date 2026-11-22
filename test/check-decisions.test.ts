@@ -26,7 +26,7 @@ afterEach(async () => {
 
 /** Writes `files`, keyed by path relative to the root, into a new temporary repository. */
 async function repo(files: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "rack42u-gate-"));
+  const root = await mkdtemp(join(tmpdir(), "racku-gate-"));
   roots.push(root);
   for (const [path, content] of Object.entries(files)) {
     await mkdir(dirname(join(root, path)), { recursive: true });

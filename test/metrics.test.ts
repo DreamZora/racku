@@ -7,8 +7,8 @@
  * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { type DeviceMetrics, type RackHandle, slot } from "rack42u";
-import { httpPanel } from "rack42u/std";
+import { type DeviceMetrics, type RackHandle, slot } from "racku";
+import { httpPanel } from "racku/std";
 import { errorOf, FIXTURES, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();
@@ -230,7 +230,7 @@ describe("rack.metrics()", () => {
 
 /** A cold device whose new instance takes `ms` milliseconds in selfTest. */
 function cold(ms: number): string {
-  return `import { connector, device, rpc } from "rack42u";
+  return `import { connector, device, rpc } from "racku";
 import * as v from "valibot";
 
 const Cold = connector("demo.cold/v1", { echo: rpc(v.number(), v.number()) });
@@ -348,7 +348,7 @@ describe("calls from outside the rack", () => {
   test("a swap that removes a member drops the member's counters", async () => {
     const app = await tempApp();
     apps.push(app);
-    const two = (members: string[]) => `import { connector, device, rpc } from "rack42u";
+    const two = (members: string[]) => `import { connector, device, rpc } from "racku";
 import * as v from "valibot";
 
 const Two = connector("demo.two/v1", {

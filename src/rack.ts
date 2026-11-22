@@ -438,7 +438,7 @@ export function crashWindow(longestWatchdog: number): number {
  *   that were already powered on are powered off again first.
  */
 /** The key of the handle's reload of hot-plug devices alone; not part of the public API. */
-const RELOAD_HOTPLUG: unique symbol = Symbol("rack42u.reloadHotplug");
+const RELOAD_HOTPLUG: unique symbol = Symbol("racku.reloadHotplug");
 
 /**
  * Reloads the hot-plug devices of a rack alone: the watch of `rack start` applies their changes,
@@ -4425,7 +4425,7 @@ export async function planRack(
 /**
  * Builds a device file and reads what it declares, its model, height, needs, and ports, without
  * starting a rack: the firmware loads once in a Worker that ends after. Not exported from
- * `rack42u`; the bench uses it.
+ * `racku`; the bench uses it.
  *
  * @param source The device file: a path relative to `options.baseDir`, or a `file:` URL.
  * @param config The configuration that needs computed from the configuration come from.

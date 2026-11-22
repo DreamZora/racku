@@ -8,8 +8,8 @@ A scanned manifest names its hot-plug directories in `hotplug`:
 
 ```ts
 // tools/rack.ts
-import { rack } from "rack42u";
-import { httpPanel } from "rack42u/std";
+import { rack } from "racku";
+import { httpPanel } from "racku/std";
 
 export default rack("tools", {
   devices: [
@@ -60,7 +60,7 @@ An app that takes hot-plug devices defines each extension point as a connector, 
 
 ```ts
 // tools/connectors.ts
-import { connector, rpc } from "rack42u";
+import { connector, rpc } from "racku";
 import * as v from "valibot";
 
 /** An extension point: each device that provides it changes a text, one after another. */
@@ -75,8 +75,8 @@ A host reaches each extension point with an every need, and decides how to call 
 
 ```ts
 // tools/devices/tools.ts
-import { device, every } from "rack42u";
-import { Commands, Http, httpHandler } from "rack42u/std";
+import { device, every } from "racku";
+import { Commands, Http, httpHandler } from "racku/std";
 import { Transform } from "../connectors.ts";
 
 export default device({
@@ -124,12 +124,12 @@ export default device({
 
 ## Commands
 
-Calls that each device has of its own go through `commands/v1`, the connector `Commands` of `rack42u/std`. `commands()` implements it from a table of commands:
+Calls that each device has of its own go through `commands/v1`, the connector `Commands` of `racku/std`. `commands()` implements it from a table of commands:
 
 ```ts
 // tools/plugins/upper.ts
-import { device } from "rack42u";
-import { Commands, commands } from "rack42u/std";
+import { device } from "racku";
+import { Commands, commands } from "racku/std";
 import * as v from "valibot";
 import { Transform } from "../connectors.ts";
 
@@ -166,7 +166,7 @@ With `plugins/exclaim.ts`, a transform that adds `!`, next to `plugins/upper.ts`
 
 ```ts
 // tools/plugins/exclaim.ts
-import { device } from "rack42u";
+import { device } from "racku";
 import { Transform } from "../connectors.ts";
 
 export default device({

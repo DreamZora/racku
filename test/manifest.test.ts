@@ -5,7 +5,7 @@
  * @decision .agents/decisions/261115_222025-p0-api-details.md#names
  */
 import { describe, expect, test } from "bun:test";
-import { RackError, rack, slot } from "rack42u";
+import { RackError, rack, slot } from "racku";
 import { isRackManifest, parseAddress } from "../src/manifest.ts";
 
 function rejectionCode(define: () => unknown): string | undefined {
@@ -79,7 +79,7 @@ describe("rack", () => {
     expect(() => rack("r", old)).toThrow(
       new RackError(
         "RACK_MANIFEST",
-        "rack r: the panel section is gone; mount httpPanel() from rack42u/std in a slot, or list it in a scanned rack's devices and roots",
+        "rack r: the panel section is gone; mount httpPanel() from racku/std in a slot, or list it in a scanned rack's devices and roots",
       ),
     );
     expect(rejectionCode(() => rack("r", old))).toBe("RACK_MANIFEST");

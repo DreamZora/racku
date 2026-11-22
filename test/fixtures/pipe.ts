@@ -78,7 +78,7 @@ async function releaseFifo(path: string): Promise<boolean> {
 }
 
 async function windowsPipe(): Promise<BlockingPipe> {
-  const path = `\\\\.\\pipe\\rack42u-test-${process.pid}-${made++}`;
+  const path = `\\\\.\\pipe\\racku-test-${process.pid}-${made++}`;
   const readers = new Set<Socket>();
   const server = createServer((reader) => {
     readers.add(reader);

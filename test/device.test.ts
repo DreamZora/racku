@@ -7,7 +7,7 @@
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#start-priority
  */
 import { describe, expect, expectTypeOf, test } from "bun:test";
-import { type CallContext, connector, device, event, isOwn, own, RackError, rpc } from "rack42u";
+import { type CallContext, connector, device, event, isOwn, own, RackError, rpc } from "racku";
 import * as v from "valibot";
 import { isDevice } from "../src/device.ts";
 

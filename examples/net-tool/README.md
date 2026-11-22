@@ -1,6 +1,6 @@
 # net-tool
 
-A desktop tool for TCP and UDP, built on rack42u. It opens TCP clients, TCP servers that accept connections, and UDP sockets, on the addresses and ports you enter. It sends what you type, as UTF-8 text or as hex, and shows what each socket sends and receives, as text or hex, with its time and direction.
+A desktop tool for TCP and UDP, built on racku. It opens TCP clients, TCP servers that accept connections, and UDP sockets, on the addresses and ports you enter. It sends what you type, as UTF-8 text or as hex, and shows what each socket sends and receives, as text or hex, with its time and direction.
 
 The window is Vue 3 with Quasar, in a Tauri 2 shell. The sockets live in a rack beside it:
 
@@ -50,7 +50,7 @@ The first run compiles the shell, which takes a minute or more. The shell then:
 
 When you close the window, the shell closes the rack's standard input, so the rack shuts down in order. After 15 s it kills it. If the shell crashes, the system closes the pipe, and the rack stops by itself.
 
-The window's **Devices** button opens a dialog with each device: its state, what it runs, and its error. Its **Reload** runs `ctl reload`, which applies your edits of `devices/`, as [What it shows of rack42u](#what-it-shows-of-rack42u) describes. A build from source always runs the rack with `rack start`, so the dialog's setting applies only to an installed app.
+The window's **Devices** button opens a dialog with each device: its state, what it runs, and its error. Its **Reload** runs `ctl reload`, which applies your edits of `devices/`, as [What it shows of racku](#what-it-shows-of-racku) describes. A build from source always runs the rack with `rack start`, so the dialog's setting applies only to an installed app.
 
 ## How the window talks to the rack
 
@@ -60,7 +60,7 @@ The window's **Devices** button opens a dialog with each device: its state, what
 - The window reconnects when its WebSocket closes, after 0.5 s, doubling up to 5 s.
 - `list` adds `delivered` to each socket: the `data` events that `ui` passed on. The window shows the difference from the socket's `events` as events missed on the way.
 
-## What it shows of rack42u
+## What it shows of racku
 
 Edit `devices/ui.ts` while the tool runs, and apply the edit from the repository root:
 
@@ -88,9 +88,9 @@ An installed app needs neither Bun nor this repository: its rack is the sidecar 
 
 | | Linux | macOS | Windows |
 |---|---|---|---|
-| The rack's base directory | `~/.local/share/dev.rack42u.net-tool/rack` | `~/Library/Application Support/dev.rack42u.net-tool/rack` | `%LOCALAPPDATA%\dev.rack42u.net-tool\rack` |
-| `settings.json` | `~/.config/dev.rack42u.net-tool/` | `~/Library/Application Support/dev.rack42u.net-tool/` | `%APPDATA%\dev.rack42u.net-tool\` |
-| `rack.log` and `rack.old.log` | `~/.local/share/dev.rack42u.net-tool/logs/` | `~/Library/Logs/dev.rack42u.net-tool/` | `%LOCALAPPDATA%\dev.rack42u.net-tool\logs\` |
+| The rack's base directory | `~/.local/share/dev.racku.net-tool/rack` | `~/Library/Application Support/dev.racku.net-tool/rack` | `%LOCALAPPDATA%\dev.racku.net-tool\rack` |
+| `settings.json` | `~/.config/dev.racku.net-tool/` | `~/Library/Application Support/dev.racku.net-tool/` | `%APPDATA%\dev.racku.net-tool\` |
+| `rack.log` and `rack.old.log` | `~/.local/share/dev.racku.net-tool/logs/` | `~/Library/Logs/dev.racku.net-tool/` | `%LOCALAPPDATA%\dev.racku.net-tool\logs\` |
 
 On Linux, `$XDG_DATA_HOME` and `$XDG_CONFIG_HOME` take the place of `~/.local/share` and `~/.config` when they are set.
 
@@ -114,7 +114,7 @@ A replacement that fails, to build, to start, or on probation, leaves the packag
 The sidecar's `ctl` operates the rack of the installed app, as `rack ctl` does:
 
 ```sh
-/usr/bin/net-tool-rack ctl status --base-dir ~/.local/share/dev.rack42u.net-tool/rack
+/usr/bin/net-tool-rack ctl status --base-dir ~/.local/share/dev.racku.net-tool/rack
 ```
 
 On macOS, the sidecar is `net-tool.app/Contents/MacOS/net-tool-rack`, and on Windows `net-tool-rack.exe` in the install directory.

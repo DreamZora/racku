@@ -1,13 +1,13 @@
 /**
- * Tests for the standard connectors and devices in `rack42u/std`.
+ * Tests for the standard connectors and devices in `racku/std`.
  *
  * @decision .agents/decisions/261115_222025-p0-api-details.md#standard-connectors
  * @decision .agents/decisions/261115_222025-p0-api-details.md#standard-devices
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { slot } from "rack42u";
-import { Kv, memkv, Sql, sqlite } from "rack42u/std";
+import { slot } from "racku";
+import { Kv, memkv, Sql, sqlite } from "racku/std";
 import { describeConnector } from "../src/connector.ts";
 import { buildFirmware } from "../src/firmware.ts";
 import { errorOf, FIXTURES, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
@@ -41,13 +41,13 @@ describe("standard connectors", () => {
   });
 
   // @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
-  test("firmware keeps the rack42u/std subpath external", async () => {
+  test("firmware keeps the racku/std subpath external", async () => {
     const app = await tempApp(["connectors.ts", "devices"], FIXTURES);
     apps.push(app);
     const firmware = await buildFirmware(join(app.dir, "devices/kv-watcher.ts"), app.dir);
     const code = await Bun.file(firmware.path).text();
-    expect(code).toMatch(/from\s*"rack42u\/std"/);
-    // A bundled copy of rack42u/std would carry the kv/v1 definition.
+    expect(code).toMatch(/from\s*"racku\/std"/);
+    // A bundled copy of racku/std would carry the kv/v1 definition.
     expect(code).not.toContain('"kv/v1"');
   });
 });

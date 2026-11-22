@@ -1,4 +1,4 @@
-import { device, patched } from "rack42u";
+import { device, patched } from "racku";
 import * as v from "valibot";
 import { Picker, Probe } from "../connectors.ts";
 

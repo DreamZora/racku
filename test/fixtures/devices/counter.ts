@@ -1,4 +1,4 @@
-import { device } from "rack42u";
+import { device } from "racku";
 import * as v from "valibot";
 import { Counter } from "../connectors.ts";
 

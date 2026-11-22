@@ -8,8 +8,8 @@ A manifest names the device file in each slot. It never imports device code; the
 
 ```ts
 // rack.ts
-import { rack, slot } from "rack42u";
-import { httpPanel, memkv } from "rack42u/std";
+import { rack, slot } from "racku";
+import { httpPanel, memkv } from "racku/std";
 
 export default rack("hello", {
   slots: {
@@ -34,8 +34,8 @@ Instead of placing every device by hand, a manifest can name the directories tha
 
 ```ts
 // A scanned manifest: slots and patches are worked out from the device files.
-import { rack } from "rack42u";
-import { httpPanel, sqlite } from "rack42u/std";
+import { rack } from "racku";
+import { httpPanel, sqlite } from "racku/std";
 
 export default rack("app", {
   devices: [

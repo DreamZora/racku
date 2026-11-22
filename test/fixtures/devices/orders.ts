@@ -5,8 +5,8 @@
  *
  * @decision .agents/decisions/261118_173457-device-test-bench.md#tests
  */
-import { device } from "rack42u";
-import { Kv } from "rack42u/std";
+import { device } from "racku";
+import { Kv } from "racku/std";
 import * as v from "valibot";
 import { Blobs, Orders } from "../connectors.ts";
 

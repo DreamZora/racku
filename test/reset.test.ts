@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { type RackEvent, type RackHandle, slot } from "rack42u";
+import { type RackEvent, type RackHandle, slot } from "racku";
 import { codeOf, type Recorder, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();

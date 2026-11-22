@@ -4,8 +4,8 @@
  *
  * @decision .agents/decisions/261121_065823-hot-plug-directories.md#the-commands-connector
  */
-import { device } from "rack42u";
-import { Commands, commands } from "rack42u/std";
+import { device } from "racku";
+import { Commands, commands } from "racku/std";
 import * as v from "valibot";
 import * as z from "zod";
 

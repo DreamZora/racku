@@ -1,8 +1,8 @@
 # Getting started
 
-This guide builds a small app of your own, outside the rack42u repository: a notes service that keeps its notes in SQLite, behind the HTTP panel. It takes the steps every app takes: add rack42u, define a connector, write devices, mount them in a rack, run it, test a device on the bench, and change a device while the rack runs.
+This guide builds a small app of your own, outside the racku repository: a notes service that keeps its notes in SQLite, behind the HTTP panel. It takes the steps every app takes: add racku, define a connector, write devices, mount them in a rack, run it, test a device on the bench, and change a device while the rack runs.
 
-You need [Bun](https://bun.sh) 1.4.4 or later, git, and access to the rack42u repository on GitHub.
+You need [Bun](https://bun.sh) 1.4.4 or later, git, and access to the racku repository on GitHub.
 
 ## Create the app
 
@@ -21,9 +21,9 @@ Make a directory for the app, and write this `package.json` in it, whose scripts
 }
 ```
 
-## Add rack42u
+## Add racku
 
-rack42u isn't published to a registry; an app depends on it through git, at a tag of its repository. In the app's directory, add it, and valibot for the schemas:
+racku isn't published to a registry; an app depends on it through git, at a tag of its repository. In the app's directory, add it, and valibot for the schemas:
 
 ```sh
 bun add git+ssh://git@github.com/DreamZora/rack42u.git#v0.6.0 valibot
@@ -31,8 +31,8 @@ bun add git+ssh://git@github.com/DreamZora/rack42u.git#v0.6.0 valibot
 
 - Run `bun add` in the app's directory, next to its `package.json`. In a directory without one, Bun adds the packages to the nearest `package.json` above it, another project's, without a warning.
 - Bun clones the repository with git, over HTTPS first and then over SSH, so git's credentials for GitHub or an SSH key with access to the repository will do. A `git+https://github.com/...` URL doesn't work for a private repository, since Bun downloads those from GitHub's API without credentials.
-- Pin a tag or a commit: until rack42u's first formal release, any version may break the API. Bun writes the ref into `package.json` as you typed it, and the commit it installed into `bun.lock`, so a branch, such as `#main`, or `HEAD` names a commit only through `bun.lock`: a fresh install, without it, takes the branch's latest commit. Bun reports the commit it installed, as `installed rack42u@git+…#<commit>`; to pin that commit, add rack42u again with it in place of the branch.
-- To use a local clone of rack42u instead, give its path as a URL, such as `git+file:///home/you/rack42u#v0.6.0`.
+- Pin a tag or a commit: until racku's first formal release, any version may break the API. Bun writes the ref into `package.json` as you typed it, and the commit it installed into `bun.lock`, so a branch, such as `#main`, or `HEAD` names a commit only through `bun.lock`: a fresh install, without it, takes the branch's latest commit. Bun reports the commit it installed, as `installed racku@git+…#<commit>`; to pin that commit, add racku again with it in place of the branch.
+- To use a local clone of racku instead, give its path as a URL, such as `git+file:///home/you/racku#v0.6.0`.
 
 ## Define a connector
 
@@ -40,7 +40,7 @@ A connector is the contract between two devices: here, adding a note and listing
 
 ```ts
 // connectors.ts
-import { connector, rpc } from "rack42u";
+import { connector, rpc } from "racku";
 import * as v from "valibot";
 
 const Note = v.object({ id: v.number(), text: v.string() });
@@ -53,12 +53,12 @@ export const Notes = connector("notes/v1", {
 
 ## Write the devices
 
-The `notes` device provides `Notes`, and keeps the notes in a SQL database that it needs, `Sql` from `rack42u/std`:
+The `notes` device provides `Notes`, and keeps the notes in a SQL database that it needs, `Sql` from `racku/std`:
 
 ```ts
 // devices/notes.ts
-import { device } from "rack42u";
-import { Sql } from "rack42u/std";
+import { device } from "racku";
+import { Sql } from "racku/std";
 import { Notes } from "../connectors.ts";
 
 export default device({
@@ -91,8 +91,8 @@ The `web` device turns HTTP requests into calls to `notes`. It provides `Http`, 
 
 ```ts
 // devices/web.ts
-import { device } from "rack42u";
-import { Http, httpHandler } from "rack42u/std";
+import { device } from "racku";
+import { Http, httpHandler } from "racku/std";
 import { Notes } from "../connectors.ts";
 
 export default device({
@@ -119,8 +119,8 @@ The manifest names the device in each slot, from the bottom up. A device may nee
 
 ```ts
 // rack.ts
-import { rack, slot } from "rack42u";
-import { httpPanel, sqlite } from "rack42u/std";
+import { rack, slot } from "racku";
+import { httpPanel, sqlite } from "racku/std";
 
 export default rack("notes", {
   slots: {
@@ -160,8 +160,8 @@ The bench runs one device in a rack of its own, with a stub for each of its need
 ```ts
 // devices/notes.test.ts
 import { expect, test } from "bun:test";
-import { bench, stub } from "rack42u/bench";
-import { Sql } from "rack42u/std";
+import { bench, stub } from "racku/bench";
+import { Sql } from "racku/std";
 
 test("notes adds a note and lists it", async () => {
   const rows: { id: number; text: string }[] = [];
@@ -208,16 +208,16 @@ curl localhost:3000/notes
 
 ## Working with an agent
 
-rack42u comes with a skill for coding agents, such as Claude Code: the workflow of an app, the rules that keep devices swappable, the pitfalls, and which document answers what. It is in the package; copy it into the app, where an agent that works in the app finds it:
+racku comes with a skill for coding agents, such as Claude Code: the workflow of an app, the rules that keep devices swappable, the pitfalls, and which document answers what. It is in the package; copy it into the app, where an agent that works in the app finds it:
 
 ```sh
-mkdir -p .claude/skills && cp -r node_modules/rack42u/skills/rack42u .claude/skills/
+mkdir -p .claude/skills && cp -r node_modules/racku/skills/racku .claude/skills/
 ```
 
-The skill names each document by its path in the app, such as `node_modules/rack42u/docs/guides/devices.md`, so the agent reads the documentation of the version the app installed.
+The skill names each document by its path in the app, such as `node_modules/racku/docs/guides/devices.md`, so the agent reads the documentation of the version the app installed.
 
 ## Where to go next
 
 - [Concepts](concepts.md) explains how a rack works: slots, devices, connectors, the backplane, firmware, swaps, and faults.
 - The [guides](README.md#guides) cover each part in depth, starting with [Devices](guides/devices.md).
-- [Design](design.md) says why rack42u is built this way.
+- [Design](design.md) says why racku is built this way.

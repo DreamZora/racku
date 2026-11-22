@@ -49,7 +49,7 @@ A call can stream bytes instead of carrying them in one message, in its input, i
 
 ```ts
 // In connectors.ts:
-import { connector, rpc, stream } from "rack42u";
+import { connector, rpc, stream } from "racku";
 import * as v from "valibot";
 
 export const Files = connector("acme.files/v1", {

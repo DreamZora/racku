@@ -27,7 +27,7 @@ export interface Firmware {
 }
 
 /**
- * How a build for an executable differs from one under `rack start`: rack42u comes from the
+ * How a build for an executable differs from one under `rack start`: racku comes from the
  * Worker host, every other import is bundled, and `import.meta` paths are the executable's.
  *
  * @decision .agents/decisions/261120_011627-single-executables.md#compiling-a-rack
@@ -56,7 +56,7 @@ const LOADERS: Record<string, Bun.Loader> = { ts: "ts", tsx: "tsx", js: "js", js
  * @decision .agents/decisions/261119_213017-firmware-import-meta.md#decision
  */
 const SOURCE_IMPORT_META: Bun.BunPlugin = {
-  name: "rack42u-source-import-meta",
+  name: "racku-source-import-meta",
   setup(build) {
     build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
       const dir = dirname(path);
@@ -91,7 +91,7 @@ export function packagedImportMeta(
   skip: (path: string) => boolean = () => false,
 ): Bun.BunPlugin {
   return {
-    name: "rack42u-packaged-import-meta",
+    name: "racku-packaged-import-meta",
     setup(build) {
       build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
         const text = await Bun.file(path).text();
@@ -110,31 +110,31 @@ export function packagedImportMeta(
   };
 }
 
-/** The names that firmware imports rack42u by, which the Worker host gives it in an executable. */
-const HOST_SPECIFIER = /^rack42u(\/std)?$/;
+/** The names that firmware imports racku by, which the Worker host gives it in an executable. */
+const HOST_SPECIFIER = /^racku(\/std)?$/;
 
 /**
- * Gives firmware in an executable the Worker host's own rack42u: `rack42u` and `rack42u/std`
+ * Gives firmware in an executable the Worker host's own racku: `racku` and `racku/std`
  * resolve to a module that re-exports what the host put under `HOST_MODULES`, so the firmware
  * and the host share one copy, and the host knows the firmware's `RackError`s.
  *
  * @decision .agents/decisions/261120_011627-single-executables.md#compiling-a-rack
  */
-const HOST_RACK42U: Bun.BunPlugin = {
-  name: "rack42u-host",
+const HOST_RACKU: Bun.BunPlugin = {
+  name: "racku-host",
   setup(build) {
     build.onResolve({ filter: HOST_SPECIFIER }, ({ path }) => ({
       path,
-      namespace: "rack42u-host",
+      namespace: "racku-host",
     }));
-    build.onLoad({ filter: /.*/, namespace: "rack42u-host" }, async ({ path }) => {
+    build.onLoad({ filter: /.*/, namespace: "racku-host" }, async ({ path }) => {
       // Loaded when the build runs, not with this module: both import it.
       const exports =
-        path === "rack42u" ? await import("./index.ts") : await import("./std/index.ts");
+        path === "racku" ? await import("./index.ts") : await import("./std/index.ts");
       const names = Object.keys(exports).filter((name) => name !== "default");
       const lines = names.map((name) => `export const ${name} = host.${name};`);
       return {
-        contents: `const host = globalThis[Symbol.for("rack42u.hostModules")][${JSON.stringify(path)}];\n${lines.join("\n")}\n`,
+        contents: `const host = globalThis[Symbol.for("racku.hostModules")][${JSON.stringify(path)}];\n${lines.join("\n")}\n`,
         loader: "js",
       };
     });
@@ -153,7 +153,7 @@ function packageOf(specifier: string): string {
  */
 function recordPackages(record: NonNullable<PackagedBuild["record"]>): Bun.BunPlugin {
   return {
-    name: "rack42u-record-packages",
+    name: "racku-record-packages",
     setup(build) {
       build.onResolve({ filter: /^[^./]/ }, ({ path }) => {
         if (record.declared.has(packageOf(path))) record.found.add(path);
@@ -169,7 +169,7 @@ function recordPackages(record: NonNullable<PackagedBuild["record"]>): Bun.BunPl
  */
 function carriedPackages(carried: NonNullable<PackagedBuild["carried"]>): Bun.BunPlugin {
   return {
-    name: "rack42u-carried-packages",
+    name: "racku-carried-packages",
     setup(build) {
       build.onResolve({ filter: /^[^./]/ }, ({ path: specifier }) => {
         const inside = carried.specifiers[specifier];
@@ -198,7 +198,7 @@ const DEPENDENCY_FIELDS = [
  * Each file of the bundle keeps the `import.meta` paths of its own source, so a device reads a
  * file next to its source as it would unbundled.
  *
- * For an executable, `packaged` changes three things: rack42u comes from the Worker host, every
+ * For an executable, `packaged` changes three things: racku comes from the Worker host, every
  * other import is bundled, apart from the packages that the executable carries, and the
  * `import.meta` paths are the ones the executable gives the files.
  *
@@ -218,13 +218,13 @@ export async function buildFirmware(
   // @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
   const outdir = packaged?.outdir ?? join(baseDir, ".rack", "firmware");
   const external =
-    packaged === undefined ? ["rack42u", ...(await declaredDependencies(dirname(source)))] : [];
+    packaged === undefined ? ["racku", ...(await declaredDependencies(dirname(source)))] : [];
   // @decision .agents/decisions/261120_011627-single-executables.md#compiling-a-rack
   const plugins =
     packaged === undefined
       ? [SOURCE_IMPORT_META]
       : [
-          HOST_RACK42U,
+          HOST_RACKU,
           ...(packaged.carried === undefined ? [] : [carriedPackages(packaged.carried)]),
           ...(packaged.record === undefined ? [] : [recordPackages(packaged.record)]),
           packagedImportMeta(packaged.appDir),
@@ -267,7 +267,7 @@ export async function buildFirmware(
  * @param firmware The bundle.
  * @param baseDir The rack's base directory, which holds the bundle.
  * @returns A clause to append to the message: `""` when the message is about something else, or
- *   when the device file can't import the package either, as when the app lacks it. rack42u runs
+ *   when the device file can't import the package either, as when the app lacks it. racku runs
  *   this code, so an app has it.
  */
 export function explainMissingPackage(
@@ -277,7 +277,7 @@ export function explainMissingPackage(
 ): string {
   const name = /Cannot find package '([^']+)'/.exec(message)?.[1];
   if (name === undefined) return "";
-  if (name !== "rack42u") {
+  if (name !== "racku") {
     try {
       Bun.resolveSync(name, dirname(firmware.source));
     } catch {

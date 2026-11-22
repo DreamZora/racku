@@ -1,10 +1,10 @@
 # Design
 
-This page says why rack42u is built the way it is: the goals it serves, the main choices it makes, what each choice costs, and the limits that remain. The decision records under [`.agents/decisions/`](../.agents/decisions) hold the full reasoning of each choice, with the alternatives and the measurements behind it.
+This page says why racku is built the way it is: the goals it serves, the main choices it makes, what each choice costs, and the limits that remain. The decision records under [`.agents/decisions/`](../.agents/decisions) hold the full reasoning of each choice, with the alternatives and the measurements behind it.
 
 ## Goals
 
-rack42u serves four goals, and when they conflict, the earlier one wins:
+racku serves four goals, and when they conflict, the earlier one wins:
 
 1. **Reliability:** the rack keeps serving what it can. Every fault is detected, contained to its device, reported, and recovered from along a defined path.
 2. **Maintainability:** each part can be understood, changed, and tested on its own.
@@ -73,7 +73,7 @@ A device may depend only on devices below it. That one rule gives the order to s
 
 ### Fixed bounds instead of breakers
 
-Circuit breakers and adaptive load shedding decide from recent traffic and timing whether to accept a call, which makes overload hard to predict and hard to test. rack42u bounds the calls each need has unfinished, and the events each subscriber has waiting, and fails what goes beyond the bound at once, with a code that is counted. A device that crashes again and again is already isolated by the crash limit. Proxies such as Envoy implement circuit breaking as fixed limits too.
+Circuit breakers and adaptive load shedding decide from recent traffic and timing whether to accept a call, which makes overload hard to predict and hard to test. racku bounds the calls each need has unfinished, and the events each subscriber has waiting, and fails what goes beyond the bound at once, with a code that is counted. A device that crashes again and again is already isolated by the crash limit. Proxies such as Envoy implement circuit breaking as fixed limits too.
 
 **Cost:** the limits must fit the app, so `queueLimit` can be set per rack. Retrying, waiting, and degrading are up to the devices.
 
@@ -97,14 +97,14 @@ The main thread supervises the devices, routes the calls from outside the rack, 
 
 ### Bun only
 
-rack42u runs on Bun, which provides Workers, the bundler that builds firmware, HTTP and WebSocket servers, SQLite, and a test runner, and which runs TypeScript as it is. rack42u names a minimum Bun version, which the [README](../README.md#requirements) states, and CI tests it on every system, and the latest Bun release on Linux.
+racku runs on Bun, which provides Workers, the bundler that builds firmware, HTTP and WebSocket servers, SQLite, and a test runner, and which runs TypeScript as it is. racku names a minimum Bun version, which the [README](../README.md#requirements) states, and CI tests it on every system, and the latest Bun release on Linux.
 
-**Cost:** no Node.js or Deno, and Bun's bugs are rack42u's to work around until Bun fixes them.
+**Cost:** no Node.js or Deno, and Bun's bugs are racku's to work around until Bun fixes them.
 
 ## Limits
 
-- **JavaScript:** garbage collection pauses the code, each thread runs one event loop, types are checked only where schemas check them, and devices run third-party code. So rack42u gives no real-time guarantees. What it aims for is that every known failure mode has a detection, a bound, a recovery, and a test, and where a guarantee isn't possible, the documentation states the limit.
+- **JavaScript:** garbage collection pauses the code, each thread runs one event loop, types are checked only where schemas check them, and devices run third-party code. So racku gives no real-time guarantees. What it aims for is that every known failure mode has a detection, a bound, a recovery, and a test, and where a guarantee isn't possible, the documentation states the limit.
 - **Native code:** a thread blocked in native code, such as a long SQLite query, stops only when the call returns. Only a restart of the rack reclaims a thread whose call never returns, as [Faults and overload](guides/faults.md#stuck-threads) describes.
 - **State:** a crash or a restart loses a device's in-memory state. State that matters belongs in a storage device.
-- **Bun:** rack42u works around two bugs of Bun 1.4.4: an import or a build that Bun reports missing a file on disk is tried again, and a body of 15 KiB or more is sent in a form that Bun writes in one piece, as [`wholeResponse()`](guides/listeners.md#bodies-in-memory) does.
+- **Bun:** racku works around two bugs of Bun 1.4.4: an import or a build that Bun reports missing a file on disk is tried again, and a body of 15 KiB or more is sent in a form that Bun writes in one piece, as [`wholeResponse()`](guides/listeners.md#bodies-in-memory) does.
 - **Not built yet:** devices in child processes, racks connected to each other, and a management dashboard, as the [README](../README.md#not-supported-yet) lists.

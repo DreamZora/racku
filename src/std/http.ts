@@ -162,7 +162,7 @@ const MOVE_FROM = 1024;
  * How long a panel instance may stay silent before its sockets count as gone: three of the
  * panel's checks, 90 s. Tests shorten the checks through the environment, as the panel does.
  */
-const SILENT_MS = 3 * (Number(process.env.RACK42U_TEST_PANEL_SYNC_MS) || 30_000);
+const SILENT_MS = 3 * (Number(process.env.RACKU_TEST_PANEL_SYNC_MS) || 30_000);
 const LATER = Symbol("later");
 
 type Bytes = Uint8Array<ArrayBuffer>;

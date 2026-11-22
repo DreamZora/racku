@@ -1,5 +1,5 @@
 /**
- * Tests of the test bench, `rack42u/bench`: one device in a rack of its own, with stubs for its
+ * Tests of the test bench, `racku/bench`: one device in a rack of its own, with stubs for its
  * needs that the tests implement.
  *
  * @decision .agents/decisions/261118_173457-device-test-bench.md#tests
@@ -7,9 +7,9 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { RackError, type RackHandle } from "rack42u";
-import { bench, stub } from "rack42u/bench";
-import { Kv } from "rack42u/std";
+import { RackError, type RackHandle } from "racku";
+import { bench, stub } from "racku/bench";
+import { Kv } from "racku/std";
 import { codeOf, FIXTURES, waitFor } from "./fixtures/app.ts";
 import { Blobs } from "./fixtures/connectors.ts";
 

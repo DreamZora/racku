@@ -1,6 +1,6 @@
 # Storage devices
 
-`rack42u/std` exports the standard connectors and the factories that mount the standard devices. Each factory takes `{ name }` in `options` to rename the device. The [HTTP panel](http.md) is a standard device too.
+`racku/std` exports the standard connectors and the factories that mount the standard devices. Each factory takes `{ name }` in `options` to rename the device. The [HTTP panel](http.md) is a standard device too.
 
 ## memkv
 

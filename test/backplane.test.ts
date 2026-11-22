@@ -6,7 +6,7 @@
  * @decision .agents/decisions/261116_024226-backplane-links.md#events
  */
 import { describe, expect, test } from "bun:test";
-import { slot } from "rack42u";
+import { slot } from "racku";
 import { codeOf, errorOf, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();

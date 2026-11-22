@@ -17,7 +17,7 @@ import {
   type RackHandle,
   type ServedRpcMetrics,
   slot,
-} from "rack42u";
+} from "racku";
 import { codeOf, useRacks, waitFor } from "./fixtures/app.ts";
 
 const startRack = useRacks();

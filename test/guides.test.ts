@@ -7,8 +7,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { rack, slot, start } from "rack42u";
-import { httpPanel } from "rack42u/std";
+import { rack, slot, start } from "racku";
+import { httpPanel } from "racku/std";
 import { ROOT, type TempApp, tempApp, waitFor } from "./fixtures/app.ts";
 import { typecheck } from "./fixtures/typecheck.ts";
 
@@ -172,7 +172,7 @@ test("the rack's log goes to the console, unless the program's logger takes it",
     await app.write(
       "main.ts",
       [
-        'import { type LogEntry, start } from "rack42u";',
+        'import { type LogEntry, start } from "racku";',
         'import manifest from "./rack.ts";',
         "const entries: LogEntry[] = [];",
         `const running = await start(manifest, { baseDir: import.meta.dir${options} });`,
@@ -261,8 +261,8 @@ function typedGreeter(): string {
   const code = /```ts\n\/\/ In devices\/greeter\.ts:\n([\s\S]*?)```/.exec(guide)?.[1];
   if (code === undefined) throw new Error("the devices guide has no greeter with a typed helper");
   return [
-    'import { type DeviceContext, device } from "rack42u";',
-    'import { Kv } from "rack42u/std";',
+    'import { type DeviceContext, device } from "racku";',
+    'import { Kv } from "racku/std";',
     'import * as v from "valibot";',
     'import { Greeter } from "../connectors.ts";',
     "",
@@ -285,8 +285,8 @@ function chatRoom(): string {
   )?.[1];
   if (code === undefined) throw new Error("the HTTP panel guide has no chat room");
   return [
-    'import { device } from "rack42u";',
-    'import { Http, type HttpHandler, httpHandler } from "rack42u/std";',
+    'import { device } from "racku";',
+    'import { Http, type HttpHandler, httpHandler } from "racku/std";',
     "",
     'export default device({ model: "room", provides: { http: Http },',
     code,

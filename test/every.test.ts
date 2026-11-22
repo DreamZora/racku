@@ -6,8 +6,8 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { connector, event, rack, rpc, slot } from "rack42u";
-import { bench, stub } from "rack42u/bench";
+import { connector, event, rack, rpc, slot } from "racku";
+import { bench, stub } from "racku/bench";
 import * as v from "valibot";
 import { codeOf, errorOf, type TempApp, useRacks, waitFor } from "./fixtures/app.ts";
 import { host, tool, toolApp } from "./fixtures/tools.ts";
@@ -81,7 +81,7 @@ describe("every needs in a rack placed by hand", () => {
     const app = await toolApp(apps);
     await app.write(
       "devices/both.ts",
-      `import { device } from "rack42u";
+      `import { device } from "racku";
 import { Tool } from "../connectors.ts";
 const impl = { run: (text: string) => text };
 export default device({ model: "both", provides: { a: Tool, b: Tool }, powerOn: () => ({ a: impl, b: impl }) });
@@ -126,7 +126,7 @@ export default device({ model: "both", provides: { a: Tool, b: Tool }, powerOn: 
     // A tool that answers no call, and ends each one only when the call is cancelled.
     await app.write(
       "devices/stuck.ts",
-      `import { device } from "rack42u";
+      `import { device } from "racku";
 import { Tool } from "../connectors.ts";
 export default device({
   model: "stuck",
