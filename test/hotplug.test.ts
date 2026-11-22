@@ -23,6 +23,7 @@ import {
   tempApp,
   useControlDir,
   useRacks,
+  waitFor,
 } from "./fixtures/app.ts";
 import { CONNECTORS, HOST, host, tool } from "./fixtures/tools.ts";
 import { typecheck } from "./fixtures/typecheck.ts";
@@ -207,6 +208,62 @@ export default device({
     expect(firmware()).not.toBe(before);
   });
 
+  test("a hot-plug device's priority sets where it comes in the host's order", async () => {
+    const app = await hotplugApp();
+    await app.write("plugins/zeta.ts", tool("zeta", "text", "\n  priority: 10,"));
+    const { running } = await startRack(SPEC, { baseDir: app.dir });
+    expect(await host(running).names()).toEqual(["zeta", "lower", "upper"]);
+  });
+
+  test("a hot-plug device that crashes fails only the calls to it", async () => {
+    const app = await hotplugApp();
+    const { running } = await startRack(SPEC, { baseDir: app.dir, faultInjection: true });
+    await running.injectFault("upper", "crash");
+    expect(await host(running).run("lower", "Hi")).toBe("hi");
+    // The crash comes after injectFault() returns; the reset brings upper back.
+    await waitFor(() => {
+      const upper = running.status().find((s) => s.name === "upper");
+      return upper?.crashes === 1 && upper.state === "online";
+    });
+    expect(await host(running).run("upper", "Hi")).toBe("HI");
+    expect(running.status().find((s) => s.name === "host")?.state).toBe("online");
+  });
+
+  test("under rack start, a changed fixed plan stops reload(), and not the reloads of hot-plug devices alone", async () => {
+    const app = await hotplugApp();
+    const { running } = await startRack(SPEC, { baseDir: app.dir, plan: true });
+    // host needs a new fixed device now, so the fixed plan no longer fits the plan file.
+    await app.write(
+      "devices/host.ts",
+      HOST.replace(
+        "needs: { tools: every(Tool) },",
+        "needs: { tools: every(Tool), extra: Extra },",
+      ).replace(
+        'import { Host, Tool } from "../connectors.ts";',
+        'import { Extra, Host, Tool } from "../connectors.ts";',
+      ),
+    );
+    await app.write(
+      "connectors.ts",
+      `${CONNECTORS}\nexport const Extra = connector("test.extra/v1", { ping: rpc(v.undefined(), v.string()) });\n`,
+    );
+    await app.write(
+      "devices/extra.ts",
+      `import { device } from "rack42u";
+import { Extra } from "../connectors.ts";
+export default device({ model: "extra", provides: { extra: Extra }, powerOn: () => ({ extra: { ping: () => "pong" } }) });
+`,
+    );
+    const refused = await errorOf(running.reload());
+    expect([refused.code, refused.message]).toEqual([
+      "RACK_SWAP_REJECTED",
+      expect.stringContaining("test.plan no longer fits the devices"),
+    ]);
+    await app.write("plugins/twice.ts", tool("twice", "text + text"));
+    await reloadHotplug(running);
+    expect(await host(running).names()).toEqual(["lower", "twice", "upper"]);
+  });
+
   test("rack plan lists the hot-plug devices with their slots, and the files left out", async () => {
     const app = await hotplugApp();
     await app.write("plugins/broken.ts", "export default device({");
@@ -276,6 +333,24 @@ describe("the rack command with hot-plug directories", () => {
   afterEach(async () => {
     await Promise.all(running.splice(0).map((cli) => cli.stop()));
   });
+
+  test("rack dev applies the changes of hot-plug files with the rest, and leaves the plan file as it is", async () => {
+    const app = await hotplugApp();
+    await app.write(
+      "rack.ts",
+      `import { rack } from "rack42u";\n\nexport default rack("app", ${JSON.stringify(SPEC)});\n`,
+    );
+    const cli = new Cli(["dev"], app.dir);
+    running.push(cli);
+    await cli.waitFor(/watching .* for changes/);
+    const plan = await app.read("app.plan");
+    await app.write("plugins/twice.ts", tool("twice", "text + text"));
+    await cli.waitFor(/twice plugged in at U/);
+    await rm(join(app.dir, "plugins", "lower.ts"));
+    await cli.waitFor(/lower unplugged/);
+    expect(await app.read("app.plan")).toBe(plan);
+    expect(cli.process.exitCode).toBeNull();
+  }, 30_000);
 
   test("rack start watches the hot-plug directories, and applies their changes alone", async () => {
     const app = await hotplugApp();
