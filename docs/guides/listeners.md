@@ -8,8 +8,13 @@ A device can serve HTTP and WebSocket itself, on a listener that the rack hands 
 async powerOn(ctx) {
   const web = await ctx.serve({
     port: 8080, // 0 picks a free port, which the device keeps while the rack runs
-    fetch: (request, listener) =>
-      listener.upgrade(request) ? undefined : new Response("hello"),
+    fetch(request, listener) {
+      // Any web page can send requests to 127.0.0.1, and browsers apply no CORS to WebSockets.
+      if (request.headers.get("origin") !== "https://app.example") {
+        return new Response("forbidden", { status: 403 });
+      }
+      return listener.upgrade(request) ? undefined : new Response("hello");
+    },
     websocket: { message: (ws, data) => ws.send(data) },
   });
   ctx.log.info("serving", { url: web.url.href });
@@ -27,6 +32,10 @@ The options are the ones of `Bun.serve` that a device needs: `fetch`, `routes`, 
 | `websocket.maxPayloadLength` | 1 MiB | The WebSocket closes with 1009. |
 | `websocket.maxBuffered` | 1 MiB unsent | A WebSocket that has more unsent when the device sends to it closes with 1013. |
 | `allowedHosts` | none | On a loopback `hostname`, a request whose `Host` header names any other host than the hostname, `localhost`, or these names gets 403, WebSocket upgrades included. |
+
+- **Routes.** A request reaches a route only when its path, as Bun normalizes it in `request.url`, still matches the route's pattern, with the same `params`. Bun matches a route on the raw path, so `/files/%2e%2e/secret` would reach `/files/*` with the URL `/secret`. Such a request goes to `fetch`, or gets 404 without it, as a path that no route matches does. `params` arrive percent-decoded: check one before you put it in a path.
+- **Hosts.** Whether a listener is on loopback comes from its `hostname` as its URL normalizes it, so `127.1`, `localhost`, and `0:0:0:0:0:0:0:1` count, and its URL names it in that form, such as `127.0.0.1`. A `Host` header of another form than `name`, `name:port`, `[ipv6]`, or `[ipv6]:port` gets 403.
+- **Origins.** The `Host` check stops a web page that points its own domain at `127.0.0.1`, but not one that sends requests to the address itself. So a device checks the `Origin` of WebSocket upgrades, and of requests that change state, as the example does.
 
 ## Swaps and faults
 

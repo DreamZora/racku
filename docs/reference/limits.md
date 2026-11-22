@@ -54,15 +54,18 @@ See [Listeners](../guides/listeners.md).
 | Field or bound | Default | Beyond it |
 |---|---|---|
 | `maxBodySize` | 1 MiB | 413. |
-| `streamThreshold`: the largest request body that goes to the device whole | 256 KiB | The body streams. |
-| `idleTimeout` | 10 s, from 1 to 255 | An idle connection closes; a body sent whole that hasn't arrived fails with 408. |
+| `streamThreshold`: the largest request body that goes to the device whole, with a declared length or chunked | 256 KiB | The body streams. |
+| `idleTimeout` | 10 s, from 1 to 255 | An idle connection closes; a body sent whole that hasn't arrived fails with 408, as does a chunked body that neither ends nor passes `streamThreshold`. |
+| The average rate of a body that streams, over the time that the panel waits for the client, once its first `idleTimeout` has passed | at least 1 KiB/s; not configurable | 408, and the call is cancelled. |
 | `certificateCheck`: how often the panel reads its certificate files | 60 s, from 1 to 3 600 | |
 | `webSocket.maxMessageSize` | 1 MiB | The WebSocket closes with 1009. |
-| `webSocket.maxConnections` | 10 000 | Upgrades get 503. |
+| `webSocket.maxConnections`, WebSockets open or being upgraded | 10 000 | Upgrades get 503. |
 | Bytes unsent to a WebSocket client | 1 MiB | The client is closed with 1013. |
 | The panel's check of its sockets | every 30 s | |
 | A panel instance that makes no call to a device | 90 s | At its next call, the device runs its `close` handler for that panel's sockets, with 1006. |
 | `httpHandler`'s `streamThreshold`: the largest response body that goes back whole | 16 MiB | The body streams. |
+| Upgrades that `httpHandler` accepted and whose sockets haven't opened | 10 000, each for 10 s | The oldest is forgotten; its socket opens without its `data`. |
+| Warnings of the panel for one code and route target, or for slow bodies | 1 a minute | The next one says how many came since. |
 
 See [The HTTP panel](../guides/http.md).
 

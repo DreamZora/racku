@@ -376,24 +376,117 @@ function isFunction(value: unknown): value is (...args: never[]) => unknown {
   return typeof value === "function";
 }
 
+/**
+ * A listener's host name as Bun normalizes it in the listener's URL, without brackets: `127.1`
+ * gives `127.0.0.1`, and `0:0:0:0:0:0:0:1` gives `::1`. A name that no URL takes stays as it is,
+ * in lower case.
+ */
+function normalHost(hostname: string): string {
+  const bracketed =
+    hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
+  try {
+    const host = new URL(`http://${bracketed}/`).hostname;
+    return host.startsWith("[") ? host.slice(1, -1) : host;
+  } catch {
+    // Not a host name that a URL takes; Bun's bind reports it.
+    return hostname.toLowerCase();
+  }
+}
+
+/**
+ * Whether a listener's host name is on loopback, from its normalized form, so that every
+ * spelling of a loopback address counts.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+ */
 function isLoopback(hostname: string): boolean {
+  const host = normalHost(hostname);
   return (
-    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
-    hostname === "::1" ||
-    hostname === "localhost"
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    host === "::1" ||
+    // An IPv4 loopback address in IPv6, as a URL writes it: ::ffff:7f00:1 for 127.0.0.1.
+    /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host) ||
+    host === "localhost"
   );
 }
 
-/** The host name of a `Host` header, without its port, in lower case. */
+/** A `Host` header of the forms `name`, `name:port`, `[ipv6]`, and `[ipv6]:port`. */
+const HOST_HEADER = /^(?:([a-z0-9_.-]+)|\[([0-9a-f:.]+)\])(?::(\d{1,5}))?$/;
+
+/**
+ * The host name of a `Host` header, without its port, in lower case; `undefined` for a header
+ * of any other form, or with a port above 65 535.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+ */
 function hostOf(header: string | null): string | undefined {
   if (header === null) return undefined;
-  const value = header.trim().toLowerCase();
-  if (value.startsWith("[")) {
-    const end = value.indexOf("]");
-    return end < 0 ? undefined : value.slice(1, end);
+  const match = HOST_HEADER.exec(header.toLowerCase());
+  if (match === null) return undefined;
+  const [, name, ipv6, port] = match;
+  if (port !== undefined && Number(port) > 65_535) return undefined;
+  return name ?? ipv6;
+}
+
+/** The path of a request's URL, without its query. */
+function pathOf(url: string): string {
+  const start = url.indexOf("/", url.indexOf("//") + 2);
+  if (start < 0) return "/";
+  const end = url.indexOf("?", start);
+  return end < 0 ? url.slice(start) : url.slice(start, end);
+}
+
+/** A path segment with its escapes decoded; `undefined` when an escape doesn't decode. */
+function decoded(segment: string): string | undefined {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    // Bun decodes such an escape into U+FFFD, which no comparison here needs to repeat.
+    return undefined;
   }
-  const colon = value.lastIndexOf(":");
-  return colon < 0 ? value : value.slice(0, colon);
+}
+
+/**
+ * A check of whether a request that Bun routed to `pattern` still fits it once its path is
+ * normalized, with the same params. Bun matches a route on the raw path, but resolves dot
+ * segments and backslashes in `request.url`: `/files/%2e%2e/secret` reaches the route
+ * `/files/*`, whose handler then sees `/secret`, and `/users/..` reaches `/users/:id` as `/`.
+ *
+ * @param pattern A route pattern of Bun's: literal segments, `:name` for one segment, and `*`
+ *   last for the rest.
+ * @returns The check, which reads the normalized path from `request.url`.
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+ */
+function routeCheck(pattern: string): (request: Request) => boolean {
+  const parts = pattern.split("/");
+  const wild = parts.at(-1) === "*";
+  if (wild) parts.pop();
+  const params = parts.some((part) => part.startsWith(":"));
+  const prefix = `${parts.join("/")}/`;
+  return (request) => {
+    const path = pathOf(request.url);
+    // Most paths equal the pattern, or start with its prefix, as their raw form did.
+    if (!params && (wild ? path.startsWith(prefix) : path === pattern)) return true;
+    const segments = path.split("/");
+    if (wild ? segments.length <= parts.length : segments.length !== parts.length) return false;
+    const given = (request as Partial<Bun.BunRequest<string>>).params as
+      | Record<string, string>
+      | undefined;
+    for (const [index, part] of parts.entries()) {
+      const segment = segments[index] as string;
+      if (part.startsWith(":")) {
+        if (segment === "") return false;
+        const value = given?.[part.slice(1)];
+        const plain = decoded(segment);
+        // A param that Bun took from a segment that normalizing removed, such as `a` from
+        // `/x/a/../b/c` for `/x/:p/*`, doesn't match the path that the handler sees.
+        if (value !== undefined && plain !== undefined && plain !== value && segment !== value) {
+          return false;
+        }
+      } else if (segment !== part && decoded(segment) !== part) return false;
+    }
+    return true;
+  };
 }
 
 async function pem(value: unknown, what: string): Promise<string> {
@@ -692,8 +785,10 @@ export class ListenerHost {
         ) {
           throw invalid("allowedHosts must be a list of host names");
         }
+        // The listener's URL names it in its normalized form, which clients then send.
         allowed = new Set([
           hostname.toLowerCase(),
+          normalHost(hostname),
           "localhost",
           ...extra.map((h) => h.toLowerCase()),
         ]);
@@ -894,22 +989,26 @@ export class ListenerHost {
     taken: () => Bun.Server<unknown>,
     routes: Record<string, ListenerRoute>,
   ): Record<string, unknown> {
-    const wrap = (route: ListenerRouteHandler | Response) => {
+    const wrap = (route: ListenerRouteHandler | Response, fits: (request: Request) => boolean) => {
       const handler: ListenerHandler =
         route instanceof Response
           ? () => route.clone() as Response
           : (request, listener) => route(request as Bun.BunRequest<string>, listener);
-      return (request: Request) => this.#handle(state, taken(), request, handler);
+      // A request whose normalized path leaves the route goes where an unmatched path goes.
+      // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+      return (request: Request) =>
+        this.#handle(state, taken(), request, fits(request) ? handler : state.handlers.fetch);
     };
     const wrapped: Record<string, unknown> = {};
     for (const [path, route] of Object.entries(routes)) {
+      const fits = routeCheck(path);
       if (route instanceof Response || isFunction(route)) {
-        wrapped[path] = wrap(route as ListenerRouteHandler | Response);
+        wrapped[path] = wrap(route as ListenerRouteHandler | Response, fits);
         continue;
       }
       const methods: Record<string, unknown> = {};
       for (const [method, value] of Object.entries(route)) {
-        if (value !== undefined) methods[method] = wrap(value);
+        if (value !== undefined) methods[method] = wrap(value, fits);
       }
       wrapped[path] = methods;
     }

@@ -39,7 +39,7 @@ import { Http, type HttpPanelConfig, httpHandler, httpPanel } from "racku/std";
 import * as v from "valibot";
 import { describeConnector } from "../src/connector.ts";
 import { planRack } from "../src/rack.ts";
-import { PanelConfig, SYNC_MS } from "../src/std/http-panel.ts";
+import { PanelConfig, SYNC_MS, WARN_EVERY_MS } from "../src/std/http-panel.ts";
 import { errorOf, FIXTURES, type TempApp, tempApp, useRacks, waitFor } from "./fixtures/app.ts";
 import {
   certificateOf,
@@ -68,6 +68,7 @@ const temporary: string[] = [];
 const apps: TempApp[] = [];
 afterEach(async () => {
   delete process.env.RACKU_TEST_PANEL_SYNC_MS;
+  delete process.env.RACKU_TEST_PANEL_WARN_MS;
   setSystemTime();
   await Promise.all(temporary.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   await Promise.all(apps.splice(0).map((app) => app.remove()));
@@ -148,6 +149,36 @@ describe("http-panel requests", () => {
   });
 
   // @doc docs/guides/http.md#configuration
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("answers a path that normalizing takes out of its route with 404, as an unmatched path", async () => {
+    const { port } = await panelRack();
+    const send = (path: string) =>
+      dripResponse(
+        port,
+        [`GET ${path} HTTP/1.1`, `Host: 127.0.0.1:${port}`, "Connection: close"],
+        [],
+        10,
+      );
+    // Bun routes each of these on its raw path, while the device would see another path.
+    for (const path of [
+      "/chat/%2e%2e/web/echo",
+      "/chat/../web/echo",
+      "/chat/x\\..\\..\\web\\echo",
+      "/items/..",
+      "/items/%2e",
+      "/items/a\\..\\42",
+    ]) {
+      const answer = await send(path);
+      expect(answer).toStartWith("HTTP/1.1 404");
+      expect(answer).toContain('{"code":"RACK_NO_ROUTE","message":"no route matches"}');
+    }
+    // A path whose dot segments stay inside its route reaches it, as the device sees it.
+    const inside = await send("/web/x/../echo");
+    expect(inside).toStartWith("HTTP/1.1 200");
+    expect(inside).toContain('"path":"/web/echo"');
+  });
+
+  // @doc docs/guides/http.md#configuration
   test("answers an unmatched path with 404", async () => {
     const { get } = await panelRack();
     const response = await get("/elsewhere");
@@ -155,16 +186,58 @@ describe("http-panel requests", () => {
     expect(await response.json()).toEqual({ code: "RACK_NO_ROUTE", message: "no route matches" });
   });
 
-  test("answers a failed call with 502, as it does response headers that Response rejects", async () => {
-    const { get } = await panelRack();
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("answers a failed call with 502, as it does response headers that Response rejects, and the log keeps the details", async () => {
+    const { get, rec } = await panelRack();
     const failed = await get("/web/boom");
     expect([failed.status, await failed.json()]).toEqual([
       502,
-      { code: "RACK_DEVICE_FAULT", message: "boom" },
+      { code: "RACK_DEVICE_FAULT", message: "the device failed" },
     ]);
     const bad = await get("/web/bad-header");
-    expect(bad.status).toBe(502);
-    expect(((await bad.json()) as { code: string }).code).toBe("RACK_INVALID_OUTPUT");
+    expect([bad.status, await bad.json()]).toEqual([
+      502,
+      { code: "RACK_INVALID_OUTPUT", message: "the device's answer isn't valid" },
+    ]);
+    const warnings = rec.logs.filter((e) => e.device === "http-panel" && e.level === "warn");
+    expect(warnings).toContainEqual(
+      expect.objectContaining({
+        message: "a request failed",
+        data: { route: "web.http", code: "RACK_DEVICE_FAULT", error: "boom" },
+      }),
+    );
+    expect(warnings).toContainEqual(
+      expect.objectContaining({ message: "a device's answer has headers that HTTP refuses" }),
+    );
+  });
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("a failure of one code and route goes to the log once a minute, with how many came since", async () => {
+    // A minute, shortened for the test; the panel's Worker copies the environment as it starts.
+    process.env.RACKU_TEST_PANEL_WARN_MS = "400";
+    const { get, rec } = await panelRack();
+    for (let i = 0; i < 3; i++) expect((await get("/web/boom")).status).toBe(502);
+    const failures = () =>
+      rec.logs.filter((e) => e.device === "http-panel" && e.message === "a request failed");
+    expect(failures()).toHaveLength(1);
+    await Bun.sleep(500);
+    expect((await get("/web/boom")).status).toBe(502);
+    expect(failures()).toHaveLength(2);
+    expect(failures()[1]?.data).toEqual({
+      route: "web.http",
+      code: "RACK_DEVICE_FAULT",
+      error: "boom",
+      since: 2,
+    });
+  });
+
+  test("a code that the device defines keeps its message", async () => {
+    const { get } = await panelRack();
+    const refused = await get("/web/refuse");
+    expect([refused.status, await refused.json()]).toEqual([
+      502,
+      { code: "WEB_REFUSED", message: "refused on purpose" },
+    ]);
   });
 
   test("answers 504 when the response head comes later than callTimeout", async () => {
@@ -189,7 +262,11 @@ describe("http-panel requests", () => {
 
   // @doc docs/guides/http.md#configuration
   test("answers 413 for a body over maxBodySize, with a declared length or chunked", async () => {
-    const { running, port } = await panelRack({ maxBodySize: 64 * 1024 });
+    // The chunked body passes streamThreshold, so that it streams to the device.
+    const { running, port } = await panelRack({
+      maxBodySize: 64 * 1024,
+      streamThreshold: 16 * 1024,
+    });
     const head = (extra: string) => [
       "POST /web/upload HTTP/1.1",
       `Host: 127.0.0.1:${port}`,
@@ -212,6 +289,22 @@ describe("http-panel requests", () => {
     expect(streams).toMatchObject({ opened: 1, errors: { RACK_INVALID_INPUT: 1 } });
   });
 
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("a chunked body within streamThreshold that crosses maxBodySize gets 413 before any call", async () => {
+    const { running, port } = await panelRack({ maxBodySize: 16 * 1024 });
+    const chunk = "x".repeat(8 * 1024);
+    const chunked = `${`${chunk.length.toString(16)}\r\n${chunk}\r\n`.repeat(4)}0\r\n\r\n`;
+    const head = [
+      "POST /web/upload HTTP/1.1",
+      `Host: 127.0.0.1:${port}`,
+      "Transfer-Encoding: chunked",
+      "Connection: close",
+    ];
+    expect(await rawStatus(port, head, chunked)).toStartWith("HTTP/1.1 413");
+    const handle = (await metricsOf(running, "web")).provides.http?.handle;
+    expect(handle?.kind === "rpc" && handle.calls).toBe(0);
+  });
+
   test("answers 408 when the client stops sending its body, as bytes or as a stream", async () => {
     const { port } = await panelRack({ idleTimeout: 1 });
     const head = (extra: string) => ["POST /web/upload HTTP/1.1", `Host: 127.0.0.1:${port}`, extra];
@@ -227,7 +320,8 @@ describe("http-panel requests", () => {
     ).toStartWith("HTTP/1.1 408");
   });
 
-  test("a body sent whole must arrive within idleTimeout, while a streamed one may take longer as long as it moves", async () => {
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("a body within streamThreshold must arrive within idleTimeout, with a declared length or chunked", async () => {
     const { port } = await panelRack({ idleTimeout: 1 });
     const head = (extra: string) => [
       "POST /web/upload HTTP/1.1",
@@ -237,17 +331,55 @@ describe("http-panel requests", () => {
     ];
     // 2 bytes every 200 ms: 2 s for the body, and never 1 s without bytes.
     const pieces = Array.from({ length: 10 }, () => "xx");
-    const started = performance.now();
-    const whole = await dripResponse(port, head("Content-Length: 20"), pieces, 200);
-    expect(whole).toStartWith("HTTP/1.1 408");
-    expect(whole).toContain("the client didn't send its body within idleTimeout");
-    const elapsed = performance.now() - started;
-    expect(elapsed).toBeGreaterThan(900);
-    expect(elapsed).toBeLessThan(1_900);
-    const chunks = [...pieces.map((piece) => `2\r\n${piece}\r\n`), "0\r\n\r\n"];
-    const streamed = await dripResponse(port, head("Transfer-Encoding: chunked"), chunks, 200);
-    expect(streamed).toStartWith("HTTP/1.1 200");
-    expect(streamed.endsWith("\r\n\r\n20")).toBe(true);
+    for (const [extra, sent] of [
+      ["Content-Length: 20", pieces],
+      ["Transfer-Encoding: chunked", [...pieces.map((p) => `2\r\n${p}\r\n`), "0\r\n\r\n"]],
+    ] as const) {
+      const started = performance.now();
+      const answer = await dripResponse(port, head(extra), [...sent], 200);
+      expect(answer).toStartWith("HTTP/1.1 408");
+      expect(answer).toContain("the client didn't send its body within idleTimeout");
+      const elapsed = performance.now() - started;
+      expect(elapsed).toBeGreaterThan(900);
+      expect(elapsed).toBeLessThan(1_900);
+    }
+  });
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("a streamed body may take longer than idleTimeout at 1 KiB/s or more, and gets 408 below", async () => {
+    // Every body of 1 byte or more streams, so that the rate decides.
+    const { port, rec } = await panelRack({ idleTimeout: 1, streamThreshold: 0 });
+    const head = (extra: string) => [
+      "POST /web/upload HTTP/1.1",
+      `Host: 127.0.0.1:${port}`,
+      extra,
+      "Connection: close",
+    ];
+    // 512 bytes every 200 ms, 2.5 KiB/s, for 2 s: longer than idleTimeout, above the rate.
+    const fast = Array.from({ length: 10 }, () => "x".repeat(512));
+    const kept = await dripResponse(port, head("Content-Length: 5120"), fast, 200);
+    expect(kept).toStartWith("HTTP/1.1 200");
+    expect(kept.endsWith("\r\n\r\n5120")).toBe(true);
+    // 64 bytes every 200 ms, 320 B/s: never 1 s without bytes, but below the rate after 1 s.
+    const slow = Array.from({ length: 20 }, () => "x".repeat(64));
+    for (const extra of ["Content-Length: 1280", "Transfer-Encoding: chunked"]) {
+      const sent = extra.startsWith("Content") ? slow : slow.map((piece) => `40\r\n${piece}\r\n`);
+      const started = performance.now();
+      const answer = await dripResponse(port, head(extra), sent, 200);
+      expect(answer).toStartWith("HTTP/1.1 408");
+      expect(answer).toContain("the client sent its body too slowly");
+      expect(performance.now() - started).toBeLessThan(2_500);
+    }
+    const warnings = rec.logs.filter(
+      (e) =>
+        e.device === "http-panel" && e.message === "a client's body stalled or came too slowly",
+    );
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        data: { route: "web.http", reason: "the client sent its body too slowly" },
+      }),
+    ]);
   });
 
   test("answers 504 when the device stops reading the body", async () => {
@@ -617,6 +749,67 @@ describe("http-panel WebSocket", () => {
     expect(first.ws.protocol).toBe("other");
   });
 
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("an upgrade that the device accepted but that doesn't complete reaches the device as closed", async () => {
+    const { running, url, port } = await panelRack({ webSocket: { maxConnections: 1 } });
+    const closedCalls = async () => {
+      const closed = (await metricsOf(running, "chat")).provides.http?.closed;
+      return closed?.kind === "rpc" ? closed.calls : 0;
+    };
+    // Bun refuses an upgrade without Sec-WebSocket-Key, after the device accepted it.
+    const refused = await rawStatus(port, [
+      "GET /chat HTTP/1.1",
+      `Host: 127.0.0.1:${port}`,
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+    ]);
+    expect(refused).toStartWith("HTTP/1.1 400");
+    await waitFor(async () => (await closedCalls()) === 1);
+    // A client that leaves before the device answers.
+    const socket = netConnect({ host: "127.0.0.1", port }, () => {
+      socket.write(`${upgrade(port, "/chat?delay=600").join("\r\n")}\r\n\r\n`);
+      setTimeout(() => socket.destroy(), 50);
+    });
+    socket.on("error", () => {});
+    await waitFor(async () => (await closedCalls()) === 2);
+    // Both gave their places back: a socket opens under a limit of one.
+    await socketTo(url, "/chat");
+  });
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("upgrades in flight count toward maxConnections, so a burst can't pass it", async () => {
+    const { port } = await panelRack({ webSocket: { maxConnections: 2 } });
+    // Ten upgrades at once, which the device answers 300 ms later.
+    const heads = await Promise.all(
+      Array.from({ length: 10 }, () => rawStatus(port, upgrade(port, "/chat?delay=300"))),
+    );
+    expect(heads.filter((head) => head.startsWith("HTTP/1.1 101"))).toHaveLength(2);
+    expect(heads.filter((head) => head.startsWith("HTTP/1.1 503"))).toHaveLength(8);
+  });
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("an error while the panel upgrades gets 502, and the connection gets its idle timer back", async () => {
+    const { running, port } = await panelRack({ idleTimeout: 1 });
+    // The device names a subprotocol from the query, with a newline that no header may hold.
+    const started = performance.now();
+    const answer = await new Promise<{ data: string; closedAfter: number }>((resolve, reject) => {
+      let data = "";
+      const socket = netConnect({ host: "127.0.0.1", port }, () => {
+        socket.write(`${upgrade(port, "/chat?protocol=a%0Ab").join("\r\n")}\r\n\r\n`);
+      });
+      socket.on("data", (chunk) => {
+        data += chunk.toString();
+      });
+      socket.on("close", () => resolve({ data, closedAfter: performance.now() - started }));
+      socket.on("error", reject);
+    });
+    expect(answer.data).toStartWith("HTTP/1.1 502");
+    expect(answer.data).toContain('"code":"RACK_INVALID_OUTPUT"');
+    expect(answer.closedAfter).toBeLessThan(6_000);
+    const closed = (await metricsOf(running, "chat")).provides.http?.closed;
+    expect(closed?.kind === "rpc" && closed.calls).toBe(1);
+  }, 10_000);
+
   test("text and binary messages travel both ways", async () => {
     const { url } = await panelRack();
     const socket = await socketTo(url, "/chat?name=ann");
@@ -952,6 +1145,7 @@ describe("http-panel configuration", () => {
     });
     // The panel checks its WebSockets with the devices behind it every 30 s.
     expect(SYNC_MS).toBe(30_000);
+    expect(WARN_EVERY_MS).toBe(60_000);
   });
 
   // @doc docs/guides/http.md#routes
@@ -1316,6 +1510,76 @@ describe("http/v2 and httpHandler", () => {
   });
 
   // @doc docs/guides/http.md#websocket
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("httpHandler forgets an upgrade whose socket doesn't open within 10 s, and keeps at most 10 000", async () => {
+    const { emit } = recorder();
+    const opened: unknown[] = [];
+    const handler = httpHandler<number>(
+      {
+        fetch: (request, server) =>
+          server.upgrade(request, { data: Number(new URL(request.url).searchParams.get("n")) })
+            ? undefined
+            : new Response("plain"),
+        websocket: {
+          open: (ws) => {
+            opened.push(ws.data);
+          },
+        },
+      },
+      emit,
+    );
+    const accept = async (n: number) => {
+      const request = {
+        method: "GET",
+        url: `http://rack.local/chat?n=${n}`,
+        headers: [] as [string, string][],
+        params: {},
+        body: null,
+        socket: `p:1:${n}`,
+      };
+      expect(await handler.handle(request, CALL)).toEqual({ upgrade: {} });
+    };
+    const now = Date.now();
+    setSystemTime(now);
+    await accept(1);
+    setSystemTime(now + 10_001);
+    // The next upgrade drops the one whose socket didn't open in time.
+    await accept(2);
+    await handler.opened({ socket: "p:1:1" }, CALL);
+    await handler.opened({ socket: "p:1:2" }, CALL);
+    expect(opened).toEqual([undefined, 2]);
+    // Past 10 000 that wait, the oldest goes.
+    for (let n = 3; n <= 10_003; n++) await accept(n);
+    await handler.opened({ socket: "p:1:3" }, CALL);
+    await handler.opened({ socket: "p:1:4" }, CALL);
+    await handler.opened({ socket: "p:1:10003" }, CALL);
+    expect(opened.slice(2)).toEqual([undefined, 4, 10_003]);
+  });
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("httpHandler forgets an upgrade that the panel closes before its socket opens", async () => {
+    const { handler } = chatHandler();
+    const request = {
+      method: "GET",
+      url: "http://rack.local/chat?name=ann",
+      headers: [] as [string, string][],
+      params: {},
+      body: null,
+      socket: "p:1:1",
+    };
+    expect(await handler.handle(request, CALL)).toEqual({ upgrade: {} });
+    expect(await handler.sockets({ instance: "p:1", open: ["p:1:1"] }, CALL)).toEqual({
+      unknown: [],
+    });
+    await handler.closed(
+      { socket: "p:1:1", code: 1006, reason: "the upgrade didn't complete" },
+      CALL,
+    );
+    expect(await handler.sockets({ instance: "p:1", open: ["p:1:1"] }, CALL)).toEqual({
+      unknown: ["p:1:1"],
+    });
+  });
+
   test("sockets send and close through the port's events, and a message for an unknown socket closes it with 1011", async () => {
     const { handler, open, sent, closed } = chatHandler();
     await open("p:1:1", "ann");

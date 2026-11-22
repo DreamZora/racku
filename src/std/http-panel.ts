@@ -46,6 +46,24 @@ const STREAM_THRESHOLD = 256 * 1024;
 const MOVE_FROM = 1024;
 /** The message of the 408 for a body sent whole that didn't arrive within `idleTimeout`. */
 const LATE_BODY = "the client didn't send its body within idleTimeout";
+/** The message of the 408 for a streamed body that stopped for `idleTimeout`. */
+const STOPPED_BODY = "the client stopped sending its body";
+/** The message of the 408 for a streamed body below {@link MIN_RATE}. */
+const SLOW_BODY = "the client sent its body too slowly";
+/**
+ * The lowest average rate of a body that streams, in bytes per second, once its first
+ * `idleTimeout` has passed: 1 KiB/s. It lets a body of 1 MiB take about 17 minutes, and makes
+ * holding a device's `queueLimit` calls with slow bodies cost a client about 10 MiB/s.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+ */
+const MIN_RATE = 1024;
+/**
+ * How often a kind of warning goes to the log at most: once a minute, with a count of the rest.
+ * Tests shorten it through the environment, as {@link SYNC_MS}. Exported for the tests of its
+ * default.
+ */
+export const WARN_EVERY_MS = Number(process.env.RACKU_TEST_PANEL_WARN_MS) || 60_000;
 /** The most message calls a socket has unfinished. */
 const MESSAGES_IN_FLIGHT = 16;
 /**
@@ -151,6 +169,11 @@ interface Loaded {
 /** Which instance of the panel this is, for the ids of its sockets. */
 const instance = Math.random().toString(36).slice(2, 10);
 const sockets = new Map<string, Socket>();
+/**
+ * Upgrades in flight, which count among `maxConnections`: from before the panel calls the device
+ * until the socket opens, with a timer once Bun has the upgrade, for a socket that never opens.
+ */
+const upgrades = new Map<string, ReturnType<typeof setTimeout> | undefined>();
 let socketCount = 0;
 let refusing = false;
 let listener: Listener<SocketData> | undefined;
@@ -171,8 +194,8 @@ interface Waiting {
   aborter: AbortController;
   /** The client's signal can abort `aborter`: the controller can't serve another call. */
   attached: boolean;
-  /** The client stopped sending the body. */
-  client: boolean;
+  /** Why the client's body stalled, as the 408's message says it; `undefined` while it didn't. */
+  client: string | undefined;
   /** The device stopped taking the body. */
   device: boolean;
 }
@@ -258,18 +281,78 @@ function tlsOf(pairs: readonly Loaded[]): ListenerTls | ListenerTls[] {
   return list.length === 1 && list[0]?.serverName === undefined ? (list[0] as ListenerTls) : list;
 }
 
+/**
+ * What the body of a failed request says for the codes that the rack makes, in general terms:
+ * the log keeps the details, such as an exception's message, paths, device names, and limits.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+ */
+const GENERAL: Record<string, string> = {
+  RACK_DEVICE_FAULT: "the device failed",
+  RACK_LINK_DOWN: "the device is unavailable",
+  RACK_OVERLOADED: "the device is overloaded",
+  RACK_TIMEOUT: "the device didn't answer in time",
+  RACK_CANCELLED: "the request was cancelled",
+  RACK_INVALID_INPUT: "the device refused the request",
+  RACK_INVALID_OUTPUT: "the device's answer isn't valid",
+};
+
+/** When each kind of sampled warning last went to the log, and how many came since. */
+const warned = new Map<string, { at: number; since: number }>();
+
+/**
+ * Logs a warning at most once a minute for each `key`, with `since`, how many came after the last
+ * one that the log got. The keys are few: kinds of warning, and the rack's codes per route target.
+ */
+function warnSampled(ctx: Ctx, key: string, message: string, data: Record<string, unknown>): void {
+  const now = Date.now();
+  const last = warned.get(key);
+  if (last !== undefined && now - last.at < WARN_EVERY_MS) {
+    last.since++;
+    return;
+  }
+  warned.set(key, { at: now, since: 0 });
+  ctx.log.warn(
+    message,
+    last === undefined || last.since === 0 ? data : { ...data, since: last.since },
+  );
+}
+
+/** A route's target: the need that the panel calls, and the address that it names. */
+interface Target {
+  need: string;
+  address: string;
+}
+
 /** Why a request failed, as a status: what the decision's table of statuses says. */
-function statusFor(error: unknown, stalled: { client: boolean; device: boolean }): Response {
-  const message = messageOf(error);
-  if (stalled.client) {
-    const whole = error instanceof RackError && error.message === LATE_BODY;
-    return json(408, "RACK_TIMEOUT", whole ? LATE_BODY : "the client stopped sending its body");
+function statusFor(
+  ctx: Ctx,
+  target: Target,
+  error: unknown,
+  stalled: { client: string | undefined; device: boolean },
+): Response {
+  if (stalled.client !== undefined) {
+    warnSampled(ctx, "slow body", "a client's body stalled or came too slowly", {
+      route: target.address,
+      reason: stalled.client,
+    });
+    return json(408, "RACK_TIMEOUT", stalled.client);
   }
   if (stalled.device) return json(504, "RACK_TIMEOUT", "the device stopped reading the body");
   const code = codeOf(error);
-  if (code === "RACK_LINK_DOWN" || code === "RACK_OVERLOADED") return json(503, code, message);
-  if (code === "RACK_TIMEOUT") return json(504, code, message);
-  return json(502, code, message);
+  const general = GENERAL[code] ?? (code.startsWith("RACK_") ? "the request failed" : undefined);
+  if (general === undefined) {
+    // A code that the device defines keeps the message that the device chose to send.
+    return json(502, code, messageOf(error));
+  }
+  warnSampled(ctx, `call ${code} ${target.address}`, "a request failed", {
+    route: target.address,
+    code,
+    error: messageOf(error),
+  });
+  if (code === "RACK_LINK_DOWN" || code === "RACK_OVERLOADED") return json(503, code, general);
+  if (code === "RACK_TIMEOUT") return json(504, code, general);
+  return json(502, code, general);
 }
 
 /** Why reading a client's body failed, as Bun reports it. */
@@ -292,7 +375,11 @@ function bodyError(error: unknown): RackError {
  *
  * @decision .agents/decisions/261118_165318-stream-threshold.md#bodies-sent-whole
  */
-function readWhole(request: Request, idle: number, stalled: { client: boolean }): Promise<Bytes> {
+function readWhole(
+  request: Request,
+  idle: number,
+  stalled: { client: string | undefined },
+): Promise<Bytes> {
   const reading = request.bytes() as Promise<Bytes>;
   return new Promise<Bytes>((resolve, reject) => {
     const deadline: Deadline = {
@@ -301,7 +388,7 @@ function readWhole(request: Request, idle: number, stalled: { client: boolean })
       older: undefined,
       newer: undefined,
       expire() {
-        stalled.client = true;
+        stalled.client = LATE_BODY;
         // Bun fails the read once the panel answers; nothing waits for it any more.
         reading.catch(() => undefined);
         reject(new RackError("RACK_TIMEOUT", LATE_BODY));
@@ -387,41 +474,77 @@ const bodyDeadlines = new (class {
   }
 })();
 
+/** A reader of a request body; the stream types of Bun and of `node:stream/web` both fit it. */
+interface Reader {
+  read(): Promise<{ done: boolean; value?: Uint8Array | undefined }>;
+  cancel(reason?: unknown): Promise<void>;
+}
+
+/** How much of a streamed body arrived, and how long the panel waited for it, in ms. */
+interface Meter {
+  bytes: number;
+  waited: number;
+}
+
 /**
- * The request body as the panel streams it on: a stream that fails with `RACK_TIMEOUT` when the
- * client sends nothing for `idle` s, and with `RACK_INVALID_INPUT` when it crosses the limit.
+ * The request body as the panel streams it on, after the chunks that it read already: a stream
+ * that fails with `RACK_TIMEOUT` when the client sends nothing for `idle` s, or when its body
+ * arrives slower than {@link MIN_RATE} on average once `idle` s have passed, and with
+ * `RACK_INVALID_INPUT` when it crosses the limit.
+ *
+ * The rate counts the time that the panel waits for the client's bytes, from the start of the
+ * request, and not the time that it waits for the device to take them, so that a device that
+ * reads slowly doesn't count against its client.
  *
  * The stream to the device times out after the same time at both of its ends, whichever party
  * stalled. So when it is cancelled with `RACK_TIMEOUT`, the stall is the client's if the panel
  * was waiting for the client's bytes, and the device's if it was waiting for the device to take
  * them; only then does the panel give up the call.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
  */
 function guard(
-  source: ReadableStream<Uint8Array>,
+  reader: Reader,
+  taken: Uint8Array[],
+  meter: Meter,
   idle: number,
-  stalled: { client: boolean; device: boolean },
+  stalled: { client: string | undefined; device: boolean },
   abort: () => void,
 ): ReadableStream<Uint8Array> {
-  const reader = source.getReader();
   let waiting = false;
   return new ReadableStream<Uint8Array>(
     {
       async pull(controller) {
+        const first = taken.shift();
+        if (first !== undefined) {
+          controller.enqueue(first);
+          return;
+        }
+        // This read may last until the client has been idle for idleTimeout, or until the
+        // average rate would fall below the minimum, whichever comes first.
+        const idleMs = idle * 1000;
+        const left = Math.max(idleMs, (meter.bytes / MIN_RATE) * 1000) - meter.waited;
+        const why = left < idleMs ? SLOW_BODY : STOPPED_BODY;
         let timer: ReturnType<typeof setTimeout> | undefined;
         const quiet = new Promise<"quiet">((resolve) => {
-          timer = setTimeout(() => resolve("quiet"), idle * 1000);
+          timer = setTimeout(() => resolve("quiet"), Math.max(0, Math.min(idleMs, left)));
         });
         waiting = true;
+        const begun = performance.now();
         try {
           const next = await Promise.race([reader.read(), quiet]);
+          meter.waited += performance.now() - begun;
           if (next === "quiet") {
-            stalled.client = true;
+            stalled.client = why;
             void reader.cancel().catch(() => undefined);
-            controller.error(new RackError("RACK_TIMEOUT", "the client stopped sending its body"));
+            controller.error(new RackError("RACK_TIMEOUT", why));
             return;
           }
-          if (next.done) controller.close();
-          else controller.enqueue(next.value);
+          if (next.done || next.value === undefined) controller.close();
+          else {
+            meter.bytes += next.value.byteLength;
+            controller.enqueue(next.value);
+          }
         } catch (error) {
           controller.error(bodyError(error));
         } finally {
@@ -430,8 +553,12 @@ function guard(
         }
       },
       cancel(reason) {
-        if (reason instanceof RackError && reason.code === "RACK_TIMEOUT" && !stalled.client) {
-          if (waiting) stalled.client = true;
+        if (
+          reason instanceof RackError &&
+          reason.code === "RACK_TIMEOUT" &&
+          stalled.client === undefined
+        ) {
+          if (waiting) stalled.client = STOPPED_BODY;
           else {
             stalled.device = true;
             abort();
@@ -443,6 +570,78 @@ function guard(
     },
     { highWaterMark: 0 },
   );
+}
+
+/**
+ * Reads a body without a declared length, such as a chunked one: whole when it ends within
+ * `threshold` bytes, under the deadline of a body sent whole, `idle` s for all of it; or, once it
+ * passes `threshold` within that time, as a stream of what it read and of the rest, which
+ * {@link guard} watches.
+ *
+ * @throws RackError `RACK_TIMEOUT` when it neither ends nor passes `threshold` within `idle` s.
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+ */
+function readUnknown(
+  source: ReadableStream<Uint8Array>,
+  threshold: number,
+  idle: number,
+  stalled: { client: string | undefined; device: boolean },
+  abort: () => void,
+): Promise<Bytes | ReadableStream<Uint8Array>> {
+  const reader: Reader = source.getReader();
+  const begun = performance.now();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  return new Promise((resolve, reject) => {
+    const deadline: Deadline = {
+      expires: begun + idle * 1000,
+      queued: false,
+      older: undefined,
+      newer: undefined,
+      expire() {
+        stalled.client = LATE_BODY;
+        void reader.cancel().catch(() => undefined);
+        reject(new RackError("RACK_TIMEOUT", LATE_BODY));
+      },
+    };
+    bodyDeadlines.add(deadline);
+    const next = (): void => {
+      reader.read().then(
+        (read) => {
+          if (!deadline.queued) return;
+          if (read.done || read.value === undefined) {
+            bodyDeadlines.remove(deadline);
+            resolve(joined(chunks, size));
+            return;
+          }
+          chunks.push(read.value);
+          size += read.value.byteLength;
+          if (size <= threshold) {
+            next();
+            return;
+          }
+          bodyDeadlines.remove(deadline);
+          const meter = { bytes: size, waited: performance.now() - begun };
+          resolve(guard(reader, chunks, meter, idle, stalled, abort));
+        },
+        (error: unknown) => {
+          if (bodyDeadlines.remove(deadline)) reject(bodyError(error));
+        },
+      );
+    };
+    next();
+  });
+}
+
+/** The chunks of a body in one buffer of its own, which the call can move. */
+function joined(chunks: readonly Uint8Array[], size: number): Bytes {
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 /**
@@ -483,63 +682,108 @@ function watched(body: ReadableStream<Uint8Array>, done: () => void): ReadableSt
   );
 }
 
+/**
+ * Tells the device that an upgrade it accepted didn't complete, with a `closed` call of 1006, so
+ * that it forgets the socket.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+ */
+function unopened(ctx: Ctx, need: string, socket: string): void {
+  const port = ctx.ports[need] as Ctx["ports"][string];
+  // A failed closed call is only counted, by the need's counters.
+  void port
+    .closed({ socket, code: 1006, reason: "the upgrade didn't complete" })
+    .catch(() => undefined);
+}
+
+/** Gives back an upgrade's place among `maxConnections`. */
+function release(socket: string): void {
+  clearTimeout(upgrades.get(socket));
+  upgrades.delete(socket);
+}
+
+/** Reads a request's body as the device gets it: none, bytes, or a stream. */
+async function bodyOf(
+  request: Bun.BunRequest<string>,
+  config: Config,
+  stalled: Waiting,
+  options: CallOptions,
+): Promise<Bytes | ReadableStream<Uint8Array> | null> {
+  if (request.method === "GET" || request.method === "HEAD") return null;
+  const idle = config.idleTimeout;
+  const abort = () => stalled.aborter.abort();
+  // A body sent whole is told by its declared length, without `request.body`, for which Bun
+  // would build a stream that `bytes()` doesn't use; a declared length of 0 has no body.
+  const length = request.headers.get("content-length");
+  if (length !== null && Number(length) <= config.streamThreshold) {
+    if (Number(length) === 0) return null;
+    const body = await readWhole(request, idle, stalled);
+    // Bun's bytes() gives a buffer of its own, as measured on Linux; the call moves it.
+    if (
+      body.byteLength >= MOVE_FROM &&
+      body.byteOffset === 0 &&
+      body.byteLength === body.buffer.byteLength
+    ) {
+      options.transfer = [body.buffer];
+    }
+    return body;
+  }
+  const source = request.body;
+  if (source === null) return null;
+  if (length !== null) {
+    return guard(source.getReader(), [], { bytes: 0, waited: 0 }, idle, stalled, abort);
+  }
+  // A body of unknown length, such as a chunked one, is read whole while it fits.
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  const body = await readUnknown(source, config.streamThreshold, idle, stalled, abort);
+  if (body instanceof ReadableStream) return body;
+  if (body.byteLength === 0) return null;
+  if (body.byteLength >= MOVE_FROM) options.transfer = [body.buffer];
+  return body;
+}
+
 async function handle(
   ctx: Ctx,
   request: Bun.BunRequest<string>,
   server: Listener<SocketData>,
-  need: string,
+  target: Target,
 ): Promise<Response | undefined> {
   const { config } = ctx;
+  const { need } = target;
   // A WebSocket upgrade is always a GET, as RFC 6455 says, so other methods skip the lookup.
   const upgrade =
     request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket";
   const limit = config.webSocket.maxConnections;
-  if (upgrade && sockets.size >= limit) {
+  // Upgrades in flight count with the open sockets, so that a burst can't pass the limit.
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  if (upgrade && sockets.size + upgrades.size >= limit) {
     if (!refusing) {
       refusing = true;
       ctx.log.warn("refusing WebSocket upgrades", { maxConnections: limit });
     }
-    return json(503, "RACK_OVERLOADED", `${limit} WebSockets are open`);
+    return json(503, "RACK_OVERLOADED", "too many WebSockets are open");
   }
+  const socket = upgrade ? `${ctx.slot.name}:${instance}:${++socketCount}` : undefined;
+  if (socket !== undefined) upgrades.set(socket, undefined);
   // Bun's timer bounds a whole exchange; the panel bounds idle time with its streams instead.
   // @decision .agents/decisions/261118_071513-http-panel-device.md#requests
   const idle = config.idleTimeout;
   server.timeout(request, 0);
   // The client that goes away and a device that stops reading the body both cancel the call.
   const aborter = spareAborters.pop() ?? new AbortController();
-  const waiting: Waiting = { request, aborter, attached: false, client: false, device: false };
+  const waiting: Waiting = { request, aborter, attached: false, client: undefined, device: false };
   const stalled = waiting;
   watchClient(waiting);
-  const options: CallOptions = { signal: aborter.signal, streamTimeout: config.idleTimeout * 1000 };
-  let body: Bytes | ReadableStream<Uint8Array> | null = null;
-  // A body sent whole is told by its declared length, without `request.body`, for which Bun
-  // would build a stream that `bytes()` doesn't use; a declared length of 0 has no body.
-  const length =
-    request.method === "GET" || request.method === "HEAD"
-      ? null
-      : request.headers.get("content-length");
-  if (length !== null && Number(length) <= config.streamThreshold) {
-    if (Number(length) > 0) {
-      try {
-        body = await readWhole(request, config.idleTimeout, stalled);
-      } catch (error) {
-        unwatchClient(waiting);
-        server.timeout(request, idle);
-        return statusFor(error, stalled);
-      }
-      // Bun's bytes() gives a buffer of its own, as measured on Linux; the call moves it.
-      if (
-        body.byteLength >= MOVE_FROM &&
-        body.byteOffset === 0 &&
-        body.byteLength === body.buffer.byteLength
-      ) {
-        options.transfer = [body.buffer];
-      }
-    }
-  } else if (request.method !== "GET" && request.method !== "HEAD" && request.body !== null) {
-    body = guard(request.body, config.idleTimeout, stalled, () => aborter.abort());
+  const options: CallOptions = { signal: aborter.signal, streamTimeout: idle * 1000 };
+  let body: Bytes | ReadableStream<Uint8Array> | null;
+  try {
+    body = await bodyOf(request, config, stalled, options);
+  } catch (error) {
+    unwatchClient(waiting);
+    if (socket !== undefined) release(socket);
+    server.timeout(request, idle);
+    return statusFor(ctx, target, error, stalled);
   }
-  const socket = upgrade ? `${ctx.slot.name}:${instance}:${++socketCount}` : undefined;
   // Bun's params need no copy: the call clones its input as it sends it.
   const input: HttpInput = {
     method: request.method,
@@ -553,8 +797,14 @@ async function handle(
   try {
     output = await (ctx.ports[need] as Ctx["ports"][string]).handle(input, options);
   } catch (error) {
+    if (socket !== undefined) {
+      // The device may have accepted the upgrade before the call failed, as when its client
+      // left; a device forgets a socket that it never accepted, too.
+      release(socket);
+      unopened(ctx, need, socket);
+    }
     server.timeout(request, idle);
-    return statusFor(error, stalled);
+    return statusFor(ctx, target, error, stalled);
   } finally {
     // From the head on, a client that goes away cancels the response's stream, and with it the
     // call; Bun cancels the stream itself.
@@ -575,14 +825,9 @@ async function handle(
       server.timeout(request, idle);
       return json(502, "RACK_INVALID_OUTPUT", "the device upgraded a request that is no upgrade");
     }
-    const headers = new Headers(output.upgrade.headers ?? []);
-    if (output.upgrade.protocol !== undefined) {
-      headers.set("Sec-WebSocket-Protocol", output.upgrade.protocol);
-    }
-    if (server.upgrade(request, { headers, data: { socket, need } })) return undefined;
-    server.timeout(request, idle);
-    return json(400, "RACK_INVALID_INPUT", "the request can't be upgraded");
+    return upgradeTo(ctx, target, request, server, socket, output.upgrade);
   }
+  if (socket !== undefined) release(socket);
   const answer = output.body;
   if (answer !== null && !(answer instanceof Uint8Array) && !(answer instanceof ReadableStream)) {
     server.timeout(request, idle);
@@ -608,8 +853,67 @@ async function handle(
   } catch (error) {
     // The device returned headers that `Response` rejects, such as an invalid header name.
     server.timeout(request, idle);
-    return json(502, "RACK_INVALID_OUTPUT", messageOf(error));
+    return invalidAnswer(ctx, target, error);
   }
+}
+
+/**
+ * Upgrades a request that the device accepted. When the upgrade doesn't complete, because Bun
+ * refuses it, the client left, or the device's answer has headers that HTTP refuses, the device
+ * hears of it with `closed`, and the client gets an answer, with the connection's idle timer
+ * back.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+ */
+function upgradeTo(
+  ctx: Ctx,
+  target: Target,
+  request: Bun.BunRequest<string>,
+  server: Listener<SocketData>,
+  socket: string,
+  accepted: { protocol?: string | undefined; headers?: [string, string][] | undefined },
+): Response | undefined {
+  const idle = ctx.config.idleTimeout;
+  const { need } = target;
+  let upgraded: boolean;
+  try {
+    const headers = new Headers(accepted.headers ?? []);
+    if (accepted.protocol !== undefined) headers.set("Sec-WebSocket-Protocol", accepted.protocol);
+    upgraded = server.upgrade(request, { headers, data: { socket, need } });
+  } catch (error) {
+    release(socket);
+    unopened(ctx, need, socket);
+    server.timeout(request, idle);
+    return invalidAnswer(ctx, target, error);
+  }
+  if (upgraded) {
+    // The socket takes the place once it opens, which Bun may do within upgrade() itself; one
+    // that never opens gives it back.
+    if (upgrades.has(socket)) {
+      upgrades.set(
+        socket,
+        setTimeout(() => {
+          if (!upgrades.has(socket)) return;
+          upgrades.delete(socket);
+          unopened(ctx, need, socket);
+        }, idle * 1000),
+      );
+    }
+    return undefined;
+  }
+  release(socket);
+  unopened(ctx, need, socket);
+  server.timeout(request, idle);
+  return json(400, "RACK_INVALID_INPUT", "the request can't be upgraded");
+}
+
+/** The answer for a response whose headers HTTP refuses, with the details in the log. */
+function invalidAnswer(ctx: Ctx, target: Target, error: unknown): Response {
+  warnSampled(ctx, `answer ${target.address}`, "a device's answer has headers that HTTP refuses", {
+    route: target.address,
+    error: messageOf(error),
+  });
+  return json(502, "RACK_INVALID_OUTPUT", GENERAL.RACK_INVALID_OUTPUT as string);
 }
 
 /**
@@ -797,8 +1101,8 @@ export default device({
       (request: Bun.BunRequest<string>, l: Listener<SocketData>) => Promise<Response | undefined>
     > = {};
     for (const [pattern, address] of Object.entries(config.routes)) {
-      const need = needName(address);
-      routes[pattern] = (request, served) => handle(ctx, request, served, need);
+      const target: Target = { need: needName(address), address };
+      routes[pattern] = (request, served) => handle(ctx, request, served, target);
     }
     listener = await ctx.serve<SocketData>({
       hostname: config.hostname,
@@ -822,6 +1126,7 @@ export default device({
         maxPayloadLength: config.webSocket.maxMessageSize,
         open(ws) {
           const { socket, need } = ws.data;
+          release(socket);
           const state: Socket = {
             ws,
             need,
@@ -860,7 +1165,7 @@ export default device({
           const state = sockets.get(socket);
           sockets.delete(socket);
           if (state !== undefined) state.held = [];
-          if (refusing && sockets.size < config.webSocket.maxConnections) {
+          if (refusing && sockets.size + upgrades.size < config.webSocket.maxConnections) {
             refusing = false;
             ctx.log.info("accepting WebSocket upgrades again");
           }

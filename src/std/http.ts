@@ -163,6 +163,15 @@ const MOVE_FROM = 1024;
  * panel's checks, 90 s. Tests shorten the checks through the environment, as the panel does.
  */
 const SILENT_MS = 3 * (Number(process.env.RACKU_TEST_PANEL_SYNC_MS) || 30_000);
+/**
+ * How long an upgrade that the handler accepted waits for its socket to open: 10 s, the panel's
+ * default `idleTimeout`. The panel opens a socket at once, or says with `closed` that it won't.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+ */
+const UPGRADE_MS = 10_000;
+/** The most upgrades that wait for their sockets at once: the panel's default `maxConnections`. */
+const UPGRADES = 10_000;
 const LATER = Symbol("later");
 
 type Bytes = Uint8Array<ArrayBuffer>;
@@ -285,7 +294,10 @@ function rest(
  * calls in a row from its panel instance left it out, or once that instance has made no call for
  * 90 s, as after a crash of the panel, and runs `websocket.close` for it with 1006. It checks for
  * silence at each call it gets, of any member. A message for a socket it doesn't know closes
- * that socket with 1011.
+ * that socket with 1011. It forgets an upgrade that it accepted once the panel says with
+ * `closed` that the upgrade didn't complete, or once its socket hasn't opened for 10 s, and it
+ * keeps at most 10 000 such upgrades, dropping the oldest: the panel's default `idleTimeout` and
+ * `maxConnections`.
  *
  * @param handlers A fetch-style function, or `fetch` with WebSocket handlers and
  *   `streamThreshold`.
@@ -310,8 +322,8 @@ export function httpHandler<T = unknown>(
     );
   }
   const sockets = new Map<string, Entry<T>>();
-  /** Sockets upgraded and not opened yet, with their data. */
-  const upgrading = new Map<string, T>();
+  /** Sockets upgraded and not opened yet, with their data and when, oldest first. */
+  const upgrading = new Map<string, { data: T; at: number }>();
   /** How many of `sockets` each panel instance holds. */
   const held = new Map<string, number>();
   /** When each panel instance last made a call that named it or one of its sockets. */
@@ -432,7 +444,13 @@ export function httpHandler<T = unknown>(
             "an upgrade needs websocket handlers and the port's emitter in httpHandler()",
           );
         }
-        upgrading.set(input.socket, upgraded.data);
+        // Upgrades whose sockets never opened go first, and the oldest once there are too many.
+        const now = Date.now();
+        for (const [id, waiting] of upgrading) {
+          if (now - waiting.at <= UPGRADE_MS && upgrading.size < UPGRADES) break;
+          upgrading.delete(id);
+        }
+        upgrading.set(input.socket, { data: upgraded.data, at: now });
         const accepted: { protocol?: string; headers?: [string, string][] } = {};
         if (upgraded.protocol !== undefined) accepted.protocol = upgraded.protocol;
         if (upgraded.headers !== undefined) accepted.headers = upgraded.headers;
@@ -454,7 +472,7 @@ export function httpHandler<T = unknown>(
       hear(instanceOf(socket));
       const swept = sweep();
       if (swept !== undefined) await swept;
-      const data = upgrading.get(socket) as T;
+      const data = upgrading.get(socket)?.data as T;
       upgrading.delete(socket);
       const ws = socketOf(socket, data);
       add(socket, { ws, missed: 0 });

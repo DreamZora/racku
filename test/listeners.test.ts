@@ -34,7 +34,7 @@ import {
   wholeResponse,
 } from "racku";
 import { errorOf, FIXTURES, useRacks, waitFor } from "./fixtures/app.ts";
-import { rawHead } from "./fixtures/net.ts";
+import { dripResponse, rawHead } from "./fixtures/net.ts";
 import { blockingPipe } from "./fixtures/pipe.ts";
 
 const startRack = useRacks();
@@ -204,6 +204,24 @@ describe("listeners", () => {
     const thrown = await fetch(new URL("/throw", url));
     expect([thrown.status, await thrown.text()]).toEqual([500, "handled: thrown on purpose"]);
     expect(await text(new URL("/ip", url))).toBe("127.0.0.1");
+  });
+
+  // @doc docs/guides/listeners.md#opening-a-listener
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("a request reaches a route only when its normalized path fits the route, with the same params", async () => {
+    const { running } = await startRack(listenerRack());
+    const { port } = await urlOf(running);
+    const send = async (path: string) => {
+      const lines = [`GET ${path} HTTP/1.1`, `Host: 127.0.0.1:${port}`, "Connection: close"];
+      return (await dripResponse(Number(port), lines, [], 10)).split("\r\n\r\n")[1];
+    };
+    expect(await send("/route/abc")).toBe("v1 route abc");
+    expect(await send("/route/a%20b")).toBe("v1 route a b");
+    // Bun routes these to /route/:name on their raw paths, which normalizing changes, so fetch
+    // takes them, as it takes a path that no route matches.
+    for (const path of ["/route/..", "/route/%2e", "/route/a\\..\\abc"]) {
+      expect(await send(path)).toBe("not found");
+    }
   });
 
   // @doc docs/guides/listeners.md#opening-a-listener
@@ -559,6 +577,29 @@ describe("listener defaults and limits", () => {
     expect(await status("evil.test", "/ws", upgrade)).toStartWith("HTTP/1.1 403");
     for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, "app.test"]) {
       expect(await status(host)).toStartWith("HTTP/1.1 200");
+    }
+  });
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("every spelling of loopback gets the Host check, which refuses a Host of any other form", async () => {
+    const { running } = await startRack(listenerRack({ hostname: "127.1" }));
+    const { port, hostname } = await urlOf(running);
+    expect(hostname).toBe("127.0.0.1");
+    const status = (host: string) =>
+      rawStatus(Number(port), ["GET /who HTTP/1.1", `Host: ${host}`, "Connection: close"]);
+    expect(await status("evil.test")).toStartWith("HTTP/1.1 403");
+    for (const host of [`127.0.0.1:${port}`, `127.1:${port}`, `LOCALHOST:${port}`]) {
+      expect(await status(host)).toStartWith("HTTP/1.1 200");
+    }
+    for (const host of [
+      `127.0.0.1:${port}x`,
+      "127.0.0.1:99999",
+      `127.0.0.1:${port}/x`,
+      "127.0.0.1@evil.test",
+      "[::1",
+      "127.0.0.1:",
+    ]) {
+      expect(await status(host)).toStartWith("HTTP/1.1 403");
     }
   });
 

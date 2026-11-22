@@ -205,6 +205,18 @@ Each of these decisions stays, and this decision comes first where they differ:
 - **New tests:** as above.
 - **Not changed:** the connectors, and the threat model.
 
+## Implementation
+
+- **The HTTP panel and listeners:**
+  - `src/listeners.ts`: `routeCheck()`, which each route of a listener runs on the path of `request.url`, with its params; a request that doesn't fit goes to `fetch`. `normalHost()` and `isLoopback()` decide loopback from the normalized host name, which `allowedHosts` adds beside the one given, and `HOST_HEADER` holds the forms of `Host` that pass.
+  - `src/std/http-panel.ts`:
+    - `readUnknown()` reads a body of unknown length whole under the deadline of `readWhole()`, and `guard()` holds a streamed body to `MIN_RATE` with a `Meter` of the bytes and of the time that the panel waited for them;
+    - `upgrades` holds the places of upgrades in flight, and `upgradeTo()` and `unopened()` handle an upgrade that doesn't complete;
+    - `GENERAL` holds the messages for the rack's codes, and `warnSampled()` the sampled warnings, every `WARN_EVERY_MS`.
+  - `src/std/http.ts`: `httpHandler` keeps an accepted upgrade for `UPGRADE_MS`, and at most `UPGRADES` of them.
+  - Tests: in `test/http-panel.test.ts` and `test/listeners.test.ts`.
+  - Documentation: the HTTP and listeners guides, the limits table, and the skill.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-22, with [the first formal release](261122_005312-first-formal-release.md) and [the trials of the newer features](261122_005441-trials-of-the-newer-features.md). The Agent's report had named its four breaking changes, and recommended that executables read no `.env`, against keeping it as the user approved on 2026-11-20. The user's words: "All are approved. If the name rack is not already taken, rename rack42u to rack before publishing to npm."

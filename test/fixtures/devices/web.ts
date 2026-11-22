@@ -1,4 +1,4 @@
-import { device, fileResponse } from "racku";
+import { device, fileResponse, RackError } from "racku";
 import { Http, httpHandler } from "racku/std";
 
 // Tests that exercise `rack dev` edit this line in a copy of the file.
@@ -62,6 +62,8 @@ const app = httpHandler(async (request) => {
       });
     case "/web/boom":
       throw new Error("boom");
+    case "/web/refuse":
+      throw new RackError("WEB_REFUSED", "refused on purpose");
     case "/web/crash":
       process.exit(3);
       break;

@@ -25,11 +25,14 @@ export default device({
   powerOn(ctx) {
     handler = httpHandler<Data>(
       {
-        fetch(request, server) {
+        async fetch(request, server) {
           const url = new URL(request.url);
           switch (url.pathname) {
             case "/chat": {
               if (url.searchParams.has("refuse")) return new Response("go away", { status: 403 });
+              // Answers the upgrade this long after it came, as a slow device would.
+              const delay = url.searchParams.get("delay");
+              if (delay !== null) await Bun.sleep(Number(delay));
               const protocol = url.searchParams.get("protocol");
               const data = { name: url.searchParams.get("name") ?? "anon" };
               const headers = { "x-chat": "welcome" };
