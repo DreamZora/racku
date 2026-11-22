@@ -289,6 +289,22 @@ export default device({
     ]);
   });
 
+  // @doc docs/guides/racks.md#scanned-racks
+  // @doc docs/guides/testing.md#the-bench
+  // @doc docs/getting-started.md#test-a-device
+  test("a test file in a scanned directory fails the start, as any file that isn't a device", async () => {
+    const app = await exampleApp();
+    await app.write(
+      "devices/b.test.ts",
+      'import { test } from "bun:test";\n\ntest("b", () => {});\n',
+    );
+    const error = await errorOf(startRack(SPEC, { baseDir: app.dir, plan: false }));
+    expect([error.code, error.message]).toEqual([
+      "RACK_MANIFEST",
+      expect.stringContaining("b.test.ts"),
+    ]);
+  });
+
   // @doc docs/guides/racks.md#shared-instances-and-own-copies
   // @doc docs/reference/api.md#the-rack-handle
   // @doc docs/guides/testing.md#swaps

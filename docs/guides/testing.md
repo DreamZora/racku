@@ -2,17 +2,17 @@
 
 ## The bench
 
-`racku/bench` runs one device in a rack of its own, with a stub for each of its needs that the test implements, and records what the device does. For the greeter of [Devices](devices.md):
+`racku/bench` runs one device in a rack of its own, with a stub for each of its needs that the test implements, and records what the device does. Tests go apart from the device files, such as in `test/`, since a [scanned rack](racks.md#scanned-racks) takes every file of its directories for a device. For the greeter of [Devices](devices.md):
 
 ```ts
-// devices/greeter.test.ts
+// test/greeter.test.ts
 import { expect, test } from "bun:test";
 import { bench, stub } from "racku/bench";
 import { Kv } from "racku/std";
 
 test("greeter greets and remembers the last name", async () => {
   const store = new Map<string, string>();
-  await using greeter = await bench(new URL("./greeter.ts", import.meta.url), {
+  await using greeter = await bench(new URL("../devices/greeter.ts", import.meta.url), {
     config: { prefix: "Hello," },
     needs: {
       cache: stub(Kv, {
@@ -80,14 +80,14 @@ When it stops, the bench deletes its own files, under `.rack/bench/`, and leaves
 A swap hands the device's in-memory state from its old instance to its new one, through `snapshot` and `restore`, so a test swaps the device and checks what it kept, and what changed:
 
 ```ts
-// devices/greeter-swap.test.ts
+// test/greeter-swap.test.ts
 import { expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
 import { bench, stub } from "racku/bench";
 import { Kv } from "racku/std";
 
 test("greeter greets on across swaps", async () => {
-  await using greeter = await bench(new URL("./greeter.ts", import.meta.url), {
+  await using greeter = await bench(new URL("../devices/greeter.ts", import.meta.url), {
     config: { prefix: "Hello," },
     needs: { cache: stub(Kv, { set: () => {} }) },
   });
@@ -99,8 +99,8 @@ test("greeter greets on across swaps", async () => {
   expect(swapped?.to).toBe(swapped?.from ?? ""); // the same firmware
 
   // A changed copy, next to the device, so that its imports resolve.
-  const next = new URL("./greeter-next.ts", import.meta.url);
-  const source = await Bun.file(new URL("./greeter.ts", import.meta.url)).text();
+  const next = new URL("../devices/greeter-next.ts", import.meta.url);
+  const source = await Bun.file(new URL("../devices/greeter.ts", import.meta.url)).text();
   await Bun.write(next, source.replace("${name}`", "${name}!`"));
   try {
     await greeter.swap(next);

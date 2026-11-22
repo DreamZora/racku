@@ -155,17 +155,17 @@ Press Ctrl-C to stop the rack: it stops the devices from the top down. The notes
 
 ## Test a device
 
-The bench runs one device in a rack of its own, with a stub for each of its needs. This test gives `notes` a database made of an array:
+The bench runs one device in a rack of its own, with a stub for each of its needs. This test gives `notes` a database made of an array. Tests go in `test/`, apart from the device files: a rack that scans a directory for its devices, as [Scanned racks](guides/racks.md#scanned-racks) describes, takes every file in it for one.
 
 ```ts
-// devices/notes.test.ts
+// test/notes.test.ts
 import { expect, test } from "bun:test";
 import { bench, stub } from "racku/bench";
 import { Sql } from "racku/std";
 
 test("notes adds a note and lists it", async () => {
   const rows: { id: number; text: string }[] = [];
-  await using notes = await bench(new URL("./notes.ts", import.meta.url), {
+  await using notes = await bench(new URL("../devices/notes.ts", import.meta.url), {
     needs: {
       db: stub(Sql, {
         run({ sql, params }) {

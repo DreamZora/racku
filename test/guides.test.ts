@@ -82,11 +82,11 @@ test("the greeter app of the guides runs as written", async () => {
   const sources = files();
   expect([...sources.keys()].sort()).toEqual([
     "connectors.ts",
-    "devices/greeter-swap.test.ts",
-    "devices/greeter.test.ts",
     "devices/greeter.ts",
     "devices/web.ts",
     "rack.ts",
+    "test/greeter-swap.test.ts",
+    "test/greeter.test.ts",
   ]);
   for (const [path, code] of sources) await app.write(path, code.replaceAll("3000", port));
 
@@ -126,7 +126,7 @@ test("the bench example of the guides tests the greeter as written", async () =>
   const app = await tempApp();
   apps.push(app);
   for (const [path, code] of files()) await app.write(path, code);
-  const run = Bun.spawn([process.execPath, "test", "./devices/greeter.test.ts"], {
+  const run = Bun.spawn([process.execPath, "test", "./test/greeter.test.ts"], {
     cwd: app.dir,
     stdout: "pipe",
     stderr: "pipe",
@@ -146,7 +146,7 @@ test("the swap example of the testing guide runs as written", async () => {
   const app = await tempApp();
   apps.push(app);
   for (const [path, code] of files()) await app.write(path, code);
-  const run = Bun.spawn([process.execPath, "test", "./devices/greeter-swap.test.ts"], {
+  const run = Bun.spawn([process.execPath, "test", "./test/greeter-swap.test.ts"], {
     cwd: app.dir,
     stdout: "pipe",
     stderr: "pipe",

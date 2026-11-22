@@ -249,7 +249,7 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
     "// devices/notes.ts",
     "// devices/web.ts",
     "// rack.ts",
-    "// devices/notes.test.ts",
+    "// test/notes.test.ts",
   ]);
   for (const code of files) {
     const path = (code.split("\n")[0] as string).slice(3);
