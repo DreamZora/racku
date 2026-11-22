@@ -358,17 +358,18 @@ export function formatPlan(rackName: string, plan: Plan): string {
     `# rack42u plan of rack ${rackName}: slot, instance, model, owner, and wiring.`,
     "# Written by `rack dev` and `rack plan --write`; do not edit by hand.",
   ];
-  for (const instance of plan.instances) {
-    const slot =
-      instance.height === 1
-        ? `U${instance.u}`
-        : `U${instance.u}-${instance.u + instance.height - 1}`;
-    const wires = Object.entries(instance.wiring).map(
-      ([need, wire]) => `${need}=${wire.provider}.${wire.port}`,
-    );
-    lines.push([slot, instance.name, instance.model, instance.owner ?? "-", ...wires].join(" "));
-  }
+  for (const instance of plan.instances) lines.push(formatInstance(instance));
   return `${lines.join("\n")}\n`;
+}
+
+/** One instance as a line of a plan file: its slots, name, model, owner, and wiring. */
+export function formatInstance(instance: PlannedInstance): string {
+  const slot =
+    instance.height === 1 ? `U${instance.u}` : `U${instance.u}-${instance.u + instance.height - 1}`;
+  const wires = Object.entries(instance.wiring).map(
+    ([need, wire]) => `${need}=${wire.provider}.${wire.port}`,
+  );
+  return [slot, instance.name, instance.model, instance.owner ?? "-", ...wires].join(" ");
 }
 
 /**
@@ -496,4 +497,274 @@ export function fitPlan(
     (instance) => then.get(instance.name)?.u === instance.u,
   );
   return { fits: true, plan, sameOrder };
+}
+
+// ---- Hot-plug devices ----
+
+/** What {@link placeHotplug} works from. */
+export interface HotplugInput {
+  /** The plan of the fixed instances that runs, with their slots. */
+  fixed: Plan;
+  /** The models that `devices` gives: the types of the fixed instances, and those of copies. */
+  types: ReadonlyMap<string, PlanType>;
+  /** The hot-plug models, each under its model name. */
+  hotplug: readonly PlanType[];
+  /** Provider choices; only those by connector id apply to hot-plug devices. */
+  use: Readonly<Record<string, string>>;
+  /** Rack capacity in U. */
+  size: number;
+}
+
+/** An instance of a rack with hot-plug directories. */
+export interface RunningInstance extends PlannedInstance {
+  /** A hot-plug device, or a copy that one owns. */
+  hotplug: boolean;
+}
+
+/** Where the hot-plug devices go, and which can't run. */
+export interface HotplugPlan {
+  /** The fixed instances at their new slots, and the hot-plug instances, in slot order. */
+  instances: readonly RunningInstance[];
+  /** The hot-plug models that can't run, each with why. */
+  leftOut: ReadonlyMap<string, string>;
+}
+
+/** Why a hot-plug device can't run. */
+class LeftOut extends Error {}
+
+/**
+ * Places hot-plug devices around the plan of the fixed instances, which they leave as it is:
+ * each, with its copies, directly below the lowest fixed instance that has an every need for a
+ * connector that it provides, or above the top one when none has. Hot-plug devices at the same
+ * place go in order of priority, highest first, then of name, and the fixed instances above them
+ * move up by their height. A hot-plug device whose needs fixed shared instances don't meet, or
+ * that can't sit above them, or that finds no room, is left out.
+ *
+ * @decision .agents/decisions/261121_065823-hot-plug-directories.md#where-hot-plug-devices-go
+ */
+export function placeHotplug(input: HotplugInput): HotplugPlan {
+  const { fixed, types, use, size } = input;
+  const order = [...fixed.instances].sort((a, b) => a.u - b.u);
+  const index = new Map(order.map((instance, i) => [instance.name, i]));
+  const shared = new Map(
+    order.filter((instance) => instance.owner === undefined).map((i) => [i.name, i]),
+  );
+  const typeOf = (instance: PlannedInstance) => types.get(instance.model);
+  const collects = order.map(
+    (instance) =>
+      new Set(
+        Object.values(typeOf(instance)?.needs ?? {})
+          .filter((info) => info.every)
+          .map((info) => info.id),
+      ),
+  );
+  const taken = new Set(order.map((instance) => instance.name));
+  const leftOut = new Map<string, string>();
+  const groups = new Map<number, Draft[][]>();
+  let end = order.reduce((top, instance) => Math.max(top, instance.u + instance.height - 1), 0);
+  const sorted = [...input.hotplug].sort(
+    (a, b) => b.priority - a.priority || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+  );
+  for (const type of sorted) {
+    try {
+      const group = expandHotplug(type, types, shared, typeOf, use);
+      for (const draft of group) {
+        if (taken.has(draft.name)) {
+          throw new LeftOut(`its instance ${draft.name} would take the name of another instance`);
+        }
+      }
+      // The lowest fixed instance whose every need reaches it, or the top.
+      let at = order.findIndex((_, i) =>
+        [...(collects[i] ?? [])].some((id) => portsFor(type, { id } as NeedInfo).length === 1),
+      );
+      if (at < 0) at = order.length;
+      const host = order[at];
+      for (const draft of group) {
+        for (const wire of Object.values(draft.wiring)) {
+          const below = index.get(wire.provider);
+          if (host !== undefined && below !== undefined && below >= at) {
+            throw new LeftOut(
+              `it needs ${wire.provider}, which sits above ${host.name}, whose every need reaches it`,
+            );
+          }
+        }
+      }
+      const height = group.reduce((sum, draft) => sum + draft.type.height, 0);
+      if (end + height > size) {
+        throw new LeftOut(
+          `the rack has no room for it: it would end at U${end + height} of ${size}`,
+        );
+      }
+      end += height;
+      for (const draft of group) taken.add(draft.name);
+      groups.set(at, [...(groups.get(at) ?? []), group]);
+    } catch (error) {
+      if (!(error instanceof LeftOut || error instanceof RackError)) throw error;
+      leftOut.set(type.name, error.message);
+    }
+  }
+  const instances: RunningInstance[] = [];
+  const add = (draft: Draft, u: number) => {
+    const { name, type, owner, wiring } = draft;
+    instances.push({
+      name,
+      model: type.name,
+      owner,
+      u,
+      height: type.height,
+      wiring,
+      hotplug: true,
+    });
+  };
+  let shift = 0;
+  let top = 0;
+  order.forEach((instance, i) => {
+    let u = instance.u + shift;
+    for (const group of groups.get(i) ?? []) {
+      for (const draft of group) {
+        add(draft, u);
+        u += draft.type.height;
+        shift += draft.type.height;
+      }
+    }
+    instances.push({ ...instance, u: instance.u + shift, hotplug: false });
+    top = Math.max(top, instance.u + shift + instance.height - 1);
+  });
+  let u = top + 1;
+  for (const group of groups.get(order.length) ?? []) {
+    for (const draft of group) {
+      add(draft, u);
+      u += draft.type.height;
+    }
+  }
+  return { instances, leftOut };
+}
+
+/**
+ * A hot-plug device with the copies that it owns, in the order of their slots: copies of copies
+ * first, the device last. Shared needs go to fixed shared instances, and own needs to copies of
+ * the models that `devices` gives.
+ *
+ * @throws LeftOut when a need can't be met.
+ */
+function expandHotplug(
+  type: PlanType,
+  types: ReadonlyMap<string, PlanType>,
+  shared: ReadonlyMap<string, PlannedInstance>,
+  typeOf: (instance: PlannedInstance) => PlanType | undefined,
+  use: Readonly<Record<string, string>>,
+): Draft[] {
+  const drafts: Draft[] = [];
+  const visit = (draft: Draft, path: string[]): void => {
+    for (const [need, info] of Object.entries(draft.type.needs)) {
+      const where = `${draft.name}.${need} (${info.id})`;
+      if (info.every) {
+        throw new LeftOut(`${where} is an every need, which a hot-plug device can't have`);
+      }
+      if (info.own) {
+        const model = copyModel(where, info, types, use);
+        if (path.includes(model.name)) {
+          throw new LeftOut(`cycle: ${[...path, model.name].join(" → ")}`);
+        }
+        const port = portsFor(model, info);
+        if (port.length !== 1)
+          throw new LeftOut(`${where}: ${model.name} provides it on ${port.join(", ")}`);
+        const copy: Draft = {
+          name: `${draft.name}-${need}`,
+          type: model,
+          owner: draft.name,
+          wiring: {},
+        };
+        visit(copy, [...path, model.name]);
+        drafts.push(copy);
+        draft.wiring[need] = { provider: copy.name, port: port[0] as string };
+        continue;
+      }
+      draft.wiring[need] = sharedWire(where, info, shared, typeOf, use);
+    }
+  };
+  const device: Draft = { name: type.name, type, owner: undefined, wiring: {} };
+  checkDeviceName(device.name);
+  visit(device, [type.name]);
+  drafts.push(device);
+  return drafts;
+}
+
+/** The fixed shared instance and port that meet a shared need of a hot-plug instance. */
+function sharedWire(
+  where: string,
+  info: NeedInfo,
+  shared: ReadonlyMap<string, PlannedInstance>,
+  typeOf: (instance: PlannedInstance) => PlanType | undefined,
+  use: Readonly<Record<string, string>>,
+): PlanWire {
+  const portOf = (instance: PlannedInstance, port: string): ConnectorInfo | undefined =>
+    typeOf(instance)?.provides[port];
+  if (info.patched !== undefined) {
+    const [model = "", port = ""] = info.patched.split(".");
+    const instance = shared.get(model);
+    const target = instance && portOf(instance, port);
+    if (instance === undefined) {
+      throw new LeftOut(`${where}: patched to ${info.patched}, which the rack doesn't run`);
+    }
+    if (target === undefined || target.id !== info.id || !covers(target, info)) {
+      throw new LeftOut(`${where}: patched to ${info.patched}, which is not a ${info.id} port`);
+    }
+    return { provider: model, port };
+  }
+  const chosen = use[info.id];
+  const candidates =
+    chosen === undefined
+      ? [...shared.values()].filter((instance) => {
+          const type = typeOf(instance);
+          return type !== undefined && portsFor(type, info).length > 0;
+        })
+      : [shared.get(chosen)].filter((instance) => instance !== undefined);
+  const [only, ...others] = candidates;
+  if (only === undefined) {
+    throw new LeftOut(
+      chosen === undefined
+        ? `${where}: no device of the rack provides it`
+        : `${where}: use names ${chosen}, which the rack doesn't run`,
+    );
+  }
+  if (others.length > 0) {
+    const list = candidates.map((instance) => instance.name).join(", ");
+    throw new LeftOut(`${where} is ambiguous: ${list}; add a use entry for ${info.id}`);
+  }
+  const type = typeOf(only) as PlanType;
+  const ports = portsFor(type, info);
+  const port = ports[0];
+  if (ports.length !== 1 || port === undefined) {
+    throw new LeftOut(`${where}: ${only.name} provides it on ${ports.join(", ")}`);
+  }
+  if (!covers(type.provides[port] as ConnectorInfo, info)) {
+    throw new LeftOut(`${where}: ${only.name}.${port} lacks members that it calls`);
+  }
+  return { provider: only.name, port };
+}
+
+/** The model of `devices` that a copy for an own need of a hot-plug instance is made from. */
+function copyModel(
+  where: string,
+  info: NeedInfo,
+  types: ReadonlyMap<string, PlanType>,
+  use: Readonly<Record<string, string>>,
+): PlanType {
+  const chosen = use[info.id];
+  const candidates =
+    chosen === undefined
+      ? [...types.values()].filter((type) => portsFor(type, info).length > 0)
+      : [types.get(chosen)].filter((type): type is PlanType => type !== undefined);
+  const [only, ...others] = candidates;
+  if (only === undefined) throw new LeftOut(`${where}: no model of devices provides it`);
+  if (others.length > 0) {
+    const list = candidates.map((type) => type.name).join(", ");
+    throw new LeftOut(`${where} is ambiguous: ${list}; add a use entry for ${info.id}`);
+  }
+  return only;
+}
+
+function covers(provider: ConnectorInfo, need: ConnectorInfo): boolean {
+  return Object.entries(need.members).every(([member, kind]) => provider.members[member] === kind);
 }

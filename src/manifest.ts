@@ -8,7 +8,9 @@
  * @decision .agents/decisions/261115_222025-p0-api-details.md#names
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#scanned-manifests
  * @decision .agents/decisions/261118_071513-http-panel-device.md#manifests
+ * @decision .agents/decisions/261121_065823-hot-plug-directories.md#hot-plug-directories
  */
+import { posix } from "node:path";
 import { isConnectorId, isIdentifierName } from "./connector.ts";
 import { RackError } from "./errors.ts";
 
@@ -42,6 +44,7 @@ export interface PlacedRackSpec {
   /** Explicit wiring: `[<consumer device>.<need>, <provider device>.<port>]`. */
   patch?: ReadonlyArray<readonly [string, string]>;
   devices?: never;
+  hotplug?: never;
 }
 
 /** A rack whose devices are scanned from files and placed by its plan. */
@@ -54,6 +57,13 @@ export interface ScannedRackSpec {
    * A `name` in a spec defines a variant: the same file under that model name.
    */
   devices: ReadonlyArray<string | SlotSpec>;
+  /**
+   * Hot-plug directories, relative to the base directory and inside it: every device file in
+   * them starts on its own, without being a root, and comes and goes with its file. Only every
+   * needs reach these devices, and a file that can't run is left out, while the rest of the rack
+   * starts and reloads.
+   */
+  hotplug?: readonly string[];
   /** Models that start of their own accord, an HTTP panel among them. */
   roots?: readonly string[];
   /** Provider choices: a connector id, or `<model>.<need>`, mapped to a model name. */
@@ -70,6 +80,8 @@ export type RackSpec = PlacedRackSpec | ScannedRackSpec;
 /** How a scanned rack finds and plans its devices. */
 export interface ScanSpec {
   readonly devices: ReadonlyArray<string | SlotSpec>;
+  /** Hot-plug directories, as relative paths with `/` separators. */
+  readonly hotplug: readonly string[];
   readonly roots: readonly string[];
   readonly use: Readonly<Record<string, string>>;
   readonly config: Readonly<Record<string, unknown>>;
@@ -246,12 +258,36 @@ function checkScan(name: string, spec: ScannedRackSpec): ScanSpec {
   }
   const config = spec.config ?? {};
   if (typeof config !== "object" || config === null) fail("config must be an object");
+  const hotplug = spec.hotplug ?? [];
+  if (!Array.isArray(hotplug)) fail("hotplug must be an array of directories");
+  const dirs: string[] = [];
+  for (const entry of hotplug) {
+    if (typeof entry !== "string" || entry === "")
+      fail("each entry of hotplug is a directory path");
+    // Inside the base directory, which the watchers of rack start and rack dev watch; the rack
+    // checks that it overlaps no devices directory, once it knows the base directory.
+    // @decision .agents/decisions/261121_065823-hot-plug-directories.md#hot-plug-directories
+    const dir = relativeDir(entry);
+    if (dir === undefined || dir === ".") {
+      fail(`hotplug directory ${entry} must be a relative path inside the base directory`);
+    }
+    dirs.push(dir as string);
+  }
   return Object.freeze({
     devices: Object.freeze([...devices]),
+    hotplug: Object.freeze(dirs),
     roots: Object.freeze([...roots]),
     use: Object.freeze({ ...use }),
     config: Object.freeze({ ...config }),
   });
+}
+
+/** A relative path inside the base directory, with `/` separators; `undefined` for others. */
+function relativeDir(path: string): string | undefined {
+  const normal = posix.normalize(path.replaceAll("\\", "/")).replace(/\/+$/, "");
+  if (posix.isAbsolute(normal) || /^[A-Za-z]:/.test(normal)) return undefined;
+  if (normal === ".." || normal.startsWith("../")) return undefined;
+  return normal === "" ? "." : normal;
 }
 
 function isAddress(value: string): boolean {

@@ -12,8 +12,9 @@
  */
 import { realpathSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { RackError } from "./errors.ts";
 import {
   buildFirmware,
   declaredDependencies,
@@ -55,12 +56,21 @@ export interface CompileResult {
  * @returns What it wrote.
  * @throws Error with the build's messages when a device file, or the executable, fails to build;
  *   no executable is written then.
+ * @throws RackError `RACK_MANIFEST` for a manifest with hot-plug directories.
  */
 export async function compileRack(
   manifestPath: string,
   manifest: RackManifest,
   options: CompileOptions = {},
 ): Promise<CompileResult> {
+  // Executables run no hot-plug devices: their outside files replace packaged ones, and add none.
+  // @decision .agents/decisions/261121_065823-hot-plug-directories.md#executables-and-security
+  if ((manifest.scan?.hotplug.length ?? 0) > 0) {
+    throw new RackError(
+      "RACK_MANIFEST",
+      `${basename(manifestPath)} has hot-plug directories, which an executable doesn't run; run the rack with rack start`,
+    );
+  }
   const appDir = realpathSync(dirname(manifestPath));
   // Inside the app, so that the packages the entries import resolve from its node_modules.
   const work = join(appDir, ".rack", "compile");

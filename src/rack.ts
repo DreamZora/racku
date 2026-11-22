@@ -28,11 +28,11 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dirent } from "node:fs";
-import { readdir, unlink } from "node:fs/promises";
-import { basename, join, resolve as resolvePath } from "node:path";
+import { readdir, stat, unlink } from "node:fs/promises";
+import { basename, join, relative, resolve as resolvePath, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Backplane, type EveryWiring, type Slot, type SlotState } from "./backplane.ts";
-import type { ConnectorInfo } from "./connector.ts";
+import { type ConnectorInfo, isConnectorId } from "./connector.ts";
 import { type Control, openControl } from "./control.ts";
 import type { CallOptions } from "./device.ts";
 import { RackError, toWireError, type WireError } from "./errors.ts";
@@ -65,12 +65,15 @@ import type { DeviceMetrics, RackMetrics } from "./metrics.ts";
 import { hasOutsideFile, keyOfSource, type Packaged, packaged, sourceOfKey } from "./packaged.ts";
 import {
   fitPlan,
+  formatInstance,
   formatPlan,
   makePlan,
   type Plan,
   type PlannedInstance,
   type PlanType,
   parsePlan,
+  placeHotplug,
+  type RunningInstance,
 } from "./plan.ts";
 import {
   type CertificateInfo,
@@ -115,6 +118,13 @@ export interface SlotStatus {
   crashes: number;
   /** For a copy that serves an `own` need: the instance whose need it serves. */
   owner?: string;
+  /**
+   * `true` for a device from a hot-plug directory, and for a copy that one owns; absent
+   * otherwise.
+   *
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#observation
+   */
+  hotplug?: true;
   /** Hash of the firmware the device falls back to when a new instance crashes on probation. */
   knownGood: string | null;
   /** While the installed instance is on probation: when probation ends, a millisecond timestamp. */
@@ -427,6 +437,21 @@ export function crashWindow(longestWatchdog: number): number {
  * @throws RackError `RACK_MANIFEST`, `RACK_INVALID_CONFIG`, or `RACK_HOOK_FAILED`; devices
  *   that were already powered on are powered off again first.
  */
+/** The key of the handle's reload of hot-plug devices alone; not part of the public API. */
+const RELOAD_HOTPLUG: unique symbol = Symbol("rack42u.reloadHotplug");
+
+/**
+ * Reloads the hot-plug devices of a rack alone: the watch of `rack start` applies their changes,
+ * and leaves the fixed instances to `rack ctl reload`.
+ *
+ * @decision .agents/decisions/261121_065823-hot-plug-directories.md#when-changes-apply
+ */
+export function reloadHotplug(running: RackHandle): Promise<ReloadResult[]> {
+  const reload = (running as { [RELOAD_HOTPLUG]?: () => Promise<ReloadResult[]> })[RELOAD_HOTPLUG];
+  if (reload === undefined) throw new RackError("RACK_NO_ROUTE", "not a rack handle");
+  return reload();
+}
+
 export async function start(
   manifest: RackManifest,
   options: StartOptions = {},
@@ -512,6 +537,13 @@ class Rack implements InstanceHost {
   readonly #controlOption: StartOptions["control"];
   #control: Control | undefined;
   #startFault: RackError | undefined;
+  /**
+   * The hot-plug devices that crashed or bit while the rack started, which leave out their group
+   * instead of failing the start.
+   *
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#failures
+   */
+  readonly #startCrashes = new Map<string, RackError>();
   /** The firmware of the instance whose crash made {@link #startFault}. */
   #startFaultFirmware: Firmware | undefined;
   #operations: Promise<unknown> = Promise.resolve();
@@ -532,6 +564,16 @@ class Rack implements InstanceHost {
   readonly #outsideFrus = new Map<string, { fru: Fru; config: unknown; hash: string }>();
   /** Keys of the warnings that #warnOnce gave. */
   readonly #warned = new Set<string>();
+  /** The models that `devices` gave at the last scan, for reloads of hot-plug devices alone. */
+  #fixedModels: Map<string, ModelSource> | undefined;
+  /** The instances of the last layout with hot-plug devices, fixed ones at their new slots. */
+  #running: RunningInstance[] | undefined;
+  /** The hot-plug files that the last scan left out, by absolute path. */
+  #leftOut = new Map<string, LeftOutFile>();
+  /** What the log last said about each hot-plug file left out, so that it says it once. */
+  readonly #leftOutLogged = new Map<string, string>();
+  /** The device files of each hot-plug directory at the last scan, or `undefined` when missing. */
+  readonly #hotplugFiles = new Map<string, number | undefined>();
 
   constructor(manifest: RackManifest, options: StartOptions) {
     this.#manifest = manifest;
@@ -586,6 +628,7 @@ class Rack implements InstanceHost {
           ? this.#backplane.call(address, method, input, options, "rack")
           : refuse(`${address}.${method}`, input, options),
       reload: (manifest?: RackManifest) => this.#operate("reload", () => this.#reload(manifest)),
+      [RELOAD_HOTPLUG]: () => this.#operate("reload", () => this.#reload(undefined, true)),
       swap: (name: string, source?: string | URL) =>
         this.#operate("swap", () => this.#swap(name, source)),
       restart: (name: string, options: RestartOptions = {}) =>
@@ -759,6 +802,10 @@ class Rack implements InstanceHost {
       firmware: instance.firmware.hash,
     });
     if (this.#phase === "starting") {
+      if (this.#slots.get(instance.slot)?.hotplug) {
+        this.#startCrashes.set(instance.slot, new RackError("RACK_DEVICE_FAULT", message));
+        return;
+      }
       if (this.#startFault === undefined) {
         this.#startFault = new RackError("RACK_DEVICE_FAULT", message);
         this.#startFaultFirmware = instance.firmware;
@@ -792,6 +839,13 @@ class Rack implements InstanceHost {
     this.#backplane.disconnect(instance, "RACK_DEVICE_FAULT", message);
     const stopped = this.#end(instance, instance.slot);
     if (this.#phase === "starting") {
+      if (this.#slots.get(instance.slot)?.hotplug) {
+        this.#startCrashes.set(
+          instance.slot,
+          new RackError("RACK_DEVICE_FAULT", message, error.data),
+        );
+        return;
+      }
       this.#startFault ??= new RackError("RACK_DEVICE_FAULT", message, error.data);
       return;
     }
@@ -869,6 +923,7 @@ class Rack implements InstanceHost {
       await this.#powerUpFallingBack();
       this.#settleKnownGood();
       this.#phase = "running";
+      await this.#logHotplugStart();
       const control = this.#controlOption;
       if (control !== undefined && control !== false) {
         const handle = this.handle();
@@ -917,18 +972,26 @@ class Rack implements InstanceHost {
     if (planText !== undefined) await Bun.write(this.#planPath(), planText);
     for (const slot of this.#ordered()) {
       const instance = slot.installed as Instance;
+      if (slot.removed) continue;
       try {
         // Links to the devices below exist already; this links the devices above to it.
         await this.#backplane.connect(instance);
         await this.#backplane.install(slot, instance, null);
         await this.#powerOn(instance);
       } catch (error) {
+        if (slot.hotplug) {
+          await this.#dropHotplugGroup(slot, error);
+          continue;
+        }
         throw this.#outsideFailure(instance.firmware, error);
       }
+      await this.#dropCrashedHotplug();
+      if (slot.removed) continue;
       this.#throwStartFault();
       slot.state = "online";
       this.#powered(instance);
     }
+    await this.#dropCrashedHotplug();
     this.#throwStartFault();
   }
 
@@ -966,6 +1029,7 @@ class Rack implements InstanceHost {
     this.#phase = "starting";
     this.#startFault = undefined;
     this.#startFaultFirmware = undefined;
+    this.#startCrashes.clear();
     this.#plan = undefined;
     this.#patch = this.#manifest.patch;
     this.#ports.clear();
@@ -1060,6 +1124,8 @@ class Rack implements InstanceHost {
           text: formatPlan(this.#manifest.name, { instances, unused: [] }),
           unused: [],
           file: undefined,
+          hotplug: [],
+          leftOut: [],
         };
       }
       const path = this.#planPath();
@@ -1080,7 +1146,15 @@ class Rack implements InstanceHost {
         file.state = "fits";
         file.differences = [];
       }
-      return { text, unused: [...scanned.unused], file };
+      // @decision .agents/decisions/261121_065823-hot-plug-directories.md#observation
+      const hotplug = (this.#running ?? [])
+        .filter((instance) => instance.hotplug)
+        .map(formatInstance);
+      const leftOut = [...this.#leftOut].map(([source, { reason }]) => ({
+        path: relative(this.#baseDir, source),
+        reason,
+      }));
+      return { text, unused: [...scanned.unused], file, hotplug, leftOut };
     } finally {
       await this.#abortStart();
     }
@@ -1145,11 +1219,37 @@ class Rack implements InstanceHost {
           throw this.#outsideFailure(firmware, error);
         });
         this.#noteOutside(entry.source, firmware, instance.fru as Fru, entry.spec.config);
-        return { u: entry.u, config: entry.spec.config, firmware, instance };
+        return {
+          u: entry.u,
+          config: entry.spec.config,
+          firmware,
+          instance,
+          hotplug: entry.hotplug === true,
+        };
       }),
     );
-    for (const result of booted) if (result.status === "rejected") throw result.reason;
-    const ready = booted.map((result) => (result as PromiseFulfilledResult<Booted>).value);
+    // A hot-plug instance that doesn't boot leaves out its group: its device and the copies
+    // that the device owns, which nothing else needs.
+    // @decision .agents/decisions/261121_065823-hot-plug-directories.md#failures
+    const failed = new Set<string>();
+    booted.forEach((result, i) => {
+      const entry = entries[i] as Entry;
+      if (result.status !== "rejected") return;
+      if (entry.group === undefined) throw result.reason;
+      failed.add(entry.group);
+      const device = entries.find((other) => other.spec.name === entry.group);
+      this.#leaveOut(device?.source ?? entry.source, result.reason);
+    });
+    const ready: Booted[] = [];
+    for (const [i, result] of booted.entries()) {
+      if (result.status !== "fulfilled") continue;
+      const group = (entries[i] as Entry).group;
+      if (group !== undefined && failed.has(group)) {
+        await this.#end(result.value.instance, (entries[i] as Entry).spec.name ?? group);
+        continue;
+      }
+      ready.push(result.value);
+    }
     this.#assemble(ready);
     return planText;
   }
@@ -1166,19 +1266,247 @@ class Rack implements InstanceHost {
     builds: Map<string, Promise<Firmware>>,
   ): Promise<{ entries: Entry[]; planText: string | undefined }> {
     const models = await this.#scanModels(builds);
+    this.#fixedModels = models;
     const computed = this.#computePlan(models);
     const { plan, write } = await this.#choosePlan(computed);
     this.#plan = plan;
-    this.#patch = patchesOf(plan);
-    const entries: Entry[] = plan.instances.map((instance) => {
-      const { source } = models.get(instance.model) as ModelSource;
-      const config = this.#configFor(instance, models);
-      return { u: instance.u, spec: mountSpec(source, { name: instance.name, config }), source };
+    const layout = await this.#withHotplug(plan, models, builds);
+    this.#patch = patchesOf({ instances: layout.instances, unused: [] });
+    const groups = groupsOf(layout.instances);
+    const entries: Entry[] = layout.instances.map((instance) => {
+      const { source } = layout.models.get(instance.model) as ModelSource;
+      const config = this.#configFor(instance, layout.models);
+      return {
+        u: instance.u,
+        spec: mountSpec(source, { name: instance.name, config }),
+        source,
+        hotplug: instance.hotplug,
+        group: groups.get(instance.name),
+      };
     });
     return {
       entries,
       planText: write ? formatPlan(this.#manifest.name, plan) : undefined,
     };
+  }
+
+  /**
+   * Places the hot-plug devices around the plan of the fixed instances, which it leaves as it is.
+   *
+   * @returns The instances to run, fixed ones at their new slots, and the models of all of them.
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#where-hot-plug-devices-go
+   */
+  async #withHotplug(
+    plan: Plan,
+    fixed: ReadonlyMap<string, ModelSource>,
+    builds: Map<string, Promise<Firmware>>,
+  ): Promise<{ instances: RunningInstance[]; models: Map<string, ModelSource> }> {
+    const scan = this.#manifest.scan as ScanSpec;
+    if (scan.hotplug.length === 0) {
+      return {
+        instances: plan.instances.map((instance) => ({ ...instance, hotplug: false })),
+        models: new Map(fixed),
+      };
+    }
+    const hot = await this.#scanHotplug(builds, fixed);
+    const types = new Map([...fixed].map(([name, model]) => [name, model.type]));
+    // Only use entries by connector id apply to hot-plug devices, whose models the manifest
+    // can't name.
+    const use = Object.fromEntries(Object.entries(scan.use).filter(([key]) => isConnectorId(key)));
+    const placed = placeHotplug({
+      fixed: plan,
+      types,
+      hotplug: [...hot.values()].map((model) => model.type),
+      use,
+      size: this.#manifest.size,
+    });
+    for (const [model, reason] of placed.leftOut) {
+      const { source } = hot.get(model) as ModelSource;
+      this.#leftOut.set(source, { reason, code: "RACK_MANIFEST" });
+    }
+    this.#running = [...placed.instances];
+    return { instances: [...placed.instances], models: new Map([...fixed, ...hot]) };
+  }
+
+  /**
+   * Builds and describes the files of the hot-plug directories, under their model names. A file
+   * that doesn't build or load as a device, or whose model a model of `devices` or another file
+   * has, is left out. A running hot-plug device whose file doesn't build or load now keeps the
+   * model it runs, so that the reload leaves it on its firmware, `degraded`.
+   *
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#failures
+   */
+  async #scanHotplug(
+    builds: Map<string, Promise<Firmware>>,
+    fixed: ReadonlyMap<string, ModelSource>,
+  ): Promise<Map<string, ModelSource>> {
+    const scan = this.#manifest.scan as ScanSpec;
+    this.#leftOut = new Map();
+    const found: string[] = [];
+    for (const dir of scan.hotplug) {
+      const path = resolvePath(this.#baseDir, dir);
+      this.#checkHotplugDir(dir, path);
+      const files = (await isDirectory(path)) ? await deviceFiles(path) : undefined;
+      this.#hotplugFiles.set(dir, files?.length);
+      found.push(...(files ?? []));
+    }
+    for (const source of found) {
+      if (!builds.has(source)) builds.set(source, this.#build(source));
+    }
+    const described = await Promise.all(
+      found.map(async (source) => {
+        try {
+          const firmware = await (builds.get(source) as Promise<Firmware>);
+          let fru = await this.#describe(firmware, undefined);
+          if (fru.computedNeeds && Object.hasOwn(scan.config, fru.model)) {
+            fru = await this.#describe(firmware, scan.config[fru.model]);
+          }
+          return { source, fru };
+        } catch (error) {
+          const running = [...this.#slots.values()].find(
+            (slot) => slot.hotplug && !slot.removed && slot.source === source,
+          );
+          if (running !== undefined) return { source, fru: running.fru };
+          this.#leftOut.set(source, { reason: messageOf(error), code: codeOf(error) });
+          return undefined;
+        }
+      }),
+    );
+    const models = new Map<string, ModelSource>();
+    const clashes = new Set<string>();
+    for (const item of described) {
+      if (item === undefined) continue;
+      const name = item.fru.model;
+      const other = models.get(name);
+      if (fixed.has(name)) {
+        const reason = `its model ${name} is the model of ${relative(this.#baseDir, (fixed.get(name) as ModelSource).source)} too`;
+        this.#leftOut.set(item.source, { reason, code: "RACK_MANIFEST" });
+      } else if (other !== undefined || clashes.has(name)) {
+        clashes.add(name);
+        const reason = `another hot-plug file declares model ${name} too`;
+        this.#leftOut.set(item.source, { reason, code: "RACK_MANIFEST" });
+        if (other !== undefined) this.#leftOut.set(other.source, { reason, code: "RACK_MANIFEST" });
+        models.delete(name);
+      } else {
+        const { fru } = item;
+        models.set(name, {
+          type: {
+            name,
+            height: fru.height,
+            priority: fru.priority,
+            needs: fru.needs,
+            provides: fru.provides,
+          },
+          source: item.source,
+          config: undefined,
+          explicit: false,
+        });
+      }
+    }
+    return models;
+  }
+
+  /**
+   * Checks that a hot-plug directory overlaps no directory of `devices`.
+   *
+   * @throws RackError `RACK_MANIFEST` when it does.
+   */
+  #checkHotplugDir(dir: string, path: string): void {
+    const scan = this.#manifest.scan as ScanSpec;
+    const within = (outer: string, inner: string) =>
+      inner === outer || inner.startsWith(outer.endsWith(sep) ? outer : `${outer}${sep}`);
+    for (const entry of scan.devices) {
+      if (typeof entry !== "string") continue;
+      const other = resolvePath(this.#baseDir, entry);
+      if (within(other, path) || within(path, other)) {
+        throw new RackError(
+          "RACK_MANIFEST",
+          `hotplug directory ${dir} overlaps the devices directory ${entry}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Logs each hot-plug file that is left out: at the start, and at a reload when the file or
+   * the reason changed.
+   *
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#observation
+   */
+  async #logLeftOut(): Promise<void> {
+    for (const [source, { reason, code }] of this.#leftOut) {
+      const stamp = await stat(source).then(
+        (info) => info.mtimeMs,
+        () => 0,
+      );
+      const said = `${stamp} ${reason}`;
+      if (this.#leftOutLogged.get(source) === said) continue;
+      this.#leftOutLogged.set(source, said);
+      this.#log("warn", `${relative(this.#baseDir, source)} left out: ${reason}`, { code });
+    }
+    for (const source of this.#leftOutLogged.keys()) {
+      if (!this.#leftOut.has(source)) this.#leftOutLogged.delete(source);
+    }
+  }
+
+  /**
+   * Logs at start what each hot-plug directory holds, so that a mistyped path shows, and the
+   * files left out.
+   *
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#observation
+   */
+  async #logHotplugStart(): Promise<void> {
+    for (const [dir, count] of this.#hotplugFiles) {
+      const holds =
+        count === undefined
+          ? "doesn't exist"
+          : `holds ${count} device file${count === 1 ? "" : "s"}`;
+      this.#log("info", `hot-plug directory ${dir}/ ${holds}`);
+    }
+    await this.#logLeftOut();
+  }
+
+  /** Leaves out a hot-plug file whose device failed while the rack started or plugged it. */
+  #leaveOut(source: string, error: unknown): void {
+    this.#leftOut.set(source, { reason: messageOf(error), code: codeOf(error) });
+  }
+
+  /** Drops the groups of the hot-plug devices that crashed or bit while the rack started. */
+  async #dropCrashedHotplug(): Promise<void> {
+    for (const [name, error] of [...this.#startCrashes]) {
+      this.#startCrashes.delete(name);
+      const slot = this.#slots.get(name);
+      if (slot !== undefined && !slot.removed) await this.#dropHotplugGroup(slot, error);
+    }
+  }
+
+  /**
+   * Ends a hot-plug instance that failed to power on while the rack starts, with the rest of its
+   * group, and leaves their slots empty until the next reload. No fixed instance needs them.
+   *
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#failures
+   */
+  async #dropHotplugGroup(failed: Slot, error: unknown): Promise<void> {
+    const owners = this.#owners();
+    const rootOf = (name: string) => {
+      let root = name;
+      for (let owner = owners.get(root); owner !== undefined; owner = owners.get(root))
+        root = owner;
+      return root;
+    };
+    const root = rootOf(failed.name);
+    const group = [...this.#slots.values()].filter(
+      (slot) => slot.hotplug && rootOf(slot.name) === root,
+    );
+    this.#leaveOut(this.#slots.get(root)?.source ?? failed.source, error);
+    for (const slot of group) {
+      slot.removed = true;
+      const instance = slot.installed;
+      slot.installed = null;
+      if (instance !== null) await this.#end(instance, slot.name);
+      this.#slots.delete(slot.name);
+      this.#backplane.forget(slot.name);
+    }
   }
 
   /** The configuration of a planned instance: by its name, then by its model, then the spec's. */
@@ -1727,7 +2055,7 @@ class Rack implements InstanceHost {
           name: other.name,
           model: other.model,
           firmware: other.firmware.hash,
-          hotplug: false,
+          hotplug: other.hotplug,
         })),
       );
     }
@@ -1899,13 +2227,13 @@ class Rack implements InstanceHost {
     }
   }
 
-  async #reload(manifest?: RackManifest): Promise<ReloadResult[]> {
+  async #reload(manifest?: RackManifest, hotplugOnly = false): Promise<ReloadResult[]> {
     this.#requireRunning();
     if (manifest !== undefined) this.#adopt(manifest);
     const builds = new Map<string, Promise<Firmware>>();
     let change: Change | undefined;
     if (this.#manifest.scan !== undefined) {
-      change = await this.#beginChange(await this.#replan(builds), builds);
+      change = await this.#beginChange(await this.#replan(builds, hotplugOnly), builds);
     } else if (manifest !== undefined) {
       change = await this.#beginChange(await this.#targetOf(manifest, builds), builds);
     }
@@ -1939,6 +2267,7 @@ class Rack implements InstanceHost {
       results.push(...(await this.#replace(slot, firmware, slot.source, builds, done)).results);
     }
     if (change !== undefined) results.push(...(await this.#finishChange(change, done, results)));
+    await this.#logLeftOut();
     return results;
   }
 
@@ -1950,8 +2279,19 @@ class Rack implements InstanceHost {
    * @throws RackError `RACK_SWAP_REJECTED` when the plan file no longer fits the devices.
    * @decision .agents/decisions/261116_233956-cold-swaps-and-restarts.md#applying-a-changed-plan
    */
-  async #replan(builds: Map<string, Promise<Firmware>>): Promise<Target> {
+  async #replan(builds: Map<string, Promise<Firmware>>, hotplugOnly = false): Promise<Target> {
+    if (hotplugOnly && this.#fixedModels !== undefined && this.#plan !== undefined) {
+      // The fixed instances keep their plan and the firmware they run, whatever their files.
+      // @decision .agents/decisions/261121_065823-hot-plug-directories.md#when-changes-apply
+      for (const slot of this.#slots.values()) {
+        if (!slot.hotplug && !slot.removed && !builds.has(slot.source)) {
+          builds.set(slot.source, Promise.resolve(slot.firmware));
+        }
+      }
+      return this.#targetWithHotplug(this.#plan, this.#fixedModels, builds);
+    }
     const models = await this.#scanModels(builds);
+    this.#fixedModels = models;
     const computed = this.#computePlan(models);
     let next = computed;
     if (this.#planMode === true) {
@@ -1974,16 +2314,34 @@ class Rack implements InstanceHost {
         next = fit.plan;
       }
     }
+    return this.#targetWithHotplug(next, models, builds);
+  }
+
+  /** The layout of a fixed plan with the hot-plug devices placed around it. */
+  async #targetWithHotplug(
+    plan: Plan,
+    models: ReadonlyMap<string, ModelSource>,
+    builds: Map<string, Promise<Firmware>>,
+  ): Promise<Target> {
+    const layout = await this.#withHotplug(plan, models, builds);
+    const groups = groupsOf(layout.instances);
     const devices = new Map<string, TargetDevice>();
-    for (const instance of next.instances) {
-      const { source } = models.get(instance.model) as ModelSource;
-      devices.set(instance.name, {
+    for (const instance of layout.instances) {
+      const { source } = layout.models.get(instance.model) as ModelSource;
+      const device: TargetDevice = {
         u: instance.u,
         source,
-        config: this.#configFor(instance, models),
-      });
+        config: this.#configFor(instance, layout.models),
+      };
+      const group = groups.get(instance.name);
+      if (group !== undefined) {
+        const root = layout.instances.find((other) => other.name === group) as RunningInstance;
+        device.hotplug = true;
+        device.hotplugSource = (layout.models.get(root.model) as ModelSource).source;
+      }
+      devices.set(instance.name, device);
     }
-    return { devices, patch: patchesOf(next), plan: next };
+    return { devices, patch: patchesOf({ instances: layout.instances, unused: [] }), plan };
   }
 
   /**
@@ -2057,6 +2415,7 @@ class Rack implements InstanceHost {
     const results: ReloadResult[] = [];
     const arriving = [...target.devices].filter(([name]) => !this.#slots.has(name));
     arriving.sort(([, a], [, b]) => a.u - b.u);
+    const failedGroups = new Set<string>();
     for (const [name, next] of arriving) {
       let firmware: Firmware | undefined;
       try {
@@ -2066,11 +2425,15 @@ class Rack implements InstanceHost {
           builds.set(next.source, build);
         }
         firmware = await build;
+        if (next.hotplugSource !== undefined && failedGroups.has(next.hotplugSource)) {
+          throw new RackError("RACK_SWAP_REJECTED", `a device of its group failed to plug`);
+        }
         await this.#plugSlot(
           next.u,
           mountSpec(next.source, { name, config: next.config }),
           firmware,
           name,
+          next.hotplug === true,
         );
         results.push({ device: name, from: null, to: firmware.hash, mode: "plug" });
       } catch (error) {
@@ -2082,6 +2445,20 @@ class Rack implements InstanceHost {
           mode: "plug",
           error: failure,
         });
+        // A hot-plug group that doesn't plug is left out whole, copies included.
+        // @decision .agents/decisions/261121_065823-hot-plug-directories.md#failures
+        if (next.hotplugSource !== undefined && !failedGroups.has(next.hotplugSource)) {
+          failedGroups.add(next.hotplugSource);
+          this.#leaveOut(next.hotplugSource, error);
+        }
+      }
+    }
+    for (const source of failedGroups) {
+      for (const [name, next] of arriving) {
+        const slot = this.#slots.get(name);
+        if (next.hotplugSource === source && slot !== undefined && !slot.removed) {
+          await this.#unplugSlot(slot, slot.firmware.hash).catch(() => undefined);
+        }
       }
     }
     return { target, forced, leaving, results };
@@ -2147,7 +2524,12 @@ class Rack implements InstanceHost {
     }
     const plan = change.target.plan;
     if (plan !== undefined) {
-      const complete = [...earlier, ...results].every((result) => result.error === undefined);
+      // Hot-plug devices that fail are left out; the fixed plan ran whole without them.
+      // @decision .agents/decisions/261121_065823-hot-plug-directories.md#the-plan-file
+      const complete = [...earlier, ...results].every(
+        (result) =>
+          result.error === undefined || change.target.devices.get(result.device)?.hotplug === true,
+      );
       if (complete) {
         this.#plan = plan;
         if (this.#planMode === "update") {
@@ -2998,7 +3380,13 @@ class Rack implements InstanceHost {
   }
 
   /** Boots, wires, powers on, and installs a new device at slot `u`. */
-  async #plugSlot(u: number, spec: SlotSpec, firmware: Firmware, label: string): Promise<void> {
+  async #plugSlot(
+    u: number,
+    spec: SlotSpec,
+    firmware: Firmware,
+    label: string,
+    hotplug = false,
+  ): Promise<void> {
     let instance: Instance | undefined;
     try {
       instance = await this.#boot(firmware, spec.name, u, spec.config, "RACK_SWAP_REJECTED");
@@ -3019,7 +3407,7 @@ class Rack implements InstanceHost {
       const name = instance?.fru?.name ?? label;
       throw this.#swapFailed(name, "plug", null, firmware.hash, asRackError(error));
     }
-    const slot = newSlot({ u, config: spec.config, firmware, instance });
+    const slot = newSlot({ u, config: spec.config, firmware, instance, hotplug });
     slot.wiring = instance.wiring;
     slot.state = "online";
     this.#slots.set(slot.name, slot);
@@ -3721,6 +4109,7 @@ class Rack implements InstanceHost {
       };
       const owner = owners.get(slot.name);
       if (owner !== undefined) status.owner = owner;
+      if (slot.hotplug) status.hotplug = true;
       if (slot.firmware.packaged === true) status.packaged = true;
       const probation = this.#probation.get(slot.name);
       if (probation !== undefined) status.probationUntil = probation.until;
@@ -3823,6 +4212,8 @@ interface Booted {
   config: unknown;
   firmware: Firmware;
   instance: Instance;
+  /** A hot-plug device, or a copy that one owns. */
+  hotplug?: boolean;
 }
 
 /** What an update runs for: its cause and start time, and for a fallback, the crash. */
@@ -3934,6 +4325,10 @@ interface TargetDevice {
   /** Absolute path of the device file. */
   source: string;
   config: unknown;
+  /** A hot-plug device, or a copy that one owns. */
+  hotplug?: boolean;
+  /** For a hot-plug instance, the file of the hot-plug device of its group. */
+  hotplugSource?: string;
 }
 
 /** A layout to move a running rack to. */
@@ -3961,6 +4356,10 @@ interface Entry {
   spec: SlotSpec;
   /** Absolute path of the device file. */
   source: string;
+  /** A hot-plug device, or a copy that one owns. */
+  hotplug?: boolean;
+  /** For a hot-plug instance, the hot-plug device of its group: itself, or its owner. */
+  group?: string;
 }
 
 /** A model of a scanned rack: what it declares, its file, and its default configuration. */
@@ -3983,6 +4382,10 @@ export interface PlanReport {
   unused: string[];
   /** For a scanned rack: its plan file, and how the file compares with the plan. */
   file: { path: string; state: PlanFileState; differences: string[] } | undefined;
+  /** The hot-plug instances, as lines of a plan file with the slots that they would take. */
+  hotplug: string[];
+  /** The hot-plug files that can't run, by their path in the base directory, with why. */
+  leftOut: { path: string; reason: string }[];
 }
 
 /**
@@ -4082,7 +4485,7 @@ function refuse(where: string, input: unknown, options: CallOptions): Promise<ne
   return Promise.reject(new RackError("RACK_LINK_DOWN", "the rack is not running"));
 }
 
-function newSlot({ u, config, firmware, instance }: Booted): Slot {
+function newSlot({ u, config, firmware, instance, hotplug = false }: Booted): Slot {
   const fru = instance.fru as Fru;
   return {
     name: fru.name,
@@ -4104,6 +4507,7 @@ function newSlot({ u, config, firmware, instance }: Booted): Slot {
     longestWatchdog: 0,
     error: undefined,
     removed: false,
+    hotplug,
   };
 }
 
@@ -4140,6 +4544,39 @@ function asRackError(error: unknown): RackError {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function codeOf(error: unknown): string {
+  return error instanceof RackError ? error.code : "RACK_DEVICE_FAULT";
+}
+
+/** A hot-plug file that can't run, and why. */
+interface LeftOutFile {
+  reason: string;
+  code: string;
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  return stat(path).then(
+    (info) => info.isDirectory(),
+    () => false,
+  );
+}
+
+/**
+ * The hot-plug device of each hot-plug instance's group: the device itself, or the device that
+ * owns the copy, through copies of copies.
+ */
+function groupsOf(instances: readonly RunningInstance[]): Map<string, string> {
+  const owners = new Map(instances.map((instance) => [instance.name, instance.owner]));
+  const groups = new Map<string, string>();
+  for (const instance of instances) {
+    if (!instance.hotplug) continue;
+    let root = instance.name;
+    for (let owner = owners.get(root); owner !== undefined; owner = owners.get(root)) root = owner;
+    groups.set(instance.name, root);
+  }
+  return groups;
 }
 
 function positive(name: string, value: number): number {

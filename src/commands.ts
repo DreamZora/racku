@@ -122,6 +122,10 @@ export async function printPlan(
   }
   process.stdout.write(report.text);
   if (report.unused.length > 0) console.log(`# unused models: ${report.unused.join(", ")}`);
+  // Hot-plug devices aren't in the plan file: they come and go with their files.
+  // @decision .agents/decisions/261121_065823-hot-plug-directories.md#observation
+  for (const line of report.hotplug) console.log(`# hot-plug ${line}`);
+  for (const { path, reason } of report.leftOut) console.log(`# left out ${path}: ${reason}`);
   const file = report.file;
   if (file === undefined) return;
   const where = file.path;

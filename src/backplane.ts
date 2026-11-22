@@ -122,6 +122,12 @@ export interface Slot {
   error: WireError | undefined;
   /** Unplugged or powered off by `stop()`; calls fail with `RACK_LINK_DOWN`. */
   removed: boolean;
+  /**
+   * A hot-plug device, or a copy that one owns.
+   *
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#hot-plug-directories
+   */
+  hotplug: boolean;
 }
 
 /** One link between a need of a consumer instance and a port of a provider instance. */
