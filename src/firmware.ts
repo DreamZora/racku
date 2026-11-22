@@ -419,22 +419,20 @@ function closest(dir: string, appDir: string, name: string): string | undefined 
   }
 }
 
-/** Base directories whose `.rack/` this process made private already. */
-const privateDirs = new Set<string>();
-
 /**
  * Makes `<baseDir>/.rack/`, and gives it mode 0700, also when it existed, so that its bundles,
  * plan, and records are only its user's: a bundle holds what the device imports, such as a JSON
  * file of secrets. On Windows, `.rack/` keeps the access of the folder that holds it.
  *
+ * It runs at every build, since the directory can be removed meanwhile, such as by a test that
+ * removes its base directory between two benches.
+ *
  * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
  */
 export async function privateRackDir(baseDir: string): Promise<void> {
-  if (privateDirs.has(baseDir)) return;
   const dir = join(baseDir, ".rack");
   await mkdir(dir, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") await chmod(dir, 0o700);
-  privateDirs.add(baseDir);
 }
 
 /**

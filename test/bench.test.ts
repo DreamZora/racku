@@ -6,6 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { RackError, type RackHandle } from "racku";
 import { bench, stub } from "racku/bench";
@@ -370,6 +371,41 @@ describe("the bench", () => {
     }
     expect(running.status()).toEqual([]);
     expect(existsSync(BENCHES)).toBe(false);
+  });
+
+  // @doc docs/guides/testing.md#the-bench
+  test("a base directory of the test's own keeps the firmware, and serves again once removed", async () => {
+    const baseDir = join(FIXTURES, ".rack", `base-${process.pid}`);
+    // A device without a tsconfig.json above it, so that its build writes .rack/no-tsconfig.json.
+    const echo = join(baseDir, "echo.ts");
+    const source = [
+      'import { connector, device, rpc } from "racku";',
+      'import * as v from "valibot";',
+      'const Echo = connector("test.echo/v1", { echo: rpc(v.string(), v.string()) });',
+      "export default device({",
+      '  model: "echo",',
+      "  provides: { echo: Echo },",
+      "  powerOn: () => ({ echo: { echo: (text: string) => text } }),",
+      "});",
+    ].join("\n");
+    try {
+      for (let round = 1; round <= 2; round++) {
+        await Bun.write(echo, source);
+        {
+          await using echoes = await bench(echo, { baseDir });
+          expect(await echoes.call("echo", "echo", `round ${round}`)).toBe(`round ${round}`);
+        }
+        // The bench deleted its own files, and left the firmware for the next run.
+        expect(readdirSync(join(baseDir, ".rack")).sort()).toEqual([
+          "firmware",
+          "no-tsconfig.json",
+        ]);
+        // A test that wants a fresh one removes it; the next bench makes it again.
+        await rm(baseDir, { recursive: true, force: true });
+      }
+    } finally {
+      await rm(baseDir, { recursive: true, force: true });
+    }
   });
 });
 

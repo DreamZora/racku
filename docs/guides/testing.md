@@ -43,6 +43,8 @@ A need without a stub, a stub of another connector, and a stub for a need the de
 
 A test that gives the bench a base directory of its own, such as for the files that the device writes, makes it inside the app, such as in a folder that git ignores: firmware imports racku and the app's packages from the base directory, and a base directory outside the app fails with `RACK_MANIFEST`, whose message says so.
 
+When it stops, the bench deletes its own files, under `.rack/bench/`, and leaves the rest of the base directory, such as the firmware in `.rack/`, for the next run. A test that wants a fresh directory removes it once the bench has stopped, and the next bench in it makes `.rack/` again.
+
 ## Stubs
 
 `stub(connector, implementation)` takes functions for some or all of the connector's RPC members, with the arguments a port's functions get.
