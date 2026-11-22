@@ -507,14 +507,22 @@ describe("http-panel requests", () => {
   // @decision .agents/decisions/261122_061938-panel-bodies-in-watched-pieces.md
   // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
   test("a client that stops reading a body of 1 MiB or more loses the response after idleTimeout", async () => {
-    const { port, rec } = await panelRack({ idleTimeout: 1 });
-    const size = 16 * MiB;
+    // A body larger than the socket buffers of any system can hold, which on macOS take more than
+    // 16 MiB on loopback; the panel's pieces carry it.
+    const { rec } = await startRack({
+      slots: {
+        1: slot("./devices/big.ts"),
+        2: httpPanel({ port: 0, routes: { "/big": "big.http" }, idleTimeout: 1 }),
+      },
+    });
+    const port = Number(new URL(rec.panelUrl()).port);
+    const size = 64 * MiB;
     let got = 0;
     let reading = false;
     let closed = false;
     const socket = netConnect({ host: "127.0.0.1", port }, () => {
       socket.write(
-        `GET /web/download?size=${size}&chunk=${size} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+        `GET /big?size=${size} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
       );
     });
     socket.on("data", (chunk: Buffer) => {
@@ -532,7 +540,7 @@ describe("http-panel requests", () => {
     await waitFor(() => stopped().length > 0, 10_000);
     expect(performance.now() - started).toBeLessThan(8_000);
     expect(stopped()).toEqual([
-      expect.objectContaining({ level: "warn", data: { route: "web.http" } }),
+      expect.objectContaining({ level: "warn", data: { route: "big.http" } }),
     ]);
     // What the client reads now ends short of the body.
     reading = true;
