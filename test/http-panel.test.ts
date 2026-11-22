@@ -212,6 +212,7 @@ describe("http-panel requests", () => {
   });
 
   // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  // @doc docs/guides/http.md#observation
   test("a failure of one code and route goes to the log once a minute, with how many came since", async () => {
     // A minute, shortened for the test; the panel's Worker copies the environment as it starts.
     process.env.RACKU_TEST_PANEL_WARN_MS = "400";
@@ -463,7 +464,8 @@ describe("http-panel requests", () => {
   });
 
   // @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#tests
-  test("a response body sent whole keeps its Content-Length at every size, and a stream goes out chunked", async () => {
+  // @decision .agents/decisions/261122_061938-panel-bodies-in-watched-pieces.md
+  test("a response body sent whole keeps its Content-Length below 1 MiB, and goes in pieces from there, as a stream does", async () => {
     const { port } = await panelRack();
     const head = async (method: string, path: string) =>
       (
@@ -474,23 +476,69 @@ describe("http-panel requests", () => {
         ])
       ).toLowerCase();
     const download = (size: number) => `/web/download?size=${size}&chunk=${size}`;
-    for (const size of [14 * 1024, 15 * 1024, 16 * 1024 * 1024]) {
+    for (const size of [14 * 1024, 15 * 1024, MiB - 1]) {
       const lines = await head("GET", download(size));
       expect(lines).toContain(`content-length: ${size}`);
       expect(lines).toContain("content-type: application/octet-stream");
       expect(lines).not.toContain("transfer-encoding");
     }
+    // Bun can't send a stream with its length, and only a stream shows how far a client got.
+    for (const method of ["GET", "HEAD"]) {
+      for (const size of [MiB, 16 * MiB]) {
+        const lines = await head(method, download(size));
+        expect(lines).toContain("transfer-encoding: chunked");
+        expect(lines).toContain("content-type: application/octet-stream");
+        expect(lines).not.toContain("content-length");
+      }
+    }
     expect(await head("HEAD", download(20_000))).toContain("content-length: 20000");
     const events = await head("GET", "/web/events?n=2&gap=50");
     expect(events).toContain("transfer-encoding: chunked");
     expect(events).not.toContain("content-length");
-    // A body sent whole arrives whole.
-    for (const size of [15 * 1024, 16 * 1024 * 1024]) {
+    // A body sent whole, or in pieces, arrives whole.
+    for (const size of [15 * 1024, MiB, 16 * MiB]) {
       const url = new URL(download(size), `http://127.0.0.1:${port}`);
       const body = new Uint8Array(await (await fetch(url)).arrayBuffer());
       expect([body.byteLength, body.every((byte) => byte === 7)]).toEqual([size, true]);
     }
   });
+
+  // @decision .agents/decisions/261122_061938-panel-bodies-in-watched-pieces.md
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test("a client that stops reading a body of 1 MiB or more loses the response after idleTimeout", async () => {
+    const { port, rec } = await panelRack({ idleTimeout: 1 });
+    const size = 16 * MiB;
+    let got = 0;
+    let reading = false;
+    let closed = false;
+    const socket = netConnect({ host: "127.0.0.1", port }, () => {
+      socket.write(
+        `GET /web/download?size=${size}&chunk=${size} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+      );
+    });
+    socket.on("data", (chunk: Buffer) => {
+      got += chunk.byteLength;
+      // The client reads 1 MiB, and then nothing, until the test lets it read again.
+      if (got > MiB && !reading) socket.pause();
+    });
+    socket.on("close", () => {
+      closed = true;
+    });
+    socket.on("error", () => {});
+    const stopped = () =>
+      rec.logs.filter((e) => e.message === "a client stopped reading its response");
+    const started = performance.now();
+    await waitFor(() => stopped().length > 0, 10_000);
+    expect(performance.now() - started).toBeLessThan(8_000);
+    expect(stopped()).toEqual([
+      expect.objectContaining({ level: "warn", data: { route: "web.http" } }),
+    ]);
+    // What the client reads now ends short of the body.
+    reading = true;
+    socket.resume();
+    await waitFor(() => closed, 10_000);
+    expect(got).toBeLessThan(size);
+  }, 20_000);
 
   // @doc docs/guides/http.md#configuration
   test("streamThreshold decides which request bodies go to the device as bytes and which stream", async () => {

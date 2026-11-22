@@ -64,6 +64,7 @@ See [Listeners](../guides/listeners.md).
 | The panel's check of its sockets | every 30 s | |
 | A panel instance that makes no call to a device | 90 s | At its next call, the device runs its `close` handler for that panel's sockets, with 1006. |
 | `httpHandler`'s `streamThreshold`: the largest response body that goes back whole | 16 MiB | The body streams. |
+| A response body in memory of 1 MiB or more | goes in pieces of 256 KiB, without `Content-Length`, each taken by the client within `idleTimeout` | The response ends abruptly, and the body goes. |
 | Upgrades that `httpHandler` accepted and whose sockets haven't opened | 10 000, each for 10 s | The oldest is forgotten; its socket opens without its `data`. |
 | Warnings of the panel for one code and route target, or for slow bodies | 1 a minute | The next one says how many came since. |
 

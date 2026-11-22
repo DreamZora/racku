@@ -59,6 +59,17 @@ const SLOW_BODY = "the client sent its body too slowly";
  */
 const MIN_RATE = 1024;
 /**
+ * The smallest response body in memory that goes to the client in watched pieces, without
+ * `Content-Length`: 1 MiB. Bun 1.4.4 shows how far a client got only by pulling a stream.
+ *
+ * @decision .agents/decisions/261122_061938-panel-bodies-in-watched-pieces.md
+ */
+const PIECES_FROM = MiB;
+/** One piece of such a body. */
+const PIECE = 256 * 1024;
+/** The `Content-Type` of a body of bytes without one, as Bun gives it to a body sent whole. */
+const BYTES_TYPE = "application/octet-stream";
+/**
  * How often a kind of warning goes to the log at most: once a minute, with a count of the rest.
  * Tests shorten it through the environment, as {@link SYNC_MS}. Exported for the tests of its
  * default.
@@ -645,6 +656,58 @@ function joined(chunks: readonly Uint8Array[], size: number): Bytes {
 }
 
 /**
+ * A response body of {@link PIECES_FROM} bytes or more, as pieces of {@link PIECE} that Bun pulls
+ * as the client reads. When the client takes no piece for `idle` s, the stream fails, which ends
+ * the response abruptly, and the body goes. `done` runs once the stream ends, fails, or is
+ * cancelled, so that Bun's timer, set back by it, bounds the connection again.
+ *
+ * @decision .agents/decisions/261122_061938-panel-bodies-in-watched-pieces.md
+ */
+function pieces(
+  body: Uint8Array,
+  idle: number,
+  stopped: () => void,
+  done: () => void,
+): ReadableStream<Uint8Array> {
+  let rest: Uint8Array | undefined = body;
+  let offset = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const end = () => {
+    clearTimeout(timer);
+    if (rest === undefined) return;
+    rest = undefined;
+    done();
+  };
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        clearTimeout(timer);
+        const left = rest;
+        if (left === undefined) return;
+        if (offset >= left.byteLength) {
+          end();
+          controller.close();
+          return;
+        }
+        controller.enqueue(left.subarray(offset, offset + PIECE));
+        offset += PIECE;
+        timer = setTimeout(() => {
+          end();
+          stopped();
+          controller.error(
+            new RackError("RACK_TIMEOUT", "the client stopped reading the response"),
+          );
+        }, idle * 1000);
+      },
+      cancel() {
+        end();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
+/**
  * A response body stream that runs `done` once it ends, fails, or is cancelled. It runs `done`
  * when the device's stream fails even while Bun isn't reading, as for a client that stopped
  * reading, so that Bun's timer, set back by `done`, closes the connection.
@@ -842,9 +905,23 @@ async function handle(
       );
       return new Response(body, { status: output.status, headers: output.headers });
     }
+    const bytes = output.body as Uint8Array | null;
+    if (bytes !== null && bytes.byteLength >= PIECES_FROM) {
+      // Bun can't send a stream with its length, so a large body goes without it: a client that
+      // stops reading must not hold it for good.
+      // @decision .agents/decisions/261122_061938-panel-bodies-in-watched-pieces.md
+      const headers = new Headers(output.headers);
+      if (!headers.has("content-type")) headers.set("content-type", BYTES_TYPE);
+      const stopped = () =>
+        warnSampled(ctx, "stopped reading", "a client stopped reading its response", {
+          route: target.address,
+        });
+      const body = pieces(bytes, idle, stopped, () => server.timeout(request, idle));
+      return new Response(body, { status: output.status, headers });
+    }
     // A body sent whole keeps its Content-Length, in the form Bun sends fastest at its size.
     // @decision .agents/decisions/261118_215039-content-length-for-known-sizes.md#bodies-in-memory
-    const response = wholeResponse(request, output.body as Uint8Array | null, {
+    const response = wholeResponse(request, bytes, {
       status: output.status,
       headers: output.headers,
     });

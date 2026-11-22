@@ -212,7 +212,8 @@ Each of these decisions stays, and this decision comes first where they differ:
   - `src/std/http-panel.ts`:
     - `readUnknown()` reads a body of unknown length whole under the deadline of `readWhole()`, and `guard()` holds a streamed body to `MIN_RATE` with a `Meter` of the bytes and of the time that the panel waited for them;
     - `upgrades` holds the places of upgrades in flight, and `upgradeTo()` and `unopened()` handle an upgrade that doesn't complete;
-    - `GENERAL` holds the messages for the rack's codes, and `warnSampled()` the sampled warnings, every `WARN_EVERY_MS`.
+    - `GENERAL` holds the messages for the rack's codes, and `warnSampled()` the sampled warnings, every `WARN_EVERY_MS`;
+    - `pieces()` sends a body of `PIECES_FROM` or more in watched pieces, for M6, without `Content-Length`, as [Panel response bodies of 1 MiB or more go out in watched pieces](261122_061938-panel-bodies-in-watched-pieces.md) decides.
   - `src/std/http.ts`: `httpHandler` keeps an accepted upgrade for `UPGRADE_MS`, and at most `UPGRADES` of them.
   - Tests: in `test/http-panel.test.ts` and `test/listeners.test.ts`.
   - Documentation: the HTTP and listeners guides, the limits table, and the skill.
