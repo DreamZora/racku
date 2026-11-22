@@ -15,11 +15,11 @@
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Control, type ControlFile, controlPaths, openControl } from "./control.ts";
-import { type WatchOptions, watchAndReload } from "./dev.ts";
+import { isDeviceFileOrJson, type WatchOptions, watchAndReload } from "./dev.ts";
 import { RackError } from "./errors.ts";
 import { consoleLogger, jsonLogger, type LogEntry } from "./log.ts";
 import { isRackManifest, type RackManifest } from "./manifest.ts";
-import { planRack, type RackHandle, start } from "./rack.ts";
+import { planRack, type RackHandle, reloadHotplug, start } from "./rack.ts";
 
 /** The program that messages name: `rack`, or an executable's own name. */
 let program = "rack";
@@ -349,5 +349,26 @@ export async function runRack(options: RunOptions): Promise<void> {
   });
   if (options.watch !== undefined) {
     unwatch = watchAndReload(running, { ...options.watch, baseDir, log: logger });
+  }
+  // rack start watches the hot-plug directories, and applies the hot-plug devices' changes
+  // alone; the fixed devices change at rack ctl reload. rack dev's watch applies them with the
+  // rest.
+  // @decision .agents/decisions/261121_065823-hot-plug-directories.md#when-changes-apply
+  const hotplug = manifest.scan?.hotplug ?? [];
+  if (command === "start" && options.watch === undefined && hotplug.length > 0) {
+    const handle = running;
+    const inside = (path: string) => {
+      const relative = path.replaceAll("\\", "/");
+      return hotplug.some((dir) => relative === dir || relative.startsWith(`${dir}/`));
+    };
+    unwatch = watchAndReload(
+      { reload: () => reloadHotplug(handle) },
+      {
+        baseDir,
+        log: logger,
+        counts: (path) => inside(path) && isDeviceFileOrJson(path),
+        what: `the hot-plug directories ${hotplug.map((dir) => `${dir}/`).join(", ")}`,
+      },
+    );
   }
 }

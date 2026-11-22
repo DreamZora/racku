@@ -14,10 +14,11 @@ import { join } from "node:path";
 import { rack } from "rack42u";
 import { compileRack } from "../src/compile.ts";
 import { planRack, reloadHotplug } from "../src/rack.ts";
-import { errorOf, type TempApp, tempApp, useRacks } from "./fixtures/app.ts";
+import { Cli, errorOf, type TempApp, tempApp, useControlDir, useRacks } from "./fixtures/app.ts";
 import { CONNECTORS, HOST, host, tool } from "./fixtures/tools.ts";
 
 const startRack = useRacks();
+useControlDir();
 
 const apps: TempApp[] = [];
 afterEach(async () => {
@@ -242,4 +243,37 @@ describe("hot-plug directories in the manifest", () => {
       "rack.ts has hot-plug directories, which an executable doesn't run; run the rack with rack start",
     ]);
   });
+});
+
+describe("the rack command with hot-plug directories", () => {
+  const running: Cli[] = [];
+  afterEach(async () => {
+    await Promise.all(running.splice(0).map((cli) => cli.stop()));
+  });
+
+  test("rack start watches the hot-plug directories, and applies their changes alone", async () => {
+    const app = await hotplugApp();
+    await app.write(
+      "rack.ts",
+      `import { rack } from "rack42u";\n\nexport default rack("app", ${JSON.stringify(SPEC)});\n`,
+    );
+    const cli = new Cli(["start"], app.dir);
+    running.push(cli);
+    await cli.waitFor(/watching the hot-plug directories plugins\/ for changes/);
+    // A fixed device's file changes too, which waits for rack ctl reload.
+    await app.write(
+      "devices/host.ts",
+      HOST.replace("let changes = 0;", "let changes = 0;\nconst edited = 1;\nvoid edited;"),
+    );
+    await app.write("plugins/twice.ts", tool("twice", "text + text"));
+    await cli.waitFor(/twice plugged in at U/);
+    // Reloads run one at a time, so once a later file's device is plugged in, the reload before
+    // it has ended.
+    await app.write("plugins/third.ts", tool("third", "text"));
+    await cli.waitFor(/third plugged in at U/);
+    expect(cli.output).not.toContain("host swapped");
+    await rm(join(app.dir, "plugins", "upper.ts"));
+    await cli.waitFor(/upper unplugged/);
+    expect(cli.process.exitCode).toBeNull();
+  }, 30_000);
 });

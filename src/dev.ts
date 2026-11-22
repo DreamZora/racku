@@ -73,6 +73,8 @@ export interface WatchOptions {
    * count.
    */
   counts?: (path: string) => boolean;
+  /** What the log says is watched, as `watching <what> for changes`; the base directory by default. */
+  what?: string;
   /** Writes the watcher's own log entries. */
   log: (entry: LogEntry) => void;
 }
@@ -224,7 +226,7 @@ export function watchAndReload(
     (reason) =>
       log("warn", `cannot watch ${dirname(baseDir)}${sep} for the removal of ${where}: ${reason}`),
   );
-  log("info", `watching ${where} for changes`);
+  log("info", `watching ${options.what ?? where} for changes`);
 
   return close;
 }
