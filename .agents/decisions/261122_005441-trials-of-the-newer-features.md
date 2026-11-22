@@ -88,6 +88,11 @@ Its spec, `bot/SPEC.md`, asks for:
 - `.agents/trials/bot/SPEC.md`, and the executable in `.agents/trials/links/SPEC.md`.
 - `ROUNDS` in `.agents/trials/.claude/workflows/racku-trials.js`; `CLAUDE.md`, `README.md`, and `.gitignore`, which leaves out `dist/`, in `.agents/trials/`.
 - The cleared apps: `04b492d`.
+- The third round, on 2026-11-22, which the user ran from a session in `.agents/trials/`, recorded in its own commit, `2941ba1`: on racku `76ec9c2`, all five apps were built and passed their tests and checks, links with its executable and a code maker placed beside it, and bot with plugins that came and went while it ran. Only bot read racku's source, `src/std/http.ts`, for the members of `http/v2`. Its eight problems became issues #23 to #30, and its merge left out three denials of shell commands.
+  - #23 came from a bug of Bun 1.4.4 and 1.4.5, which a program without racku reproduces: while `expect(...).rejects` or `.resolves` waits in code that resumed in the dispatch of a message of a `MessagePort` or a Worker's channel, Bun holds that channel's further messages back. The main thread now handles what device Workers post in the dispatch of a BroadcastChannel's message, in `src/instance.ts`.
+  - #27 was a bug of racku since v0.7.0: `privateRackDir()` in `src/firmware.ts` didn't make `.rack/` again after a test removed its base directory. It now makes it at every build.
+  - #24, #25, #26, #28, #29, and #30 are fixed in the documentation and its tests: an outside file's own imports, a device behind a panel on the bench, what `reload()` replaces, a file store and the 413 row, where tests go beside a scanned rack, and the package that gives Valibot's schemas JSON Schemas.
+  - The Agent fixed them after the user's go-ahead of 2026-11-22, on `release/1.0.0`, and they close when it merges into `main`.
 
 ## Confirmation
 
