@@ -34,8 +34,10 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 | `device(spec)` | function | Defines a device, the default export of a device file. See [Devices](../guides/devices.md). |
 | `own(connector)` | function | A need that gets a copy of its provider, serving only this consumer. See [Shared instances and own copies](../guides/racks.md#shared-instances-and-own-copies). |
 | `patched(connector, address)` | function | A need wired to the port at a `<device>.<port>` address. See [Needs from configuration](../guides/devices.md#needs-from-configuration). |
+| `every(connector)` | function | A need for every device below that provides the connector, by name. |
 | `isOwn(need)` | function | Whether a need was made by `own()`. |
 | `isPatched(need)` | function | Whether a need was made by `patched()`. |
+| `isEvery(need)` | function | Whether a need was made by `every()`. |
 | `DeviceSpec` | type | What a device file passes to `device()`: its model, height, priority, needs, provides, configuration schema, swap mode, and hooks. |
 | `DeviceDefinition` | type | A device, as `device()` returns it. |
 | `DeviceContext` | type | `ctx`, the first argument of every hook: ports, events, `serve()`, configuration, log, signal, slot, firmware, and base directory. See [The context](../guides/devices.md#the-context). |
@@ -45,15 +47,19 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 | `ConfigOf` | type | The configuration type that a device sees for its configuration schema. |
 | `DeviceLog` | type | `ctx.log`: `debug`, `info`, `warn`, and `error`, which reach the rack's log. |
 | `LogLevel` | type | `"debug"`, `"info"`, `"warn"`, or `"error"`. |
-| `Need` | type | One need: a connector, which shares its provider, an `own()` need, or a `patched()` need. |
+| `Need` | type | One need: a connector, which shares its provider, an `own()` need, a `patched()` need, or an `every()` need. |
 | `Needs` | type | A device's needs, by name. |
 | `NeedConnector` | type | The connector that a need calls, whatever kind of need it is. |
 | `Own` | type | A need made by `own()`. |
 | `Patched` | type | A need made by `patched()`. |
+| `Every` | type | A need made by `every()`. |
 | `NoPorts` | type | The ports of a device that declares none. |
 | `Ports` | type | Connectors by need or port name. |
 | `PortClient` | type | `ctx.ports.<need>`: one function per RPC member of the needed connector. |
 | `PortEvents` | type | `ctx.on.<need>`: one subscription function per event member of the needed connector. |
+| `PortSet` | type | `ctx.ports.<need>` of an every need: `list()`, `get(name)`, and `changed(handler)`. |
+| `ReachedDevice` | type | One device that an every need reaches: its `name`, `model`, `firmware`, and `hotplug`. |
+| `EveryEvents` | type | `ctx.on.<need>` of an every need, whose handlers also get the name of the device that emitted the event. |
 | `PortEmitter` | type | `ctx.emit.<port>`: one publishing function per event member of the provided connector. |
 | `PortImpl` | type | The implementation of one provided port: one function per RPC member. |
 | `PortImpls` | type | The implementations of every provided port, as `powerOn` returns them. |

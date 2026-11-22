@@ -32,6 +32,10 @@ export {
   type DeviceLog,
   type DeviceSpec,
   device,
+  type Every,
+  type EveryEvents,
+  every,
+  isEvery,
   isOwn,
   isPatched,
   type LogLevel,
@@ -47,8 +51,10 @@ export {
   type PortEvents,
   type PortImpl,
   type PortImpls,
+  type PortSet,
   type Ports,
   patched,
+  type ReachedDevice,
   type Watchdog,
 } from "./device.ts";
 export {

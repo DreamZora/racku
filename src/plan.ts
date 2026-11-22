@@ -112,6 +112,17 @@ function expand({ types, roots, use }: PlanInput): Map<string, Draft> {
   const visit = (draft: Draft, path: Step[]): void => {
     for (const [need, info] of Object.entries(draft.type.needs)) {
       const via = `${draft.name}.${need}`;
+      // An every need starts nothing: place() puts what it reaches below the device.
+      // @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+      if (info.every) {
+        if (Object.hasOwn(use, `${draft.type.name}.${need}`)) {
+          throw new RackError(
+            "RACK_MANIFEST",
+            `use ${draft.type.name}.${need}: an every need reaches every provider, and use picks none`,
+          );
+        }
+        continue;
+      }
       const { type, port } = provider(types, use, draft.type.name, need, info);
       const loop = path.findIndex((step) => step.model === type.name);
       if (loop >= 0) {
@@ -221,7 +232,24 @@ function portsFor(type: PlanType, info: NeedInfo): string[] {
  */
 function place(drafts: Draft[], size: number): PlannedInstance[] {
   const byName = new Map(drafts.map((draft) => [draft.name, draft]));
-  const providersOf = (draft: Draft) => Object.values(draft.wiring).map((wire) => wire.provider);
+  // The instances that a draft's every needs reach sit below it, as the ones it needs do.
+  // @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+  const reached = new Map<string, string[]>();
+  for (const draft of drafts) {
+    const names = new Set<string>();
+    for (const info of Object.values(draft.type.needs)) {
+      if (!info.every) continue;
+      for (const other of drafts) {
+        if (other === draft || other.owner !== undefined) continue;
+        if (portsFor(other.type, info).length === 1) names.add(other.name);
+      }
+    }
+    reached.set(draft.name, [...names]);
+  }
+  const providersOf = (draft: Draft) => [
+    ...Object.values(draft.wiring).map((wire) => wire.provider),
+    ...(reached.get(draft.name) ?? []),
+  ];
   const layers = new Map<string, number>();
   const layer = (draft: Draft): number => {
     const known = layers.get(draft.name);
@@ -258,7 +286,10 @@ function place(drafts: Draft[], size: number): PlannedInstance[] {
       if (!providersOf(draft).every((name) => placed.has(name))) continue;
       if (next === undefined || before(draft, next, priority, layer)) next = draft;
     }
-    if (next === undefined) throw new RackError("RACK_MANIFEST", "the plan has a cycle");
+    if (next === undefined) {
+      const left = drafts.filter((draft) => !placed.has(draft.name));
+      throw new RackError("RACK_MANIFEST", `cycle: ${cycleOf(left, byName, providersOf)}`);
+    }
     placed.add(next.name);
     const { height } = next.type;
     if (u + height - 1 > size) {
@@ -278,6 +309,28 @@ function place(drafts: Draft[], size: number): PlannedInstance[] {
     u += height;
   }
   return result;
+}
+
+/**
+ * A cycle among drafts that can't be placed, as `a → b → a`, where each step is a need, every
+ * needs included.
+ */
+function cycleOf(
+  left: readonly Draft[],
+  byName: ReadonlyMap<string, Draft>,
+  providersOf: (draft: Draft) => string[],
+): string {
+  const waiting = new Set(left.map((draft) => draft.name));
+  // Every draft left waits for another one left, so following those steps comes round.
+  let at = left[0]?.name ?? "";
+  const path: string[] = [];
+  while (!path.includes(at)) {
+    path.push(at);
+    const draft = byName.get(at) as Draft;
+    at = providersOf(draft).find((name) => waiting.has(name)) ?? at;
+  }
+  const loop = path.slice(path.indexOf(at));
+  return [...loop, at].join(" → ");
 }
 
 function before(

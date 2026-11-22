@@ -43,11 +43,13 @@ import {
   type DeviceLog,
   type HookName,
   isDevice,
+  isEvery,
   isOwn,
   isPatched,
   type LogLevel,
   type Needs,
   needConnector,
+  type ReachedDevice,
   type Watchdog,
 } from "./device.ts";
 import { fromWireError, isCloneable, RackError, toWireError, type WireError } from "./errors.ts";
@@ -87,6 +89,7 @@ import {
   type NeedHoldRequest,
   type NeedInfo,
   type NeedLinkRequest,
+  type NeedMembersRequest,
   QUEUE_LIMIT,
   type ReserveAsk,
   SHARED_LISTENERS,
@@ -114,7 +117,7 @@ import { detach, moveInto, transferList, untransferable } from "./transfer.ts";
 
 // Untyped on purpose: implementations come from device code and are checked at powerOn.
 type Impl = (input: unknown, call: CallContext) => unknown;
-type EventHandler = (payload: unknown) => void | Promise<void>;
+type EventHandler = (payload: unknown, from?: string) => void | Promise<void>;
 type Outcome = { ok: true; value: unknown } | { ok: false; error: RackError };
 
 interface Booted {
@@ -215,6 +218,28 @@ interface NeedState {
   readonly handlers: Map<string, Set<{ handler: EventHandler }>>;
   readonly calls: Map<string, CalledRpcMetrics>;
   readonly events: Map<string, ReceivedEventMetrics>;
+  /** For the link of an every need to one device, that device's name, which events carry. */
+  readonly from?: string;
+  /** For the link of an every need to one device, the every need's name. */
+  readonly every?: string;
+}
+
+/**
+ * An every need: the devices it reaches, and a need state for the link to each, which share the
+ * declared need's handlers and counters, so that subscriptions cover every device and
+ * `metrics()` counts the calls as one need's, while each device has its own bound of calls.
+ *
+ * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+ */
+interface EveryState {
+  readonly name: string;
+  /** The devices that it reaches, as the main thread last sent them, in slot order. */
+  list: readonly ReachedDevice[];
+  /** A need state for each device that it reaches, or reached while a link may bring results. */
+  readonly members: Map<string, NeedState>;
+  readonly changed: Set<{ handler: (list: readonly ReachedDevice[]) => unknown }>;
+  /** The declared need's state, whose handlers and counters the members share. */
+  readonly shared: NeedState;
 }
 
 /** The provider end of a link. */
@@ -276,6 +301,8 @@ let serving = 0;
 /** Calls from outside the rack being served, by backplane call id. */
 const external = new Map<number, AbortController>();
 const needs = new Map<string, NeedState>();
+/** The every needs, by need name. */
+const everyNeeds = new Map<string, EveryState>();
 const consumers = new Map<number, ConsumerLink>();
 /** Events waiting for held consumer devices, by device name. */
 const heldEvents = new Map<string, QueuedEvent[]>();
@@ -427,6 +454,8 @@ function handle(request: ControlRequest): unknown {
       return setHeld(need(request.need), false);
     case "down":
       return downNeed(request);
+    case "members":
+      return setMembers(request);
     case "attach":
       return attach(request);
     case "holdEvents":
@@ -562,6 +591,7 @@ function describeNeeds(needs: Needs): Record<string, NeedInfo> {
   for (const [name, need] of Object.entries(needs)) {
     const info: NeedInfo = { ...describeConnector(needConnector(need)), own: isOwn(need) };
     if (isPatched(need)) info.patched = need.address;
+    if (isEvery(need)) info.every = true;
     result[name] = info;
   }
   return result;
@@ -641,6 +671,15 @@ function prepare(def: DeviceDefinition): void {
       }
     }
     needs.set(name, state);
+    if (isEvery(need)) {
+      everyNeeds.set(name, {
+        name,
+        list: [],
+        members: new Map(),
+        changed: new Set(),
+        shared: state,
+      });
+    }
   }
 }
 
@@ -657,6 +696,12 @@ function makeContext(def: DeviceDefinition, input: ContextInput): DeviceContext 
   const emit: Record<string, Record<string, unknown>> = {};
   for (const [name, need] of Object.entries(declared)) {
     const c = needConnector(need);
+    const every = everyNeeds.get(name);
+    if (every !== undefined) {
+      ports[name] = portSet(every, c);
+      on[name] = everyEvents(every, c);
+      continue;
+    }
     const state = needs.get(name) as NeedState;
     const client: Record<string, unknown> = {};
     const events: Record<string, unknown> = {};
@@ -704,9 +749,145 @@ function makeContext(def: DeviceDefinition, input: ContextInput): DeviceContext 
 }
 
 function need(name: string): NeedState {
+  const split = name.indexOf(":");
+  if (split >= 0) return memberState(name.slice(0, split), name.slice(split + 1));
   const state = needs.get(name);
   if (state === undefined) throw new RackError("RACK_NO_ROUTE", `the device has no need ${name}`);
   return state;
+}
+
+// ---- Every needs ----
+// @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+
+/** The need state of the link of an every need to one device, made on first use. */
+function memberState(name: string, device: string): NeedState {
+  const set = everyNeeds.get(name);
+  if (set === undefined) {
+    throw new RackError("RACK_NO_ROUTE", `the device has no every need ${name}`);
+  }
+  let state = set.members.get(device);
+  if (state === undefined) {
+    const { handlers, calls, events } = set.shared;
+    state = {
+      name: `${name}[${device}]`,
+      current: undefined,
+      links: new Map(),
+      held: false,
+      queue: [],
+      unfinished: 0,
+      handlers,
+      calls,
+      events,
+      from: device,
+      every: name,
+    };
+    set.members.set(device, state);
+  }
+  return state;
+}
+
+function reaches(set: EveryState, device: string): boolean {
+  return set.list.some((entry) => entry.name === device);
+}
+
+/** Takes the devices that an every need reaches now, and tells the `changed()` handlers. */
+function setMembers({ need: name, members }: NeedMembersRequest): void {
+  const set = everyNeeds.get(name);
+  if (set === undefined) return;
+  set.list = Object.freeze(members.map((member) => Object.freeze({ ...member })));
+  forgetMembers(set);
+  for (const { handler } of [...set.changed]) {
+    void guarded(`changed handler for ${name}`, () => handler(set.list));
+  }
+}
+
+/** Drops the need states of devices that the need no longer reaches, once their links are down. */
+function forgetMembers(set: EveryState): void {
+  for (const [device, state] of set.members) {
+    if (state.links.size === 0 && !reaches(set, device)) set.members.delete(device);
+  }
+}
+
+/** `ctx.ports.<need>` of an every need. */
+function portSet(set: EveryState, c: ReturnType<typeof needConnector>): Record<string, unknown> {
+  const clients = new Map<string, Readonly<Record<string, unknown>>>();
+  const clientFor = (device: string) => {
+    const known = clients.get(device);
+    if (known !== undefined) return known;
+    const methods: Record<string, unknown> = {};
+    for (const [member, spec] of Object.entries(c.members)) {
+      if (spec.kind !== "rpc") continue;
+      const stats = set.shared.calls.get(member) as CalledRpcMetrics;
+      methods[member] = (value: unknown, options?: CallOptions) => {
+        if (!reaches(set, device)) {
+          const message = `${set.name}[${device}].${member}: the need doesn't reach ${device} now`;
+          return Promise.reject(new RackError("RACK_LINK_DOWN", message));
+        }
+        return callOut(memberState(set.name, device), member, stats, value, options);
+      };
+    }
+    const client = Object.freeze(methods);
+    clients.set(device, client);
+    return client;
+  };
+  return Object.freeze({
+    list: () => set.list,
+    get: (device: unknown) =>
+      typeof device === "string" && reaches(set, device) ? clientFor(device) : undefined,
+    changed: (handler: (list: readonly ReachedDevice[]) => unknown) => {
+      if (typeof handler !== "function") {
+        throw new RackError("RACK_INVALID_INPUT", `${set.name}: the handler must be a function`);
+      }
+      const entry = { handler };
+      set.changed.add(entry);
+      return () => {
+        set.changed.delete(entry);
+      };
+    },
+  });
+}
+
+/** `ctx.on.<need>` of an every need: each handler gets the events of every device it reaches. */
+function everyEvents(
+  set: EveryState,
+  c: ReturnType<typeof needConnector>,
+): Record<string, unknown> {
+  const events: Record<string, unknown> = {};
+  for (const [member, spec] of Object.entries(c.members)) {
+    if (spec.kind === "event") {
+      events[member] = (handler: EventHandler) => subscribeEvery(set, member, handler);
+    }
+  }
+  return Object.freeze(events);
+}
+
+function subscribeEvery(set: EveryState, event: string, handler: EventHandler): () => void {
+  if (typeof handler !== "function") {
+    throw new RackError(
+      "RACK_INVALID_INPUT",
+      `${set.name}.${event}: the handler must be a function`,
+    );
+  }
+  const handlers = set.shared.handlers;
+  let entries = handlers.get(event);
+  if (entries === undefined) {
+    entries = new Set();
+    handlers.set(event, entries);
+    // The links made later learn the subscription when they are made.
+    for (const state of set.members.values()) {
+      state.current?.port.postMessage({ t: "sub", event } satisfies ToProvider);
+    }
+  }
+  const entry = { handler };
+  const own = entries;
+  own.add(entry);
+  return () => {
+    if (!own.delete(entry) || own.size > 0 || handlers.get(event) !== own) return;
+    handlers.delete(event);
+    for (const state of set.members.values()) {
+      state.current?.port.postMessage({ t: "unsub", event } satisfies ToProvider);
+    }
+  };
 }
 
 // ---- Calls the device makes ----
@@ -1076,6 +1257,10 @@ function downNeed({ need: name, link: id, error }: NeedDownRequest): void {
   }
   link.port.close();
   markers.delete(id);
+  if (state.every !== undefined) {
+    const set = everyNeeds.get(state.every);
+    if (set !== undefined) forgetMembers(set);
+  }
   checkDrains();
 }
 
@@ -1156,8 +1341,11 @@ function deliver(state: NeedState, event: string, payload: unknown): void {
   if (stats !== undefined) stats.received++;
   const set = state.handlers.get(event);
   if (set === undefined) return;
+  const from = state.from;
   for (const { handler } of [...set]) {
-    void guarded(`event handler for ${state.name}.${event}`, () => handler(payload));
+    void guarded(`event handler for ${state.name}.${event}`, () =>
+      from === undefined ? handler(payload) : handler(payload, from),
+    );
   }
 }
 
@@ -1590,7 +1778,7 @@ function checkDrains(): void {
 function openStreams(): number {
   let count = dataStreams?.open ?? 0;
   for (const link of consumers.values()) count += link.streams.open;
-  for (const state of needs.values()) {
+  for (const state of needStates()) {
     for (const link of state.links.values()) count += link.streams.open;
   }
   return count;
@@ -1598,8 +1786,14 @@ function openStreams(): number {
 
 function hasLink(id: number): boolean {
   if (consumers.has(id)) return true;
-  for (const state of needs.values()) if (state.links.has(id)) return true;
+  for (const state of needStates()) if (state.links.has(id)) return true;
   return false;
+}
+
+/** Every need state with links: the declared needs', and those of every needs' devices. */
+function* needStates(): Generator<NeedState> {
+  yield* needs.values();
+  for (const set of everyNeeds.values()) yield* set.members.values();
 }
 
 function snapshot(): InstanceMetrics {

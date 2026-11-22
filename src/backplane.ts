@@ -23,7 +23,14 @@ import type { Firmware } from "./firmware.ts";
 import type { Instance, RoutedCall, Wire } from "./instance.ts";
 import { parseAddress } from "./manifest.ts";
 import type { CalledRpcMetrics, OutsideMetrics, StreamMetrics } from "./metrics.ts";
-import type { CallResult, CallToProvider, DataFromWorker, Fru, Marker } from "./protocol.ts";
+import type {
+  CallResult,
+  CallToProvider,
+  DataFromWorker,
+  Fru,
+  Marker,
+  MemberInfo,
+} from "./protocol.ts";
 import {
   armTimer,
   cancelStreams,
@@ -131,6 +138,27 @@ interface Link {
 /** Errors of requests to instances that are gone or going are expected; their exit cleans up. */
 function ignore(): void {}
 
+/**
+ * What the every needs of an instance reach: a wire for each device, keyed `<need>:<device>`,
+ * and the devices of each need, in slot order.
+ *
+ * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+ */
+export interface EveryWiring {
+  wires: Map<string, Wire>;
+  members: Map<string, MemberInfo[]>;
+}
+
+function sameMembers(a: readonly MemberInfo[], b: readonly MemberInfo[]): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** The wires of an instance's needs, every needs' links to each device included. */
+function* wiresOf(instance: Instance): Generator<[string, Wire]> {
+  yield* instance.wiring;
+  yield* instance.everyWiring;
+}
+
 /** Sets up links between instances and routes calls from outside the rack. */
 export class Backplane {
   readonly #slots: ReadonlyMap<string, Slot>;
@@ -138,6 +166,7 @@ export class Backplane {
   readonly #callTimeout: number;
   readonly #requestTimeout: number;
   readonly #queueLimit: number;
+  readonly #everyOf: (instance: Instance) => EveryWiring;
   readonly #links = new Map<number, Link>();
   /** The token of the running hold of each held slot, by slot name. */
   readonly #holds = new Map<string, number>();
@@ -159,6 +188,7 @@ export class Backplane {
    * @param callTimeout Timeout for calls that set none.
    * @param requestTimeout Timeout of each link-management request to an instance.
    * @param queueLimit The most unfinished calls from outside the rack to each device.
+   * @param everyOf What the every needs of an instance reach now.
    */
   constructor(
     slots: ReadonlyMap<string, Slot>,
@@ -166,12 +196,14 @@ export class Backplane {
     callTimeout: number,
     requestTimeout: number,
     queueLimit: number,
+    everyOf: (instance: Instance) => EveryWiring = () => ({ wires: new Map(), members: new Map() }),
   ) {
     this.#slots = slots;
     this.#instances = instances;
     this.#callTimeout = callTimeout;
     this.#requestTimeout = requestTimeout;
     this.#queueLimit = queueLimit;
+    this.#everyOf = everyOf;
   }
 
   // ---- Links ----
@@ -190,6 +222,52 @@ export class Backplane {
       if (slot === undefined || slot.removed || provider == null || provider.dead) continue;
       work.push(this.#link(instance, need, provider, wire.port));
     }
+    // Every needs: a link to each device they reach, then the list of them, which the instance
+    // has before its hooks run, since it handles its requests in order.
+    // @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+    const every = this.#everyOf(instance);
+    instance.everyWiring = every.wires;
+    instance.everyMembers = every.members;
+    for (const [key, wire] of every.wires) {
+      if (this.#currentLink(instance, key) !== undefined) continue;
+      const slot = this.#slots.get(wire.provider);
+      const provider = slot?.installed;
+      if (slot === undefined || slot.removed || provider == null || provider.dead) continue;
+      work.push(this.#link(instance, key, provider, wire.port));
+    }
+    for (const [need, members] of every.members) {
+      work.push(this.#ask(instance, { op: "members", need, members }));
+    }
+    await Promise.all(work);
+  }
+
+  /**
+   * Brings the every needs of an instance up to date: links the devices that they reach now,
+   * and then tells the instance which devices each reaches. The links of devices that they no
+   * longer reach stay until those devices leave, so that the calls on them finish.
+   *
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+   */
+  async syncEvery(instance: Instance): Promise<void> {
+    if (instance.dead) return;
+    const every = this.#everyOf(instance);
+    const work: Promise<unknown>[] = [];
+    for (const [key, wire] of every.wires) {
+      const before = instance.everyWiring.get(key);
+      const same = before?.provider === wire.provider && before.port === wire.port;
+      if (same && this.#currentLink(instance, key) !== undefined) continue;
+      const slot = this.#slots.get(wire.provider);
+      const provider = slot?.installed;
+      if (slot === undefined || slot.removed || provider == null || provider.dead) continue;
+      work.push(this.#link(instance, key, provider, wire.port));
+    }
+    for (const [need, members] of every.members) {
+      const before = instance.everyMembers.get(need);
+      if (before !== undefined && sameMembers(before, members)) continue;
+      work.push(this.#ask(instance, { op: "members", need, members }));
+    }
+    instance.everyWiring = every.wires;
+    instance.everyMembers = every.members;
     await Promise.all(work);
   }
 
@@ -208,7 +286,7 @@ export class Backplane {
     const work: Promise<unknown>[] = [];
     for (const consumer of this.#instances) {
       if (consumer.dead || consumer === instance) continue;
-      for (const [need, wire] of consumer.wiring) {
+      for (const [need, wire] of wiresOf(consumer)) {
         if (wire.provider === slot.name) work.push(this.#link(consumer, need, instance, wire.port));
       }
     }
@@ -265,7 +343,7 @@ export class Backplane {
     const work: Promise<unknown>[] = [];
     for (const consumer of this.#instances) {
       if (consumer.dead) continue;
-      for (const [need, wire] of consumer.wiring) {
+      for (const [need, wire] of wiresOf(consumer)) {
         if (wire.provider === slot.name) work.push(this.#ask(consumer, { op: "release", need }));
       }
     }

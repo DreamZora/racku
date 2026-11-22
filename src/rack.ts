@@ -31,7 +31,7 @@ import type { Dirent } from "node:fs";
 import { readdir, unlink } from "node:fs/promises";
 import { basename, join, resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Backplane, type Slot, type SlotState } from "./backplane.ts";
+import { Backplane, type EveryWiring, type Slot, type SlotState } from "./backplane.ts";
 import type { ConnectorInfo } from "./connector.ts";
 import { type Control, openControl } from "./control.ts";
 import type { CallOptions } from "./device.ts";
@@ -80,6 +80,7 @@ import {
   type InjectedFault,
   type LogNotice,
   type Marker,
+  type MemberInfo,
   QUEUE_LIMIT,
   type ReserveAsk,
   WATCHDOG_MIN,
@@ -529,6 +530,8 @@ class Rack implements InstanceHost {
   readonly #fellBack = new Map<string, Fallen>();
   /** While the rack starts: what the firmware of each outside file declared, and with what. */
   readonly #outsideFrus = new Map<string, { fru: Fru; config: unknown; hash: string }>();
+  /** Keys of the warnings that #warnOnce gave. */
+  readonly #warned = new Set<string>();
 
   constructor(manifest: RackManifest, options: StartOptions) {
     this.#manifest = manifest;
@@ -571,6 +574,7 @@ class Rack implements InstanceHost {
       this.#callTimeout,
       this.#hookTimeout,
       this.#queueLimit,
+      (instance) => this.#everyOf(instance),
     );
   }
 
@@ -1604,6 +1608,17 @@ class Rack implements InstanceHost {
     const wiring = new Map<string, Wire>();
     for (const [need, info] of Object.entries(fru.needs)) {
       const where = `${name}.${need} (${info.id})`;
+      // An every need reaches what #everyOf finds, and no patch picks for it.
+      // @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+      if (info.every) {
+        if (this.#patch.some(([consumer]) => consumer === `${name}.${need}`)) {
+          throw new RackError(
+            "RACK_MANIFEST",
+            `patch ${where}: ${name}.${need} is an every need, which reaches every provider below`,
+          );
+        }
+        continue;
+      }
       // A patch decides first: when a plan or a manifest changes, its wiring wins. A need that
       // patched() wires carries a patch of its own, which a patch of the manifest overrides.
       // @decision .agents/decisions/261118_071513-http-panel-device.md#needs-from-configuration
@@ -1667,6 +1682,75 @@ class Rack implements InstanceHost {
       wiring.set(need, { provider: only.slot.name, port: only.port });
     }
     return wiring;
+  }
+
+  /**
+   * What the every needs of an instance reach: the devices below its slot that provide the
+   * connector on one port, which covers the need, apart from copies that serve an `own` need
+   * and devices that are being unplugged.
+   *
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+   */
+  #everyOf(instance: Instance): EveryWiring {
+    const wires = new Map<string, Wire>();
+    const members = new Map<string, MemberInfo[]>();
+    const fru = instance.fru;
+    const slot = this.#slots.get(instance.slot);
+    if (fru === undefined || slot === undefined) return { wires, members };
+    let copies: Map<string, string> | undefined;
+    for (const [need, info] of Object.entries(fru.needs)) {
+      if (!info.every) continue;
+      copies ??= this.#owners();
+      const reached: Slot[] = [];
+      for (const other of this.#slots.values()) {
+        if (other.removed || other === slot || other.u >= slot.u || copies.has(other.name))
+          continue;
+        const ports = Object.entries(other.fru.provides).filter(
+          ([, port]) => port.id === info.id && covers(port, info),
+        );
+        const [only, ...more] = ports;
+        if (only === undefined) continue;
+        if (more.length > 0) {
+          this.#warnOnce(
+            `every:${slot.name}.${need}:${other.name}`,
+            `${slot.name}.${need} doesn't reach ${other.name}, which provides ${info.id} on several ports`,
+          );
+          continue;
+        }
+        reached.push(other);
+        wires.set(`${need}:${other.name}`, { provider: other.name, port: only[0] });
+      }
+      reached.sort((a, b) => a.u - b.u);
+      members.set(
+        need,
+        reached.map((other) => ({
+          name: other.name,
+          model: other.model,
+          firmware: other.firmware.hash,
+          hotplug: false,
+        })),
+      );
+    }
+    return { wires, members };
+  }
+
+  /** Brings the every needs of every installed instance up to date with the rack. */
+  async #syncEvery(): Promise<void> {
+    const work: Promise<void>[] = [];
+    for (const slot of this.#slots.values()) {
+      const instance = slot.installed;
+      if (slot.removed || instance === null || instance.dead) continue;
+      if (!Object.values(instance.fru?.needs ?? {}).some((info) => info.every)) continue;
+      work.push(this.#backplane.syncEvery(instance));
+    }
+    await Promise.all(work);
+  }
+
+  /** Logs a warning once per key, for the life of the rack. */
+  #warnOnce(key: string, message: string): void {
+    if (this.#warned.has(key)) return;
+    this.#warned.add(key);
+    this.#log("warn", message);
   }
 
   /**
@@ -1759,6 +1843,10 @@ class Rack implements InstanceHost {
       try {
         return await updates.run({ cause, started: Date.now() }, operation);
       } finally {
+        // What every needs reach follows the devices that an operation plugged, swapped, moved,
+        // or unplugged.
+        // @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+        await this.#syncEvery();
         await this.#collectGarbage();
       }
     });
@@ -2999,6 +3087,9 @@ class Rack implements InstanceHost {
     if (before !== undefined) throw jammed(before);
     slot.removed = true;
     slot.busy = true;
+    // Every needs stop reaching the device first, and the calls in flight to it drain.
+    // @decision .agents/decisions/261121_065823-hot-plug-directories.md#when-changes-apply
+    await this.#syncEvery();
     const instance = slot.installed;
     slot.installed = null;
     if (instance !== null) await this.#retire(instance);
@@ -3105,6 +3196,7 @@ class Rack implements InstanceHost {
     slot.firmware = good;
     slot.source = good.source;
     await this.#reset(slot, crash);
+    await this.#syncEvery();
     if (slot.installed !== null) {
       this.#emit({
         type: "swap",

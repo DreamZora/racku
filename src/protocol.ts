@@ -108,6 +108,13 @@ export interface ReserveAsk {
 export interface NeedInfo extends ConnectorInfo {
   own: boolean;
   /**
+   * The need reaches every device below that provides the connector, each on a link of its own,
+   * whose need key is `<need>:<device>`.
+   *
+   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+   */
+  every?: boolean;
+  /**
    * The address that `patched()` wires the need to: `<device>.<port>`, or `<model>.<port>` in a
    * scanned rack.
    *
@@ -213,7 +220,31 @@ export interface UnlistenRequest {
   code: number;
 }
 
-/** Main thread to consumer: a new link for a need, which becomes the need's current link. */
+/**
+ * Main thread to consumer: the devices that an every need reaches now, in slot order. It comes
+ * after the links of the devices that came, and before those of the devices that went are down.
+ *
+ * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+ */
+export interface NeedMembersRequest {
+  id: number;
+  op: "members";
+  need: string;
+  members: MemberInfo[];
+}
+
+/** One device that an every need reaches. */
+export interface MemberInfo {
+  name: string;
+  model: string;
+  firmware: string;
+  hotplug: boolean;
+}
+
+/**
+ * Main thread to consumer: a new link for a need, which becomes the need's current link. For an
+ * every need, `need` is `<need>:<device>`, one key for each device that it reaches.
+ */
 export interface NeedLinkRequest {
   id: number;
   op: "link";
@@ -351,6 +382,7 @@ export type ControlRequest =
   | NeedHoldRequest
   | NeedReleaseRequest
   | NeedDownRequest
+  | NeedMembersRequest
   | AttachRequest
   | HoldEventsRequest
   | LiveRequest

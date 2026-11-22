@@ -62,18 +62,37 @@ export interface Patched<C extends Connector = Connector> {
   readonly address: string;
 }
 
+/** Brand of every needs; a global symbol, because a bundle may carry its own copy of rack42u. */
+const EVERY: unique symbol = Symbol.for("rack42u.every");
+
+/** A need for every device below that provides a connector; see {@link every}. */
+export interface Every<C extends Connector = Connector> {
+  readonly [EVERY]: true;
+  /** The connector the need calls. */
+  readonly connector: C;
+}
+
 /**
- * A need: a connector, which shares the provider; `own(connector)`, which gets a copy; or
- * `patched(connector, address)`, wired to a configured address.
+ * A need: a connector, which shares the provider; `own(connector)`, which gets a copy;
+ * `patched(connector, address)`, wired to a configured address; or `every(connector)`, which
+ * reaches every device below that provides it.
  */
-export type Need = Connector | Own | Patched;
+export type Need = Connector | Own | Patched | Every;
 
 /** Needs keyed by need name. */
 export type Needs = Record<string, Need>;
 
-/** The connector a need calls, whether it shares its provider, owns a copy, or is patched. */
+/** The connector a need calls, whatever kind of need it is. */
 export type NeedConnector<T> =
-  T extends Own<infer C> ? C : T extends Patched<infer C> ? C : T extends Connector ? T : never;
+  T extends Own<infer C>
+    ? C
+    : T extends Patched<infer C>
+      ? C
+      : T extends Every<infer C>
+        ? C
+        : T extends Connector
+          ? T
+          : never;
 
 /**
  * Asks for a copy of the provider that serves only this consumer instance. In a scanned rack,
@@ -146,13 +165,47 @@ export function isPatched(value: unknown): value is Patched {
 }
 
 /**
+ * Asks for every device below that provides the connector, by name: in a manifest that places
+ * devices by hand, those in lower slots; in a scanned rack, the instances of the plan that
+ * provide it, which the plan places below, and the hot-plug devices. It starts no device, and
+ * reaches no copy that serves an `own` need, and no device that provides the connector on
+ * several ports. In the device, `ctx.ports.<need>` is a {@link PortSet}.
+ *
+ * @param connector The connector the need calls.
+ * @returns The need, for the `needs` of a device.
+ * @throws RackError `RACK_MANIFEST` when `connector` is not a connector.
+ * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+ */
+export function every<C extends Connector>(connector: C): Every<C> {
+  if (!isConnector(connector)) {
+    throw new RackError("RACK_MANIFEST", "every() requires a connector");
+  }
+  return Object.freeze({ [EVERY]: true as const, connector });
+}
+
+/**
+ * Reports whether a need is an every need created by {@link every}.
+ *
+ * @param value Any value, typically an entry of a device's `needs`.
+ * @returns `true` when the value carries the every brand.
+ */
+export function isEvery(value: unknown): value is Every {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { [EVERY]?: unknown })[EVERY] === true &&
+    isConnector((value as { connector?: unknown }).connector)
+  );
+}
+
+/**
  * Returns the connector a need calls.
  *
- * @param need A connector, an own need, or a patched need.
+ * @param need A connector, or an own, patched, or every need.
  * @returns The connector.
  */
 export function needConnector(need: Need): Connector {
-  return isOwn(need) || isPatched(need) ? need.connector : need;
+  return isOwn(need) || isPatched(need) || isEvery(need) ? need.connector : need;
 }
 
 /** Options for an outgoing RPC call. */
@@ -217,6 +270,50 @@ export type PortClient<M extends Members> = {
 export type PortEvents<M extends Members> = {
   readonly [K in keyof M as M[K] extends EventSpec ? K : never]: (
     handler: (payload: EventPayload<M[K]>) => void | Promise<void>,
+  ) => () => void;
+};
+
+/** One device that an every need reaches, as {@link PortSet.list} gives it. */
+export interface ReachedDevice {
+  /** The device's name, which {@link PortSet.get} takes. */
+  readonly name: string;
+  readonly model: string;
+  /** The firmware hash of its installed instance. */
+  readonly firmware: string;
+  /** Whether its file is in a hot-plug directory. */
+  readonly hotplug: boolean;
+}
+
+/**
+ * The devices that an every need reaches, by name: `ctx.ports.<need>` of an every need.
+ *
+ * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+ */
+export interface PortSet<M extends Members> {
+  /** The devices that the need reaches now, in slot order from the bottom. */
+  list(): readonly ReachedDevice[];
+  /**
+   * The port of the device of that name, called as a need's port is, or `undefined` while the
+   * need doesn't reach it. Each call goes to the device of that name when it starts, and fails
+   * with `RACK_LINK_DOWN` while the need doesn't reach one.
+   */
+  get(name: string): PortClient<M> | undefined;
+  /**
+   * Calls `handler` with the new list after each change of what the need reaches: a device that
+   * comes, one that goes, and one that runs other firmware. What it throws is logged.
+   *
+   * @returns A function that stops it.
+   */
+  changed(handler: (list: readonly ReachedDevice[]) => void | Promise<void>): () => void;
+}
+
+/**
+ * Event subscriptions for an every need: one function per event member, whose handler gets the
+ * events of every device that the need reaches, now and later, with the emitter's name.
+ */
+export type EveryEvents<M extends Members> = {
+  readonly [K in keyof M as M[K] extends EventSpec ? K : never]: (
+    handler: (payload: EventPayload<M[K]>, from: string) => void | Promise<void>,
   ) => () => void;
 };
 
@@ -309,10 +406,21 @@ export interface ActivateScope {
 
 /** The first argument of every hook. */
 export interface DeviceContext<N extends Needs = Needs, P extends Ports = Ports, C = unknown> {
-  /** RPC clients for every need, for example `ctx.ports.db.query(input, { timeout })`. */
-  readonly ports: { readonly [K in keyof N]: PortClient<NeedConnector<N[K]>["members"]> };
+  /**
+   * RPC clients for every need, for example `ctx.ports.db.query(input, { timeout })`, and for an
+   * every need the {@link PortSet} of the devices it reaches.
+   */
+  readonly ports: {
+    readonly [K in keyof N]: N[K] extends Every<infer C>
+      ? PortSet<C["members"]>
+      : PortClient<NeedConnector<N[K]>["members"]>;
+  };
   /** Event subscriptions for every need; events reach only the installed instance. */
-  readonly on: { readonly [K in keyof N]: PortEvents<NeedConnector<N[K]>["members"]> };
+  readonly on: {
+    readonly [K in keyof N]: N[K] extends Every<infer C>
+      ? EveryEvents<C["members"]>
+      : PortEvents<NeedConnector<N[K]>["members"]>;
+  };
   /** Event publishers for every provided port; the payload is validated before it is sent. */
   readonly emit: { readonly [K in keyof P]: PortEmitter<P[K]["members"]> };
   /**
@@ -495,7 +603,7 @@ export function device<
 }
 
 function isNeed(value: unknown): value is Need {
-  return isConnector(value) || isOwn(value) || isPatched(value);
+  return isConnector(value) || isOwn(value) || isPatched(value) || isEvery(value);
 }
 
 /**
@@ -523,7 +631,8 @@ function checkPorts<T extends Needs>(
       throw new RackError("RACK_MANIFEST", `device ${model}: ${field} key "${name}" is invalid`);
     }
     if (!valid(value)) {
-      const what = field === "needs" ? "a connector, own(connector), or patched()" : "a connector";
+      const what =
+        field === "needs" ? "a connector, own(connector), patched(), or every()" : "a connector";
       throw new RackError("RACK_MANIFEST", `device ${model}: ${field}.${name} is not ${what}`);
     }
   }

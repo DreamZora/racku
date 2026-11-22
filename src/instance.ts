@@ -27,6 +27,7 @@ import {
   type ListenerReport,
   type LogNotice,
   type Marker,
+  type MemberInfo,
   type ReserveAsk,
   SHARED_LENGTH,
   SHARED_LISTENERS,
@@ -124,6 +125,13 @@ export class Instance {
   active = false;
   /** Wiring of this instance's needs; set when the instance is assembled into the rack. */
   wiring = new Map<string, Wire>();
+  /**
+   * The links of this instance's every needs, one for each device they reach, keyed
+   * `<need>:<device>`; the backplane sets them when it connects the instance, and keeps them.
+   */
+  everyWiring = new Map<string, Wire>();
+  /** The devices that each every need reaches, as the instance last heard, by need name. */
+  everyMembers = new Map<string, MemberInfo[]>();
   /** Calls from outside the rack this instance is serving, keyed by backplane call id. */
   readonly inFlight = new Map<number, RoutedCall>();
   /** Set once the Worker has exited, or the rack has terminated it. */
