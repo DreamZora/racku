@@ -26,13 +26,13 @@ Make a directory for the app, and write this `package.json` in it, whose scripts
 rack42u isn't published to a registry; an app depends on it through git, at a tag of its repository. In the app's directory, add it, and valibot for the schemas:
 
 ```sh
-bun add git+ssh://git@github.com/DreamZora/rack42u.git#v0.5.0 valibot
+bun add git+ssh://git@github.com/DreamZora/rack42u.git#v0.6.0 valibot
 ```
 
 - Run `bun add` in the app's directory, next to its `package.json`. In a directory without one, Bun adds the packages to the nearest `package.json` above it, another project's, without a warning.
 - Bun clones the repository with git, over HTTPS first and then over SSH, so git's credentials for GitHub or an SSH key with access to the repository will do. A `git+https://github.com/...` URL doesn't work for a private repository, since Bun downloads those from GitHub's API without credentials.
 - Pin a tag or a commit: until rack42u's first formal release, any version may break the API. Bun writes the ref into `package.json` as you typed it, and the commit it installed into `bun.lock`, so a branch, such as `#main`, or `HEAD` names a commit only through `bun.lock`: a fresh install, without it, takes the branch's latest commit. Bun reports the commit it installed, as `installed rack42u@git+…#<commit>`; to pin that commit, add rack42u again with it in place of the branch.
-- To use a local clone of rack42u instead, give its path as a URL, such as `git+file:///home/you/rack42u#v0.5.0`.
+- To use a local clone of rack42u instead, give its path as a URL, such as `git+file:///home/you/rack42u#v0.6.0`.
 
 ## Define a connector
 
