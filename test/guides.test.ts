@@ -85,10 +85,12 @@ test("the greeter app of the guides runs as written", async () => {
     "connectors.ts",
     "devices/files.ts",
     "devices/greeter.ts",
+    "devices/room.ts",
     "devices/web.ts",
     "rack.ts",
     "test/greeter-swap.test.ts",
     "test/greeter.test.ts",
+    "test/room.test.ts",
   ]);
   for (const [path, code] of sources) await app.write(path, code.replaceAll("3000", port));
 
@@ -161,6 +163,25 @@ test("the swap example of the testing guide runs as written", async () => {
   expect({ code, output: code === 0 ? "" : stdout + stderr }).toEqual({ code: 0, output: "" });
   expect(stderr).toContain("1 pass");
   expect(existsSync(join(app.dir, "devices", "greeter-next.ts"))).toBe(false);
+});
+
+// @doc docs/guides/testing.md#devices-behind-a-panel
+test("the panel example of the testing guide tests the chat room as written", async () => {
+  const app = await tempApp();
+  apps.push(app);
+  for (const [path, code] of files()) await app.write(path, code);
+  const run = Bun.spawn([process.execPath, "test", "./test/room.test.ts"], {
+    cwd: app.dir,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [code, stdout, stderr] = await Promise.all([
+    run.exited,
+    new Response(run.stdout).text(),
+    new Response(run.stderr).text(),
+  ]);
+  expect({ code, output: code === 0 ? "" : stdout + stderr }).toEqual({ code: 0, output: "" });
+  expect(stderr).toContain("1 pass");
 });
 
 // @doc docs/guides/http.md#requests
@@ -320,22 +341,11 @@ test("the greeter whose helper takes a DeviceContext type-checks", async () => {
   expect(await typecheck(sources)).toBe("");
 }, 60_000);
 
-/** The chat room of the HTTP panel guide, in a device file of its own. */
+/** The chat room of the HTTP panel guide, its file of the guides' app. */
 function chatRoom(): string {
-  const guide = GUIDES.find(({ name }) => name === "http.md")?.text ?? "";
-  const code = /```ts\n(powerOn\(ctx\) \{\n {2}const handler: HttpHandler[\s\S]*?)```/.exec(
-    guide,
-  )?.[1];
+  const code = files().get("devices/room.ts");
   if (code === undefined) throw new Error("the HTTP panel guide has no chat room");
-  return [
-    'import { device } from "racku";',
-    'import { Http, type HttpHandler, httpHandler } from "racku/std";',
-    "",
-    'export default device({ model: "room", provides: { http: Http },',
-    code,
-    "});",
-    "",
-  ].join("\n");
+  return code;
 }
 
 /** A WebSocket client, once it is open, with the messages it got and the code it closed with. */

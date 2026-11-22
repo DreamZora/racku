@@ -115,6 +115,51 @@ test("greeter greets on across swaps", async () => {
 - **A changed device.** `swap(source)` takes another device file, such as a changed copy of the device, written next to it so that its relative imports resolve; a path is relative to the base directory. A scanned rack refuses another file with `RACK_SWAP_REJECTED`; there, a test changes the device's own file, and swaps it.
 - **What happened.** `history()` lists the swap's record first. Its `mode` and `cause` say how and why, and its `from` and `to` are the old and the new firmware hash, the same when the file didn't change, as [History](updates.md#history) describes.
 
+## Devices behind a panel
+
+A device behind the [HTTP panel](http.md) implements `http/v2`, so a test on the bench makes the panel's calls itself, as [The http/v2 connector](http.md#the-httpv2-connector) gives them: `handle` for a request, and for a WebSocket, `handle` with an id for its socket, then `opened`, and `message` for each message of the client. What the device sends to its sockets comes back as its port's `send` and `close` events, in `events`. For the chat room of [WebSocket](http.md#websocket):
+
+```ts
+// test/room.test.ts
+import { expect, test } from "bun:test";
+import { bench } from "racku/bench";
+
+/** The panel's call for a request to `url`, or, with `socket`, for a WebSocket upgrade. */
+function request(url: string, socket?: string) {
+  const upgrade: [string, string][] = [
+    ["upgrade", "websocket"],
+    ["connection", "upgrade"],
+  ];
+  return { method: "GET", url, headers: socket ? upgrade : [], params: {}, body: null, socket };
+}
+
+test("room asks for a WebSocket, and sends each message to the sender's room", async () => {
+  await using room = await bench(new URL("../devices/room.ts", import.meta.url));
+  const answer = await room.call<{ status: number; body: Uint8Array }>(
+    "http",
+    "handle",
+    request("http://localhost/chat?room=a"),
+  );
+  expect(answer.status).toBe(426);
+  expect(new TextDecoder().decode(answer.body)).toBe("this room needs a WebSocket");
+
+  for (const [socket, name] of [["a1", "a"], ["a2", "a"], ["b1", "b"]] as const) {
+    const url = `http://localhost/chat?room=${name}`;
+    expect(await room.call("http", "handle", request(url, socket))).toHaveProperty("upgrade");
+    await room.call("http", "opened", { socket });
+  }
+  await room.call("http", "message", { socket: "a1", data: "hi" });
+  // The event comes through the probe's Worker, so it can arrive just after the call returns.
+  while (room.events.length === 0) await Bun.sleep(10);
+  expect(room.events.map(({ event, payload }) => ({ event, payload }))).toEqual([
+    { event: "send", payload: { socket: ["a1", "a2"], data: "hi" } },
+  ]);
+});
+```
+
+- **Answers.** `handle` answers `{ status, headers, body }`, with the body as bytes, a `Uint8Array`, up to `httpHandler`'s `streamThreshold`, or `{ upgrade }` for an upgrade that the device accepted.
+- **Sockets.** A test names its sockets with ids of its own, where the panel would name them `<panel>:<instance>:<n>`, and calls `opened` for each before its messages, as the panel does once a socket opens.
+
 ## Crashes and hangs
 
 A device crashes when its own code lets an exception or a rejection go uncaught, or calls `process.exit()`, and it hangs when its event loop stays blocked, as [Faults and overload](faults.md) describes; the bench records either in `faults`. A test makes the device do either on purpose with `injectFault()`, with no test code in the device:

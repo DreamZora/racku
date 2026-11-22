@@ -168,33 +168,41 @@ powerOn: (ctx) => ({
 A chat room, for example, sends each message to every socket in the sender's room. The room is each socket's data, and the list of the sockets is the room's members:
 
 ```ts
-powerOn(ctx) {
-  const handler: HttpHandler<{ room: string }> = httpHandler(
-    {
-      fetch(request, server) {
-        const room = new URL(request.url).searchParams.get("room") ?? "lobby";
-        if (server.upgrade(request, { data: { room } })) return;
-        return new Response("this room needs a WebSocket", { status: 426 });
-      },
-      websocket: {
-        // Each message goes to every socket in the sender's room, the sender's own included.
-        message(ws, data) {
-          if (typeof data !== "string") {
-            ws.close(1003, "this room takes text");
-            return;
-          }
-          const members = handler.list().filter((member) => member.data.room === ws.data.room);
-          return ctx.emit.http.send({ socket: members.map((member) => member.socket), data });
+// devices/room.ts
+import { device } from "racku";
+import { Http, type HttpHandler, httpHandler } from "racku/std";
+
+export default device({
+  model: "room",
+  provides: { http: Http },
+  powerOn(ctx) {
+    const handler: HttpHandler<{ room: string }> = httpHandler(
+      {
+        fetch(request, server) {
+          const room = new URL(request.url).searchParams.get("room") ?? "lobby";
+          if (server.upgrade(request, { data: { room } })) return;
+          return new Response("this room needs a WebSocket", { status: 426 });
+        },
+        websocket: {
+          // Each message goes to every socket in the sender's room, the sender's own included.
+          message(ws, data) {
+            if (typeof data !== "string") {
+              ws.close(1003, "this room takes text");
+              return;
+            }
+            const members = handler.list().filter((member) => member.data.room === ws.data.room);
+            return ctx.emit.http.send({ socket: members.map((member) => member.socket), data });
+          },
         },
       },
-    },
-    ctx.emit.http,
-  );
-  return { http: handler };
-},
+      ctx.emit.http,
+    );
+    return { http: handler };
+  },
+});
 ```
 
-In a hot swap, the rooms move to the new instance with the list, when `snapshot` and `restore` hand it over as **Swaps** says.
+In a hot swap, the rooms move to the new instance with the list, when `snapshot` and `restore` hand it over as **Swaps** says. [Devices behind a panel](testing.md#devices-behind-a-panel) tests the room on the bench.
 
 ## Certificates
 
