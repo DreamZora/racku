@@ -80,6 +80,7 @@ describe("rack start", () => {
 
   // @doc docs/guides/running.md#a-layout-that-follows-data
   // @doc docs/guides/running.md#running-a-rack-from-another-program
+  // @doc docs/guides/updates.md#hot-swaps-cold-swaps-and-restarts
   test("rack ctl reload replaces a device whose file changed, and doesn't read an edited manifest", async () => {
     const created = await app();
     const cli = run(["start"], created.dir);

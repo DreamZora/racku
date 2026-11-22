@@ -360,6 +360,7 @@ describe("plug and unplug", () => {
 
 // @doc docs/reference/api.md#the-rack-handle
 // @doc docs/guides/running.md#hot-reload-with-rack-dev
+// @doc docs/guides/updates.md#hot-swaps-cold-swaps-and-restarts
 describe("reload", () => {
   test("swaps only the devices whose firmware changed and keeps their state", async () => {
     const app = await fixtureApp();
@@ -369,6 +370,14 @@ describe("reload", () => {
     );
     await running.call("counter.counter", "inc", undefined);
     const [counter, probe] = running.status();
+    expect(await running.reload()).toEqual([]);
+    // A change to a comment alone leaves the bundle, so the firmware, as it was.
+    await edit(
+      app,
+      "devices/counter.ts",
+      "hot reload edit this line",
+      "hot reload change this line",
+    );
     expect(await running.reload()).toEqual([]);
 
     await edit(app, "devices/counter.ts", '"v1"', '"v2"');
