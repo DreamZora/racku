@@ -227,19 +227,24 @@ describe("an executable from rack compile", () => {
     expect(existsSync(join(dir, ".rack"))).toBe(false);
   }, 30_000);
 
-  test("reads .env, but not bunfig.toml, from the directory where it starts", async () => {
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  test("reads neither .env nor bunfig.toml from the directory where it starts", async () => {
     const started = await baseDir({
       ".env": "HELLO_NAME=Dotenv\n",
       "bunfig.toml": 'preload = ["./preload.ts"]\n',
       "preload.ts": 'console.log("preloaded from bunfig.toml");\n',
-      "script.ts": "export {};\n",
+      "script.ts": "console.log(process.env.HELLO_NAME);\n",
     });
-    // bun itself runs the preload there.
+    // bun itself reads both there.
     const underBun = Bun.spawnSync([process.execPath, "script.ts"], { cwd: started });
     expect(underBun.stdout.toString()).toContain("preloaded from bunfig.toml");
+    expect(underBun.stdout.toString()).toContain("Dotenv");
     const { cli, url } = await run(await baseDir(), { cwd: started });
-    expect(await greet(url)).toEqual({ text: "Hello, Dotenv", from: "packaged" });
+    expect(await greet(url)).toEqual({ text: "Hello, world", from: "packaged" });
     expect(cli.output).not.toContain("preloaded from bunfig.toml");
+    // Its environment comes from the program that starts it.
+    const given = await run(await baseDir(), { cwd: started, env: { HELLO_NAME: "Given" } });
+    expect(await greet(given.url)).toEqual({ text: "Hello, Given", from: "packaged" });
   }, 30_000);
 
   test("gives the manifest and the devices files next to their sources from the base directory", async () => {
@@ -313,6 +318,71 @@ describe("an executable from rack compile", () => {
     },
     30_000,
   );
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  test("runs the packaged device when the file imports a macro, which doesn't run", async () => {
+    const dir = await baseDir();
+    const ran = join(dir, "macro-ran");
+    await Bun.write(
+      join(dir, "devices", "_now.ts"),
+      `export function now() {\n  require("node:fs").writeFileSync(${JSON.stringify(ran)}, "ran");\n  return "";\n}\n`,
+    );
+    await Bun.write(
+      join(dir, "devices", "hello.ts"),
+      helloSource("outside", {
+        imports: 'import { now } from "./_now.ts" with { type: "macro" };',
+        suffix: "now()",
+      }),
+    );
+    const { cli, url } = await run(dir);
+    expect(await greet(url)).toEqual({ text: "Hello, world", from: "packaged" });
+    expect(cli.output).toContain("hello runs its packaged firmware: ");
+    expect(cli.output).toContain("Macros are disabled");
+    expect(existsSync(ran)).toBe(false);
+  }, 30_000);
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  test("runs the packaged device when the file imports a package from outside the base directory", async () => {
+    // A node_modules in a directory above the base directory, such as C:\\node_modules on Windows,
+    // which any user can create there.
+    const parent = await baseDir({
+      "node_modules/above-the-base/package.json": JSON.stringify({
+        name: "above-the-base",
+        version: "1.0.0",
+        main: "index.js",
+      }),
+      "node_modules/above-the-base/index.js": 'export const SUFFIX = " from above";\n',
+    });
+    const dir = join(parent, "base");
+    await Bun.write(
+      join(dir, "devices", "hello.ts"),
+      helloSource("outside", {
+        imports: 'import { SUFFIX } from "above-the-base";',
+        suffix: "SUFFIX",
+      }),
+    );
+    const { cli, url } = await run(dir);
+    expect(await greet(url)).toEqual({ text: "Hello, world", from: "packaged" });
+    expect(cli.output).toContain("hello runs its packaged firmware: ");
+    expect(cli.output).toContain(
+      `above-the-base resolves to ${join(parent, "node_modules", "above-the-base", "index.js")}, outside the base directory`,
+    );
+    // A package inside the base directory is the base directory's own, and may come from there.
+    const own = await baseDir({
+      "node_modules/inside-the-base/package.json": JSON.stringify({
+        name: "inside-the-base",
+        version: "1.0.0",
+        main: "index.js",
+      }),
+      "node_modules/inside-the-base/index.js": 'export const SUFFIX = " from inside";\n',
+      "devices/hello.ts": helloSource("outside", {
+        imports: 'import { SUFFIX } from "inside-the-base";',
+        suffix: "SUFFIX",
+      }),
+    });
+    const inside = await run(own);
+    expect(await greet(inside.url)).toEqual({ text: "Hello, world from inside", from: "outside" });
+  }, 30_000);
 
   test("falls back to the packaged device when the file's device crashes on probation", async () => {
     const dir = await baseDir({

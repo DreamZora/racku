@@ -28,12 +28,12 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dirent } from "node:fs";
-import { readdir, stat, unlink } from "node:fs/promises";
+import { readdir, rename, stat, unlink } from "node:fs/promises";
 import { basename, join, relative, resolve as resolvePath, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Backplane, type EveryWiring, type Slot, type SlotState } from "./backplane.ts";
 import { type ConnectorInfo, isConnectorId } from "./connector.ts";
-import { type Control, openControl } from "./control.ts";
+import { alive, type Control, openControl } from "./control.ts";
 import type { CallOptions } from "./device.ts";
 import { RackError, toWireError, type WireError } from "./errors.ts";
 import {
@@ -41,6 +41,7 @@ import {
   explainMissingPackage,
   type Firmware,
   type PackagedBuild,
+  sweepFirmware,
 } from "./firmware.ts";
 import {
   Instance,
@@ -439,6 +440,37 @@ export function crashWindow(longestWatchdog: number): number {
  */
 /** The key of the handle's reload of hot-plug devices alone; not part of the public API. */
 const RELOAD_HOTPLUG: unique symbol = Symbol("racku.reloadHotplug");
+/** The key of the handle's sweep of firmware that nothing needs; not part of the public API. */
+const SWEEP_FIRMWARE: unique symbol = Symbol("racku.sweepFirmware");
+
+/**
+ * Deletes the firmware of earlier runs that a rack doesn't need, once it holds its base
+ * directory's management endpoint, as `rack start` does after it opens one.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+ */
+export function sweepUnneededFirmware(running: RackHandle): Promise<void> {
+  const sweep = (running as { [SWEEP_FIRMWARE]?: () => Promise<void> })[SWEEP_FIRMWARE];
+  if (sweep === undefined) throw new RackError("RACK_NO_ROUTE", "not a rack handle");
+  return sweep();
+}
+
+/** The files of a firmware on disk: none for firmware packaged inside an executable. */
+function filesOf(firmware: Firmware): readonly string[] {
+  return firmware.files ?? (firmware.packaged ? [] : [firmware.path]);
+}
+
+/**
+ * Writes a file whole: to a new file, renamed into place, so that a crash leaves either the old
+ * file or the new one, never one written halfway.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+ */
+async function writeWhole(path: string, text: string): Promise<void> {
+  const draft = `${path}.${process.pid}.tmp`;
+  await Bun.write(draft, text);
+  await rename(draft, path);
+}
 
 /**
  * Reloads the hot-plug devices of a rack alone: the watch of `rack start` applies their changes,
@@ -475,6 +507,8 @@ interface Layout {
 class Rack implements InstanceHost {
   #manifest: RackManifest;
   readonly #baseDir: string;
+  /** When this rack began to start; firmware written before it may be an earlier run's. */
+  readonly #begun = Date.now();
   readonly #logger: Logger;
   readonly #callTimeout: number;
   readonly #hookTimeout: number;
@@ -629,6 +663,7 @@ class Rack implements InstanceHost {
           : refuse(`${address}.${method}`, input, options),
       reload: (manifest?: RackManifest) => this.#operate("reload", () => this.#reload(manifest)),
       [RELOAD_HOTPLUG]: () => this.#operate("reload", () => this.#reload(undefined, true)),
+      [SWEEP_FIRMWARE]: () => this.#sweepFirmware(),
       swap: (name: string, source?: string | URL) =>
         this.#operate("swap", () => this.#swap(name, source)),
       restart: (name: string, options: RestartOptions = {}) =>
@@ -935,6 +970,7 @@ class Rack implements InstanceHost {
           stop: () => void handle.stop(),
         });
         this.#log("info", "control listening", { address: this.#control.address });
+        await this.#sweepFirmware();
       }
       this.#log("info", `rack ${this.#manifest.name} started`, { devices: this.#slots.size });
     } catch (error) {
@@ -969,7 +1005,7 @@ class Rack implements InstanceHost {
   /** Boots, wires, and powers on every device, from the bottom up. */
   async #powerUp(): Promise<void> {
     const planText = await this.#prepare();
-    if (planText !== undefined) await Bun.write(this.#planPath(), planText);
+    if (planText !== undefined) await writeWhole(this.#planPath(), planText);
     for (const slot of this.#ordered()) {
       const instance = slot.installed as Instance;
       if (slot.removed) continue;
@@ -1142,7 +1178,7 @@ class Rack implements InstanceHost {
         file.state = !fit.fits ? "differs" : fit.sameOrder ? "fits" : "reordered";
       }
       if (write) {
-        await Bun.write(path, text);
+        await writeWhole(path, text);
         file.state = "fits";
         file.differences = [];
       }
@@ -1805,7 +1841,7 @@ class Rack implements InstanceHost {
     const current = await Bun.file(path)
       .text()
       .catch(() => undefined);
-    if (current !== text) await Bun.write(path, text);
+    if (current !== text) await writeWhole(path, text);
   }
 
   /** Rejects management operations that would change a scanned rack outside its plan. */
@@ -3681,6 +3717,11 @@ class Rack implements InstanceHost {
       if (record.from !== null) keep.add(record.from);
       if (record.to !== null) keep.add(record.to);
     }
+    // A file that kept firmware lists stays, such as one that two versions of a device import.
+    const kept = new Set<string>();
+    for (const firmware of this.#built.values()) {
+      if (keep.has(firmware.hash)) for (const file of filesOf(firmware)) kept.add(file);
+    }
     for (const [path, firmware] of this.#built) {
       if (keep.has(firmware.hash)) continue;
       this.#built.delete(path);
@@ -3689,10 +3730,29 @@ class Rack implements InstanceHost {
         if (key === firmware.hash || key.startsWith(`${firmware.hash} `))
           this.#described.delete(key);
       }
-      await unlink(path).catch(() => {
-        // Already gone, for example removed with .rack/; there is nothing left to delete.
-      });
+      for (const file of filesOf(firmware)) {
+        if (kept.has(file)) continue;
+        await unlink(file).catch(() => {
+          // Already gone, for example removed with .rack/; there is nothing left to delete.
+        });
+      }
     }
+  }
+
+  /**
+   * Deletes the firmware that earlier runs and `rack plan` left in `.rack/firmware/`, which this
+   * rack doesn't need. It runs once the rack holds its base directory's management endpoint, which
+   * no other rack holds at once, so that no other rack uses that firmware.
+   *
+   * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+   */
+  async #sweepFirmware(): Promise<void> {
+    const keep = new Set<string>();
+    for (const firmware of [...this.#built.values(), ...this.#firmwares.values()]) {
+      for (const file of filesOf(firmware)) keep.add(file);
+    }
+    const deleted = await sweepFirmware(this.#baseDir, keep, this.#begun, alive);
+    if (deleted > 0) this.#log("info", "firmware that nothing needs deleted", { files: deleted });
   }
 
   /** Records a swap event in the history, and puts a successful update on probation. */

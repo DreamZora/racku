@@ -269,6 +269,45 @@ describe("device context", () => {
     expect((globalThis as { __rackuDeviceLoaded?: boolean }).__rackuDeviceLoaded).toBeUndefined();
   });
 
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  test("the main thread drops what device code posts on its Worker's own channel, with one warning", async () => {
+    const { running, rec } = await startRack({ slots: { 1: slot("./devices/poster.ts") } });
+    const dropped = () =>
+      rec.logs.filter((e) => e.device === "poster" && e.message.startsWith("dropped a message"));
+    expect(await running.call("poster.counter", "inc", undefined)).toBe(1);
+    await waitFor(() => dropped().length > 0);
+    expect(await running.call("poster.counter", "slowInc", 0)).toBe(2);
+    expect(await running.call("poster.counter", "inc", undefined)).toBe(3);
+    await Bun.sleep(50);
+    expect(dropped()).toEqual([expect.objectContaining({ level: "warn" })]);
+    expect(running.status()[0]?.state).toBe("online");
+  });
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  test("a device file whose imports include a macro fails the start, and the macro doesn't run", async () => {
+    const { tempApp } = await import("./fixtures/app.ts");
+    const created = await tempApp(["connectors.ts", "devices"], FIXTURES);
+    try {
+      const ran = join(created.dir, "macro-ran");
+      await created.write(
+        "devices/_now.ts",
+        `export function now() {\n  require("node:fs").writeFileSync(${JSON.stringify(ran)}, "ran");\n  return 1;\n}\n`,
+      );
+      await created.write(
+        "devices/timed.ts",
+        'import { device } from "racku";\nimport { now } from "./_now.ts" with { type: "macro" };\nexport default device({ model: "timed-" + now() });\n',
+      );
+      const failed = start(rack("macro", { slots: { 1: slot("./devices/timed.ts") } }), {
+        baseDir: created.dir,
+        logger: () => {},
+      });
+      await expect(failed).rejects.toThrow("Macros are disabled");
+      expect(await Bun.file(ran).exists()).toBe(false);
+    } finally {
+      await created.remove();
+    }
+  });
+
   // @decision .agents/decisions/261112_035943-hot-swap.md#lifecycle
   // @doc docs/guides/devices.md#hooks
   // @doc docs/guides/devices.md#background-work

@@ -449,6 +449,44 @@ export interface ListenersNotice {
 /** Anything a Worker posts on the control channel. */
 export type ControlNotice = ControlReply | LogNotice | WatchdogNotice | AskNotice | ListenersNotice;
 
+const LOG_LEVELS: ReadonlySet<unknown> = new Set(["debug", "info", "warn", "error"]);
+
+/**
+ * Whether a message on the control channel has the shape of one that the Worker host posts.
+ * Device code can post on that channel too, with `postMessage`, so the main thread checks each
+ * message before it reads one.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+ */
+export function isControlNotice(value: unknown): value is ControlNotice {
+  if (typeof value !== "object" || value === null) return false;
+  const notice = value as Record<string, unknown>;
+  const object = (field: unknown) => typeof field === "object" && field !== null;
+  switch (notice.op) {
+    case undefined:
+      return (
+        typeof notice.id === "number" &&
+        (notice.ok === true || (notice.ok === false && object(notice.error)))
+      );
+    case "log":
+      return LOG_LEVELS.has(notice.level) && typeof notice.message === "string";
+    case "watchdog": {
+      const armed = notice.armed as Record<string, unknown> | undefined;
+      return (
+        Number.isInteger(notice.index) &&
+        (armed === undefined ||
+          (object(armed) && typeof armed.name === "string" && typeof armed.timeout === "number"))
+      );
+    }
+    case "ask":
+      return typeof notice.id === "number" && object(notice.ask);
+    case "listeners":
+      return Array.isArray(notice.listeners);
+    default:
+      return false;
+  }
+}
+
 /** Backplane to provider, on the data channel: a call from outside the rack. */
 export interface CallToProvider {
   t: "call";

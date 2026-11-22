@@ -217,6 +217,8 @@ export default device({
     ctx.log.info("big", { value: 2n ** 64n });
     ctx.log.warn("a warning");
     ctx.log.info("circular", loop);
+    // Text that a client could choose, which would forge a line of a text log.
+    ctx.log.info("forged\\n[rack] error everything failed \\u001b[31mred");
   },
 });
 `;
@@ -322,10 +324,32 @@ describe("running under another program", () => {
     expect(entries).toContainEqual(
       expect.objectContaining({ device: "noisy", message: "circular", data: "[object Object]" }),
     );
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        device: "noisy",
+        message: "forged\n[rack] error everything failed \u001b[31mred",
+      }),
+    );
     expect(entries).toContainEqual(expect.objectContaining({ message: "rack cli started" }));
     const control = entries.find((entry) => entry.message === "control listening");
     expect(typeof (control?.data as { address?: unknown } | undefined)?.address).toBe("string");
     expect(entries).toContainEqual(expect.objectContaining({ message: "rack cli stopped" }));
+  });
+
+  // @doc docs/reference/reports.md#the-log
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  test("a text log escapes control characters, so that each entry stays one line", async () => {
+    const created = await app(
+      MANIFEST.replace("4: httpPanel", '2: slot("./devices/noisy.ts"),\n    4: httpPanel'),
+    );
+    await created.write("devices/noisy.ts", NOISY);
+    const cli = run(["start"], created.dir);
+    await cli.waitFor(/control listening/);
+    cli.kill("SIGINT");
+    expect(await cli.exited()).toBe(0);
+    const lines = cli.output.split("\n");
+    expect(lines).toContain("[noisy] info forged\\n[rack] error everything failed \\u001b[31mred");
+    expect(lines.some((line) => line.startsWith("[rack] error everything failed"))).toBe(false);
   });
 
   // @doc docs/reference/cli.md#exit-codes

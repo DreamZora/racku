@@ -136,6 +136,16 @@ export default device({
       "plugins/refusing.ts",
       tool("refusing", "text", '\n  selfTest() { throw new Error("not ready"); },'),
     );
+    // A macro would run in the rack's process as the file builds, so the build refuses it.
+    // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+    await app.write("plugins/_now.ts", "export function now() {\n  return 1;\n}\n");
+    await app.write(
+      "plugins/timed.ts",
+      tool("timed", "text").replace(
+        'import { device } from "racku";',
+        'import { device } from "racku";\nimport { now } from "./_now.ts" with { type: "macro" };\nnow();',
+      ),
+    );
     const { running, rec } = await startRack(SPEC, { baseDir: app.dir });
     expect(names(running)).toEqual(["lower", "upper", "host"]);
     expect(await host(running).names()).toEqual(["lower", "upper"]);
@@ -155,6 +165,7 @@ export default device({
     leftOut("greedy.ts", "is an every need, which a hot-plug device can't have");
     leftOut("failing.ts", "no power");
     leftOut("refusing.ts", "not ready");
+    leftOut("timed.ts", "Macros are disabled");
   });
 
   test("a file that is left out runs at the reload after it is fixed", async () => {

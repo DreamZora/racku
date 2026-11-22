@@ -3,9 +3,9 @@
  *
  * @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { realpathSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, realpathSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, rm, stat, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,11 +13,22 @@ import { rack, slot, start } from "racku";
 import { bench } from "racku/bench";
 import {
   buildFirmware,
+  declaredDependencies,
   explainMissingPackage,
   importFirmware,
   retryMissedImports,
 } from "../src/firmware.ts";
-import { errorOf, FIXTURES, ROOT, type TempApp, tempApp } from "./fixtures/app.ts";
+import {
+  CONTROL_DIR,
+  errorOf,
+  FIXTURES,
+  ROOT,
+  type TempApp,
+  tempApp,
+  useControlDir,
+} from "./fixtures/app.ts";
+
+const WINDOWS = process.platform === "win32";
 
 const apps: TempApp[] = [];
 afterEach(async () => {
@@ -105,6 +116,154 @@ describe("buildFirmware", () => {
     await expect(buildFirmware(source, created.dir)).rejects.toThrow(
       `firmware build failed for ${source}`,
     );
+  });
+});
+
+// @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+describe("what a build may read and write", () => {
+  test("a device file whose imports include a macro fails to build, and the macro doesn't run", async () => {
+    const created = await app();
+    const ran = join(created.dir, "macro-ran");
+    await created.write(
+      "devices/_now.ts",
+      `export function now() {\n  require("node:fs").writeFileSync(${JSON.stringify(ran)}, "ran");\n  return 1;\n}\n`,
+    );
+    await created.write(
+      "devices/timed.ts",
+      'import { device } from "racku";\nimport { now } from "./_now.ts" with { type: "macro" };\nexport default device({ model: "timed-" + now() });\n',
+    );
+    const source = join(created.dir, "devices/timed.ts");
+    const failed = buildFirmware(source, created.dir);
+    await expect(failed).rejects.toThrow(`firmware build failed for ${source}`);
+    await expect(failed).rejects.toThrow("Macros are disabled");
+    expect(existsSync(ran)).toBe(false);
+  });
+
+  test("a build reads no tsconfig.json and no package.json from above the app's directory", async () => {
+    const outer = await app();
+    // The app lies inside a directory that someone else can write, which has a tsconfig.json
+    // whose paths would lead an import out of the app, and a package.json.
+    await outer.write(
+      "tsconfig.json",
+      JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["./evil/*"] } } }),
+    );
+    await outer.write("evil/greeting.ts", 'export const greeting = "from above the app";\n');
+    const inner = join(outer.dir, "inner");
+    await outer.write(
+      "inner/devices/greeter.ts",
+      'import { device } from "racku";\nimport { greeting } from "@lib/greeting.ts";\nexport default device({ model: greeting });\n',
+    );
+    await expect(buildFirmware(join(inner, "devices/greeter.ts"), inner)).rejects.toThrow(
+      'Could not resolve: "@lib/greeting.ts"',
+    );
+    expect(await declaredDependencies(join(inner, "devices"), inner)).toEqual([]);
+    expect(await declaredDependencies(join(inner, "devices"))).toEqual(["racku", "valibot"]);
+    // The app's own tsconfig.json still counts.
+    await outer.write(
+      "inner/tsconfig.json",
+      JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["./lib/*"] } } }),
+    );
+    await outer.write("inner/lib/greeting.ts", 'export const greeting = "from the app";\n');
+    const firmware = await buildFirmware(join(inner, "devices/greeter.ts"), inner);
+    expect(await Bun.file(firmware.path).text()).toContain('"from the app"');
+  });
+
+  test.skipIf(WINDOWS)(
+    ".rack/ is its user's alone, also when it existed with looser modes",
+    async () => {
+      const created = await app();
+      await mkdir(join(created.dir, ".rack"), { mode: 0o755 });
+      await chmod(join(created.dir, ".rack"), 0o755);
+      await buildFirmware(join(created.dir, "devices/counter.ts"), created.dir);
+      expect(((await stat(join(created.dir, ".rack"))).mode & 0o777).toString(8)).toBe("700");
+    },
+  );
+
+  test("a build keeps every file it wrote, and doesn't write a bundle that is there again", async () => {
+    const created = await app();
+    await created.write("devices/blob.bin", "bytes the device reads");
+    await created.write(
+      "devices/filed.ts",
+      'import { device } from "racku";\nimport blob from "./blob.bin" with { type: "file" };\nexport default device({ model: "filed " + blob });\n',
+    );
+    const source = join(created.dir, "devices/filed.ts");
+    const first = await buildFirmware(source, created.dir);
+    expect(first.files).toHaveLength(2);
+    expect(first.files?.[0]).toBe(first.path);
+    for (const file of first.files ?? []) {
+      expect(dirname(file)).toBe(join(created.dir, ".rack", "firmware"));
+      expect(existsSync(file)).toBe(true);
+    }
+    const before = await stat(first.path);
+    const second = await buildFirmware(source, created.dir);
+    expect(second).toEqual(first);
+    const after = await stat(first.path);
+    expect([after.ino, after.mtimeMs]).toEqual([before.ino, before.mtimeMs]);
+    // The build's own directory beside .rack/firmware/ is gone.
+    expect(
+      await Array.fromAsync(
+        new Bun.Glob("firmware-*").scan({ cwd: join(created.dir, ".rack"), onlyFiles: false }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("firmware of earlier runs", () => {
+  useControlDir();
+  let saved: string | undefined;
+  beforeAll(() => {
+    saved = process.env.XDG_RUNTIME_DIR;
+    process.env.XDG_RUNTIME_DIR = CONTROL_DIR;
+  });
+  afterAll(() => {
+    if (saved === undefined) delete process.env.XDG_RUNTIME_DIR;
+    else process.env.XDG_RUNTIME_DIR = saved;
+  });
+
+  // @doc docs/reference/limits.md#supervision-and-history
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  test("a rack that holds its management endpoint deletes at its start the firmware that nothing needs", async () => {
+    const created = await app();
+    const firmwareDir = join(created.dir, ".rack", "firmware");
+    await mkdir(firmwareDir, { recursive: true });
+    const old = join(firmwareDir, "gone-00000000.js");
+    await Bun.write(old, "export default {};\n");
+    const hour = Date.now() / 1000 - 3600;
+    await utimes(old, hour, hour);
+    // The build directory of a process that ended.
+    const ended = Bun.spawn([process.execPath, "-e", ""]);
+    await ended.exited;
+    const leftover = join(created.dir, ".rack", `firmware-${ended.pid}-1`);
+    await mkdir(leftover);
+    const logs: { message: string; data?: unknown }[] = [];
+    const running = await start(rack("sweep", { slots: { 1: slot("./devices/counter.ts") } }), {
+      baseDir: created.dir,
+      control: true,
+      logger: (entry) => logs.push(entry),
+    });
+    try {
+      expect(existsSync(old)).toBe(false);
+      expect(existsSync(leftover)).toBe(false);
+      const firmware = running.status()[0]?.firmware;
+      expect(existsSync(join(firmwareDir, `counter-${firmware}.js`))).toBe(true);
+      expect(logs).toContainEqual(
+        expect.objectContaining({
+          message: "firmware that nothing needs deleted",
+          data: { files: 1 },
+        }),
+      );
+    } finally {
+      await running.stop();
+    }
+    // A rack without the endpoint can't know that it is alone, and deletes nothing at its start.
+    await Bun.write(old, "export default {};\n");
+    await utimes(old, hour, hour);
+    const alone = await start(rack("sweep", { slots: { 1: slot("./devices/counter.ts") } }), {
+      baseDir: created.dir,
+      logger: () => {},
+    });
+    await alone.stop();
+    expect(existsSync(old)).toBe(true);
   });
 });
 

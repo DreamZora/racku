@@ -53,6 +53,8 @@ Each instance of a device runs in a Worker of its own, with its own copy of the 
 
 A device file runs as firmware, a bundle in `.rack/firmware/`, but its `import.meta.url`, `dir`, `dirname`, `path`, and `filename` keep naming the device file, and those of a helper it imports name the helper. So a device reads a file it ships with next to its source, such as `readFileSync(new URL("./template.html", import.meta.url))`. The build rewrites only those members; `import.meta` used whole, such as when destructured, names the bundle.
 
+The build reads the `tsconfig.json` and the `package.json` closest to the device file, from its directory up to the app's directory, and none above it, so that a directory that holds the app, such as `/tmp`, can't change what a bundle holds. It runs with macros turned off: a device file whose imports include one, `with { type: "macro" }`, fails to build with Bun's "Macros are disabled", since a macro would run in the rack's own process, which runs no device code.
+
 ## Hooks
 
 Hooks run in this order: `powerOn` → `selfTest` → `activate` ⇄ `deactivate` → `powerOff`. All but `powerOn` are optional, and `powerOn` is optional too when a device provides nothing. Start timers and other background work in `activate`, not in `powerOn`: during a swap the old and the new instance briefly run side by side.

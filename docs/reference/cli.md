@@ -72,7 +72,7 @@ The two exclude each other, and a rack placed by hand takes neither.
 
 ## The command line of an executable
 
-An executable that `rack compile` made starts the rack it packaged, as `rack start` starts a manifest, with the same flags, signals, and exit codes, and two flags of its own, `--base-dir` and `--watch`. With `ctl`, it operates the rack that it runs for the same base directory, with the operations of `rack ctl` and its flags, `--base-dir` in place of `--dir`. It reads a `.env` file in the directory where it starts, as `bun` does, but not a `bunfig.toml`.
+An executable that `rack compile` made starts the rack it packaged, as `rack start` starts a manifest, with the same flags, signals, and exit codes, and two flags of its own, `--base-dir` and `--watch`. With `ctl`, it operates the rack that it runs for the same base directory, with the operations of `rack ctl` and its flags, `--base-dir` in place of `--dir`. It reads neither a `.env` file nor a `bunfig.toml` in the directory where it starts, as `bun` would: its environment comes from the program that starts it.
 
 ```sh
 ./app --base-dir /var/lib/app --log json   # start the rack

@@ -7,7 +7,7 @@
  * @decision .agents/decisions/261116_233919-automatic-assembly.md#plan-file
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { rack, slot } from "racku";
 import { memkv } from "racku/std";
@@ -330,6 +330,22 @@ describe("the plan file", () => {
     await startRack(SPEC, { baseDir: app.dir, plan: "update" });
     expect(await app.read("test.plan")).toContain(" b b - e=e.e d=d.d\n");
   });
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  test.skipIf(process.platform === "win32")(
+    "the plan file is written whole, to a new file that is renamed into place",
+    async () => {
+      const app = await exampleApp();
+      await (await startRack(SPEC, { baseDir: app.dir })).running.stop();
+      const path = join(app.dir, "test.plan");
+      const before = await stat(path);
+      await app.write("devices/b.ts", consumer("b", { e: "E", d: "D" }));
+      await (await startRack(SPEC, { baseDir: app.dir, plan: "update" })).running.stop();
+      // A file renamed into place is a new file, where a file written in place keeps its inode.
+      expect((await stat(path)).ino).not.toBe(before.ino);
+      expect((await readdir(app.dir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    },
+  );
 
   test("a rack run without a plan file neither reads nor writes one", async () => {
     const app = await exampleApp();

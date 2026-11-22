@@ -94,7 +94,7 @@ An installed app needs neither Bun nor this repository: its rack is the sidecar 
 
 On Linux, `$XDG_DATA_HOME` and `$XDG_CONFIG_HOME` take the place of `~/.local/share` and `~/.config` when they are set.
 
-- **The base directory** is the rack's: the sidecar starts there, so a `.env` there is the app's own, and the rack writes the firmware of replacements in its `.rack/`.
+- **The base directory** is the rack's: the sidecar starts there, and the rack writes the firmware of replacements in its `.rack/`. The sidecar reads no `.env` there: the shell gives it its environment.
 - **The log.** The shell writes the rack's log lines there, one JSON object each, with the rack's own messages, after it renames the previous run's `rack.log` to `rack.old.log`. A run's log stops at 10 MiB, with a last line that says so. When the app is killed, the rack's last lines, of its shutdown, are lost.
 - **A rack that can't start** leaves the window open, with the reason and the path of the log. So does the rack of a second copy of the app, which finds the first copy's rack running for the same base directory, and stops; the first copy runs on.
 

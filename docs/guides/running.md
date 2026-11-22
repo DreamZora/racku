@@ -53,7 +53,7 @@ await fetch("http://localhost:3000/greet?name=Grace").then((r) => r.text()); // 
 await running.stop();
 ```
 
-[`start()`](../reference/api.md#start) takes the options, and returns the handle, that the [API reference](../reference/api.md) lists. Management operations run one at a time, in the order they were called. Firmware is written to `.rack/firmware/` under the base directory, and imports racku and the app's packages from there, so the base directory lies inside the app; keep `.rack/` out of version control.
+[`start()`](../reference/api.md#start) takes the options, and returns the handle, that the [API reference](../reference/api.md) lists. Management operations run one at a time, in the order they were called. Firmware is written to `.rack/firmware/` under the base directory, and imports racku and the app's packages from there, so the base directory lies inside the app; keep `.rack/` out of version control. The rack gives `.rack/` the mode 0700, also when it exists, since a bundle holds what its device imports, such as a JSON file of secrets; on Windows, `.rack/` keeps the access of the folder that holds it. Each file of firmware is written whole, to a new file renamed into place, and a bundle that is there already is never written again, as is the plan file.
 
 The rack prints its log on the console, one line per entry, unless the `logger` option of `start()` takes the entries: `logger: () => {}` keeps the console quiet, and `logger: (entry) => entries.push(entry)` collects them, so that a check can look for one, such as `<device> swapped`. [The log](../reference/reports.md#the-log) lists what the rack writes.
 
@@ -123,7 +123,9 @@ rack compile rack.ts --outfile dist/greeter          # about 100 MiB, most of it
 - **Reports.** `status()` marks a device that runs its packaged firmware with `packaged: true`, and its `source` names the place of its outside file, whether or not the file is there. The log says `<device> runs <file>` for each outside file at start, and warns `<device> runs its packaged firmware: <reason>` at each fallback. `history()` records each fallback with the cause `fallback`.
 - **Who can change it.**
   - Outside files run with the rights of the executable: whoever can write the base directory can run code in the rack, as whoever can write an app's files can under `rack start`. With `--watch`, such a file runs at once, not at the next `ctl reload` or start.
-  - Like `bun`, the executable reads a `.env` file in the directory where it starts, so whoever can write that directory can add variables to its environment. Unlike `bun`, it ignores a `bunfig.toml` there, whose `preload` would run code in the rack.
+  - Unlike `bun`, the executable reads neither a `.env` file nor a `bunfig.toml` in the directory where it starts: a `.env` there could set its control token, and a `bunfig.toml`'s `preload` would run code in the rack. Its environment comes from the program that starts it, such as a service manager, a shell, or the shell of a desktop app.
+  - A package that an outside file imports, which the executable doesn't carry, must come from inside the base directory, such as from its own `node_modules`. One that resolves above it, such as to `C:\node_modules` on Windows, which any user can create, fails the file's build, and its device starts from its packaged firmware, as the log says.
+  - An outside file whose imports include a macro fails to build, as under `rack start`.
 - [The command line of an executable](../reference/cli.md#the-command-line-of-an-executable) lists its flags, and [Flags of rack compile](../reference/cli.md#flags-of-rack-compile) how to compile for another system.
 
 ## Windows

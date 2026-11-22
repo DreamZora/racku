@@ -221,6 +221,19 @@ Each of these decisions stays, and this decision comes first where they differ:
   - `src/commands.ts`: `sendOperation()` takes the token of `--url` from `tokenIn()`, for `--token-file`, or from `RACK_CONTROL_TOKEN`, and that of a control file only while `alive()` finds its process; `src/cli.ts` and `src/executable.ts` list `--token-file` in place of `--token`.
   - Tests: in `test/control.test.ts`.
   - Documentation: managing, and the rack command.
+- **Code loading and the files the rack writes:**
+  - `src/firmware.ts`:
+    - `buildFirmware()` builds with `NO_MACROS` and the `tsconfig` of `tsconfigFor()`, which reads none above the app's directory, as `declaredDependencies()` reads no `package.json` there;
+    - it builds into a directory beside `.rack/firmware/`, and `settle()` moves each file into place unless one of its name is there; `Firmware.files` lists them all;
+    - `privateRackDir()` gives `.rack/` mode 0700, and `insideBaseDir()` keeps an outside file's packages inside the base directory;
+    - `sweepFirmware()` deletes the firmware of earlier runs.
+  - `src/rack.ts`: `#collectGarbage()` deletes every file of a firmware that no kept firmware lists, `#sweepFirmware()` runs once the rack holds its management endpoint, which `sweepUnneededFirmware()` lets `rack start` call, and `writeWhole()` writes the plan file.
+    - The sweep at start runs only in a rack that holds the endpoint, which only one rack of a base directory does: a rack without one can't know that no other rack uses the firmware, which the deletion of firmware leaves alone, as [Update history](261117_005743-fallback-rollback-and-history.md#update-history) decides.
+  - `src/compile.ts`: an executable's build turns off `autoloadDotenv` and macros, and reads the app's own `tsconfig.json` only.
+  - `src/protocol.ts`: `isControlNotice()`, which `src/instance.ts` checks each message of the Worker's own channel with, before it reads one.
+  - `src/log.ts`: `formatLogEntry()` escapes control characters.
+  - Tests: in `test/firmware.test.ts`, `test/rack.test.ts`, `test/assembly.test.ts`, `test/safety.test.ts`, `test/hotplug.test.ts`, `test/cli.test.ts`, and `test/executable.test.ts`.
+  - Documentation: devices, updates, running, the rack command, reports, limits, and net-tool's README.
 
 ## Confirmation
 

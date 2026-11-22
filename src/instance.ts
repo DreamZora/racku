@@ -24,6 +24,7 @@ import {
   type Fru,
   type InheritedListener,
   type InjectedFault,
+  isControlNotice,
   type ListenerReport,
   type LogNotice,
   type Marker,
@@ -163,6 +164,8 @@ export class Instance {
   #nextId = 1;
   #deliberate = false;
   #lastError = "";
+  /** The Worker posted a message that isn't the host's, and the log said so. */
+  #foreign = false;
 
   /**
    * Starts a Worker for the firmware. The Worker gets a copy of the environment as it is now.
@@ -185,9 +188,12 @@ export class Instance {
     const channel = new MessageChannel();
     this.#data = channel.port1;
     this.#bootPort = channel.port2;
-    this.#worker.addEventListener("message", (event: MessageEvent<ControlNotice>) =>
-      this.#onControl(event.data),
-    );
+    this.#worker.addEventListener("message", (event: MessageEvent<unknown>) => {
+      // Device code can post on this channel too; only the Worker host's messages count.
+      // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+      if (isControlNotice(event.data)) this.#onControl(event.data);
+      else this.#dropForeign();
+    });
     this.#worker.addEventListener("error", (event: ErrorEvent) => {
       this.#lastError = event.message;
     });
@@ -480,6 +486,17 @@ export class Instance {
   #externalDrained(): Promise<void> {
     if (this.inFlight.size === 0) return Promise.resolve();
     return new Promise((resolve) => this.#drainWaiters.add(resolve));
+  }
+
+  /** Warns, once for the instance, that its Worker posted a message that isn't the host's. */
+  #dropForeign(): void {
+    if (this.#foreign) return;
+    this.#foreign = true;
+    this.#host.onLog(this, {
+      op: "log",
+      level: "warn",
+      message: "dropped a message that the device posted on its Worker's channel",
+    });
   }
 
   #onControl(notice: ControlNotice): void {

@@ -19,7 +19,10 @@ import {
   buildFirmware,
   declaredDependencies,
   describeBuildError,
+  NO_MACROS,
   packagedImportMeta,
+  privateRackDir,
+  tsconfigFor,
 } from "./firmware.ts";
 import type { RackManifest } from "./manifest.ts";
 import { fileKey, type PackagedTable } from "./packaged.ts";
@@ -74,6 +77,7 @@ export async function compileRack(
   const appDir = realpathSync(dirname(manifestPath));
   // Inside the app, so that the packages the entries import resolve from its node_modules.
   const work = join(appDir, ".rack", "compile");
+  await privateRackDir(appDir);
   await rm(work, { recursive: true, force: true });
   await mkdir(work, { recursive: true });
   try {
@@ -198,11 +202,16 @@ export async function compileRack(
         compile: {
           outfile,
           ...(target === undefined ? {} : { target: target as Bun.Build.CompileTarget }),
-          // The executable reads .env where it starts, as bun does, but not bunfig.toml, whose
-          // preload would run code from that directory in the rack.
+          // The executable reads neither bunfig.toml where it starts, whose preload would run
+          // code from that directory in the rack, nor .env, which could set its control token:
+          // its environment comes from the program that starts it.
+          // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
           autoloadBunfig: false,
+          autoloadDotenv: false,
         },
         plugins: [packagedImportMeta(appDir, (path) => path.startsWith(generated))],
+        tsconfig: await tsconfigFor(work, appDir, appDir),
+        ...NO_MACROS,
       });
     } catch (error) {
       throw new Error(`the executable failed to build: ${describeBuildError(error)}`);

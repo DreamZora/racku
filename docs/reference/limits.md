@@ -77,9 +77,11 @@ See [The HTTP panel](../guides/http.md).
 | Armed watchdogs of a device | 16 | `scope.watchdog()` throws a `RangeError`. |
 | Fallbacks per update, a start in an executable included | 1 | |
 | `historyLimit`, a `start()` option: update records | 256 | The oldest records go. |
-| Firmware bundles under `.rack/firmware/` | those that an instance, a known-good firmware, or a kept record needs | The rack deletes the others. |
+| Firmware bundles under `.rack/firmware/`, with every file that their builds wrote | those that an instance, a known-good firmware, or a kept record needs | The rack deletes the others. A rack that holds its base directory's management endpoint, as under `rack start`, also deletes at its start those that earlier runs and `rack plan` left. |
 | Imports of a firmware bundle that Bun reports missing while it is on disk | 4 attempts, 10 ms apart | The error of the last one. |
 | Builds of firmware whose relative imports Bun reports missing while their files are on disk | 4 attempts, 10 ms apart | The error of the last one. |
+| Macros in a device file's imports | none | The build fails, with Bun's "Macros are disabled". |
+| Memory of a device | none of its own: its Worker shares the rack's process, and Bun 1.4.4 doesn't apply a Worker's `resourceLimits` | A device that exhausts memory can end the rack's process, which its service manager then starts again. |
 
 See [Faults and overload](../guides/faults.md) and [Updates](../guides/updates.md#history).
 
@@ -90,6 +92,7 @@ See [Faults and overload](../guides/faults.md) and [Updates](../guides/updates.m
 | Starts of a rack in an executable | One, and one more for each outside file that fails while the rack starts, which then starts from its packaged firmware | The rack fails to start, as under `rack start`, when a packaged firmware fails. |
 | Builds of outside files | One per device at start, and at each `reload()` or `swap(name)`, with no timeout of its own, as under `rack start` | |
 | The executable's size | About 100 MiB on Linux x64, most of it Bun's runtime | |
+| Packages that an outside file imports and the executable doesn't carry | Only from inside the base directory | The file fails to build, and its device starts from its packaged firmware. |
 
 See [A rack in one executable](../guides/running.md#a-rack-in-one-executable).
 

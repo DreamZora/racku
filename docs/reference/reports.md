@@ -92,7 +92,7 @@ The history keeps at most `historyLimit` records, 256 by default, in memory, and
 
 ## The log
 
-Each entry of the log is a `LogEntry`, `{ time, level, device?, message, data? }`. `device` names the device that wrote the entry with `ctx.log`; the rack's own entries have none. The `logger` option of `start()` receives every entry, and `rack start` and `rack dev` print them as text, or as one line of JSON each with `--log json`.
+Each entry of the log is a `LogEntry`, `{ time, level, device?, message, data? }`. `device` names the device that wrote the entry with `ctx.log`; the rack's own entries have none. The `logger` option of `start()` receives every entry, and `rack start` and `rack dev` print them as text, or as one line of JSON each with `--log json`. As text, control characters, such as a newline or the escape that starts a terminal's command, are escaped as JSON escapes them, so that each entry stays one line, also when its message holds text that a client chose.
 
 The rack's entries that a program or an operator may look for:
 
@@ -114,5 +114,7 @@ The rack's entries that a program or an operator may look for:
 | `hot-plug directory <directory>/ holds <n> device files` | info | At start, for each hot-plug directory: `holds 1 device file` for one, and `doesn't exist` for a directory that doesn't. | |
 | `<path> left out: <reason>` | warn | A hot-plug file can't run; at start, and at a reload when the file or the reason changed. | `code` |
 | `standard input closed` | info | With `--stop-on-stdin-close`, the rack's standard input closed, and the rack shuts down. | |
+| `firmware that nothing needs deleted` | info | At the start of a rack that holds its base directory's management endpoint, it deleted firmware that earlier runs or `rack plan` left. | `files`, how many |
+| `dropped a message that the device posted on its Worker's channel` | warn | Device code posted on its Worker's own channel, where the main thread takes only the Worker host's messages. Once per instance: later ones are dropped without a warning. `device` names the device. | |
 
 The other entries are messages for people, and their wording may change.

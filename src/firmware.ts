@@ -8,7 +8,8 @@
  * @decision .agents/decisions/261120_011627-single-executables.md
  */
 import { existsSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { chmod, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileKey, importMetaExpression } from "./packaged.ts";
 
@@ -22,6 +23,11 @@ export interface Firmware {
   hash: string;
   /** Absolute path of the device file it was built from. */
   source: string;
+  /**
+   * Every file that the build wrote, the bundle first, such as the files that the device
+   * imports with `type: "file"`; absent on firmware packaged inside an executable.
+   */
+  files?: string[];
   /** Set on firmware packaged inside an executable, which no file on disk holds. */
   packaged?: true;
 }
@@ -181,6 +187,42 @@ function carriedPackages(carried: NonNullable<PackagedBuild["carried"]>): Bun.Bu
   };
 }
 
+/**
+ * Lets a package that an executable doesn't carry, which an outside file imports, resolve only to
+ * a file inside the base directory, so that no `node_modules` of a parent directory, such as
+ * `C:\\node_modules`, which any user on Windows can create, gives an outside file its code.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+ */
+function insideBaseDir(baseDir: string): Bun.BunPlugin {
+  return {
+    name: "racku-inside-base-dir",
+    setup(build) {
+      build.onResolve({ filter: /^[^./\\]/ }, ({ path: specifier, importer }) => {
+        // Built-in modules, and absolute paths on Windows, come from no package.
+        if (/^(node|bun):/.test(specifier) || isAbsolute(specifier)) return undefined;
+        let found: string;
+        try {
+          found = Bun.resolveSync(specifier, dirname(importer));
+        } catch {
+          // The build reports a package that doesn't resolve, as it reports any other.
+          return undefined;
+        }
+        if (!isAbsolute(found) || within(found, baseDir)) return undefined;
+        throw new Error(
+          `${specifier} resolves to ${found}, outside the base directory ${baseDir}, and the executable doesn't carry it`,
+        );
+      });
+    },
+  };
+}
+
+/** Whether `path` is `dir` or lies inside it. */
+function within(path: string, dir: string): boolean {
+  const rest = relative(dir, path);
+  return rest === "" || (!rest.startsWith("..") && !isAbsolute(rest));
+}
+
 const DEPENDENCY_FIELDS = [
   "dependencies",
   "devDependencies",
@@ -200,7 +242,15 @@ const DEPENDENCY_FIELDS = [
  *
  * For an executable, `packaged` changes three things: racku comes from the Worker host, every
  * other import is bundled, apart from the packages that the executable carries, and the
- * `import.meta` paths are the ones the executable gives the files.
+ * `import.meta` paths are the ones the executable gives the files. A package that an outside
+ * file imports, which the executable doesn't carry, must resolve inside the base directory.
+ *
+ * Builds run with macros turned off, so that no device code runs in the rack's process. A build
+ * reads the `tsconfig.json` and the `package.json` closest to the device file, but none above the
+ * app's directory. It writes into a directory beside `.rack/firmware/`, at the same depth, so that
+ * the bundle's inline source map names the same sources, and moves each file into
+ * `.rack/firmware/` unless a file of its name is there: its name holds its content's hash, and a
+ * Worker may be reading it.
  *
  * @param source Absolute path of the device file.
  * @param baseDir Rack base directory; firmware must live inside the app directory.
@@ -216,43 +266,203 @@ export async function buildFirmware(
 ): Promise<Firmware> {
   // Bundles keep bare imports for externals and resolve them from their own location.
   // @decision .agents/decisions/261115_232410-p0-scope-and-toolchain-bun-1-4-4.md#firmware-build
-  const outdir = packaged?.outdir ?? join(baseDir, ".rack", "firmware");
+  const appDir = packaged?.appDir ?? baseDir;
+  const direct = packaged?.outdir !== undefined;
+  const firmwareDir = packaged?.outdir ?? join(baseDir, ".rack", "firmware");
+  if (!direct) await privateRackDir(baseDir);
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  const outdir = direct ? firmwareDir : `${firmwareDir}-${process.pid}-${++builds}`;
   const external =
-    packaged === undefined ? ["racku", ...(await declaredDependencies(dirname(source)))] : [];
+    packaged === undefined
+      ? ["racku", ...(await declaredDependencies(dirname(source), appDir))]
+      : [];
   // @decision .agents/decisions/261120_011627-single-executables.md#compiling-a-rack
   const plugins =
     packaged === undefined
       ? [SOURCE_IMPORT_META]
       : [
           HOST_RACKU,
-          ...(packaged.carried === undefined ? [] : [carriedPackages(packaged.carried)]),
+          ...(packaged.carried === undefined
+            ? []
+            : [carriedPackages(packaged.carried), insideBaseDir(baseDir)]),
           ...(packaged.record === undefined ? [] : [recordPackages(packaged.record)]),
           packagedImportMeta(packaged.appDir),
         ];
-  let output: Bun.BuildOutput;
+  const tsconfig = await tsconfigFor(dirname(source), appDir, baseDir);
   try {
-    output = await retryMissedImports(() =>
-      Bun.build({
-        entrypoints: [source],
-        outdir,
-        target: "bun",
-        sourcemap: "inline",
-        naming: "[name]-[hash].[ext]",
-        external,
-        plugins,
-      }),
-    );
-  } catch (error) {
-    throw new Error(`firmware build failed for ${source}: ${describeBuildError(error)}`);
+    let output: Bun.BuildOutput;
+    try {
+      output = await retryMissedImports(() =>
+        Bun.build({
+          entrypoints: [source],
+          outdir,
+          target: "bun",
+          sourcemap: "inline",
+          naming: "[name]-[hash].[ext]",
+          external,
+          plugins,
+          tsconfig,
+          ...NO_MACROS,
+        }),
+      );
+    } catch (error) {
+      throw new Error(`firmware build failed for ${source}: ${describeBuildError(error)}`);
+    }
+    if (!output.success) {
+      throw new Error(`firmware build failed for ${source}: ${describeBuildError(output.logs)}`);
+    }
+    const entry = output.outputs.find((artifact) => artifact.kind === "entry-point");
+    if (entry === undefined) {
+      throw new Error(`firmware build for ${source} produced no entry point`);
+    }
+    const name = basename(entry.path).replace(/\.[^.]+$/, "");
+    const hash = name.slice(name.lastIndexOf("-") + 1);
+    const written = [entry.path, ...output.outputs.filter((o) => o !== entry).map((o) => o.path)];
+    const files = direct ? written : await settle(written, firmwareDir);
+    const path = files[0] as string;
+    return { path, url: Bun.pathToFileURL(path).href, hash, source, files };
+  } finally {
+    if (!direct) await rm(outdir, { recursive: true, force: true });
   }
-  if (!output.success) {
-    throw new Error(`firmware build failed for ${source}: ${describeBuildError(output.logs)}`);
+}
+
+/**
+ * Turns macros off in a build: `macros: false`, which Bun 1.4.4 takes, while its types leave the
+ * option out. A device file whose imports include a macro then fails to build, with Bun's
+ * "Macros are disabled", instead of running code in the process that builds it.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+ */
+export const NO_MACROS: object = { macros: false };
+
+/** Builds that this process started, which name their directories. */
+let builds = 0;
+
+/**
+ * Moves the files of a build into `dir`, each unless a file of its name is there already; the
+ * names hold the hash of their contents, so that file has the same bytes. A rename can't leave a
+ * file half written.
+ *
+ * @returns The paths of the files in `dir`, in the order given.
+ */
+async function settle(written: readonly string[], dir: string): Promise<string[]> {
+  await mkdir(dir, { recursive: true });
+  const files: string[] = [];
+  for (const path of written) {
+    const target = join(dir, basename(path));
+    if (!existsSync(target)) {
+      await rename(path, target).catch((error: unknown) => {
+        // Another build of the same file got there first, as a rack and rack plan can.
+        if (!existsSync(target)) throw error;
+      });
+    }
+    files.push(target);
   }
-  const entry = output.outputs.find((artifact) => artifact.kind === "entry-point");
-  if (entry === undefined) throw new Error(`firmware build for ${source} produced no entry point`);
-  const name = basename(entry.path).replace(/\.[^.]+$/, "");
-  const hash = name.slice(name.lastIndexOf("-") + 1);
-  return { path: entry.path, url: Bun.pathToFileURL(entry.path).href, hash, source };
+  return files;
+}
+
+/**
+ * The `tsconfig.json` that a build reads: the closest one to the device file, from its directory
+ * up to the app's directory, but none above it; for a device file outside the app, such as one
+ * of racku's own, up to the directory of its package. Without one, the build reads an empty one,
+ * `.rack/no-tsconfig.json`, in place of any that Bun would otherwise find in a directory above.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+ */
+export async function tsconfigFor(dir: string, appDir: string, baseDir: string): Promise<string> {
+  const found = closest(dir, appDir, "tsconfig.json");
+  if (found !== undefined) return found;
+  const none = join(baseDir, ".rack", "no-tsconfig.json");
+  if (existsSync(none)) return none;
+  // Builds that start together share one write.
+  let writing = emptyTsconfigs.get(none);
+  if (writing === undefined) {
+    writing = (async () => {
+      await privateRackDir(baseDir);
+      // A new file renamed into place, so that a build at the same time never reads half of it.
+      const draft = `${none}.${process.pid}-${++builds}.tmp`;
+      await writeFile(draft, "{}\n");
+      await rename(draft, none).catch((error: unknown) => {
+        // Another process put it there first.
+        if (!existsSync(none)) throw error;
+      });
+    })().finally(() => emptyTsconfigs.delete(none));
+    emptyTsconfigs.set(none, writing);
+  }
+  await writing;
+  return none;
+}
+
+/** The writes of `.rack/no-tsconfig.json` under way, by path. */
+const emptyTsconfigs = new Map<string, Promise<void>>();
+
+/**
+ * The closest file of `name` from `dir` upward: up to `appDir` when `dir` lies in it, and
+ * otherwise up to the first directory with a `package.json`, the root of a package.
+ */
+function closest(dir: string, appDir: string, name: string): string | undefined {
+  const inside = within(dir, appDir);
+  for (let current = dir; ; current = dirname(current)) {
+    const candidate = join(current, name);
+    if (existsSync(candidate)) return candidate;
+    if (inside ? current === appDir : existsSync(join(current, "package.json"))) return undefined;
+    if (dirname(current) === current) return undefined;
+  }
+}
+
+/** Base directories whose `.rack/` this process made private already. */
+const privateDirs = new Set<string>();
+
+/**
+ * Makes `<baseDir>/.rack/`, and gives it mode 0700, also when it existed, so that its bundles,
+ * plan, and records are only its user's: a bundle holds what the device imports, such as a JSON
+ * file of secrets. On Windows, `.rack/` keeps the access of the folder that holds it.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+ */
+export async function privateRackDir(baseDir: string): Promise<void> {
+  if (privateDirs.has(baseDir)) return;
+  const dir = join(baseDir, ".rack");
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") await chmod(dir, 0o700);
+  privateDirs.add(baseDir);
+}
+
+/**
+ * Deletes from `<baseDir>/.rack/firmware/` the files that `keep` doesn't name and that were
+ * written before `before`, such as the firmware of earlier runs and of `rack plan`, and the build
+ * directories of processes that ended. A rack runs it at its start, once it holds the base
+ * directory's management endpoint, so that no other rack uses them.
+ *
+ * @param keep The files of the firmware that the rack needs.
+ * @param before A millisecond timestamp; files written since are left to the next start.
+ * @param runs Whether the process with an id runs, for the build directories.
+ * @returns How many files it deleted.
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+ */
+export async function sweepFirmware(
+  baseDir: string,
+  keep: ReadonlySet<string>,
+  before: number,
+  runs: (pid: number) => boolean,
+): Promise<number> {
+  const rack = join(baseDir, ".rack");
+  const firmwareDir = join(rack, "firmware");
+  let deleted = 0;
+  for (const name of await readdir(firmwareDir).catch(() => [] as string[])) {
+    const path = join(firmwareDir, name);
+    if (keep.has(path)) continue;
+    const info = await stat(path).catch(() => undefined);
+    if (info === undefined || !info.isFile() || info.mtimeMs >= before) continue;
+    await rm(path, { force: true });
+    deleted++;
+  }
+  for (const name of await readdir(rack).catch(() => [] as string[])) {
+    const pid = /^firmware-(\d+)-\d+$/.exec(name)?.[1];
+    if (pid === undefined || runs(Number(pid))) continue;
+    await rm(join(rack, name), { recursive: true, force: true });
+  }
+  return deleted;
 }
 
 /**
@@ -403,8 +613,14 @@ function reportsMissing(error: unknown, url: string, path: string): boolean {
   return code === "ERR_MODULE_NOT_FOUND" && (specifier === path || specifier === url);
 }
 
-/** Lists the dependencies of the `package.json` closest to `dir`, or none when there is none. */
-export async function declaredDependencies(dir: string): Promise<string[]> {
+/**
+ * Lists the dependencies of the `package.json` closest to `dir`, or none when there is none: with
+ * `appDir`, none above the app's directory, for a `dir` inside it.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+ */
+export async function declaredDependencies(dir: string, appDir?: string): Promise<string[]> {
+  const inside = appDir !== undefined && within(dir, appDir);
   for (let current = dir; ; current = dirname(current)) {
     const file = Bun.file(join(current, "package.json"));
     if (await file.exists()) {
@@ -418,7 +634,7 @@ export async function declaredDependencies(dir: string): Promise<string[]> {
       }
       return [...names];
     }
-    if (dirname(current) === current) return [];
+    if ((inside && current === appDir) || dirname(current) === current) return [];
   }
 }
 

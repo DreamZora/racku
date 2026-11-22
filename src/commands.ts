@@ -19,7 +19,7 @@ import { isDeviceFileOrJson, type WatchOptions, watchAndReload } from "./dev.ts"
 import { RackError } from "./errors.ts";
 import { consoleLogger, jsonLogger, type LogEntry } from "./log.ts";
 import { isRackManifest, type RackManifest } from "./manifest.ts";
-import { planRack, type RackHandle, reloadHotplug, start } from "./rack.ts";
+import { planRack, type RackHandle, reloadHotplug, start, sweepUnneededFirmware } from "./rack.ts";
 
 /** The program that messages name: `rack`, or an executable's own name. */
 let program = "rack";
@@ -366,6 +366,17 @@ export async function runRack(options: RunOptions): Promise<void> {
     await running.stop().catch(() => undefined);
     fail(describeError(error));
   }
+  // The endpoint makes this the one rack of its base directory, which may now delete the
+  // firmware that earlier runs left.
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  await sweepUnneededFirmware(running).catch((error: unknown) => {
+    logger({
+      time: Date.now(),
+      level: "warn",
+      message: "firmware of earlier runs couldn't be deleted",
+      data: { error: describeError(error) },
+    });
+  });
   logger({
     time: Date.now(),
     level: "info",

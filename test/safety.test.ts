@@ -426,4 +426,42 @@ describe("update history", () => {
     expect(counters).toHaveLength(2);
     expect(bundles).toContain("other-rack-0000.js");
   });
+
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+  test("the other files that a firmware's build wrote go with it, unless firmware that stays wrote them too", async () => {
+    // Each version imports a file, which the build writes beside the bundle.
+    const filed = (version: string, file: string) =>
+      counter(version).replace(
+        'import { Base, Count } from "../connectors.ts";',
+        `import { Base, Count } from "../connectors.ts";\nimport data from "./${file}" with { type: "file" };\nexport const DATA = data;`,
+      );
+    const created = await app({
+      "devices/base.ts": BASE,
+      "devices/counter.ts": filed("v1", "one.txt"),
+      "devices/one.txt": "the first file",
+      "devices/two.txt": "the second file",
+    });
+    const firmwareDir = join(created.dir, ".rack", "firmware");
+    const { running } = await startRack(COUNTER_RACK, {
+      baseDir: created.dir,
+      historyLimit: 1,
+      probation: 0,
+    });
+    const files = async (prefix: string) =>
+      (await readdir(firmwareDir)).filter((name) => name.startsWith(prefix));
+    expect(await files("one-")).toHaveLength(1);
+    // v2 imports the same file as v1, and v3 another one.
+    for (const [version, file] of [
+      ["v2", "one.txt"],
+      ["v3", "two.txt"],
+      ["v4", "two.txt"],
+    ] as const) {
+      await created.write("devices/counter.ts", filed(version, file));
+      await running.reload();
+    }
+    // v4 runs and v3 is in the one kept record; both import two.txt, and v1 and v2 one.txt.
+    expect(await files("counter-")).toHaveLength(2);
+    expect(await files("one-")).toEqual([]);
+    expect(await files("two-")).toHaveLength(1);
+  });
 });
