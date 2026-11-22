@@ -32,6 +32,17 @@ describe("the commands connector", () => {
       },
       // A Valibot schema implements no Standard JSON Schema, so the command has none.
       { name: "count" },
+      // toStandardJsonSchema() of @valibot/to-json-schema makes Valibot's schemas give theirs.
+      {
+        name: "shout",
+        input: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+        },
+        output: { $schema: "https://json-schema.org/draft/2020-12/schema", type: "string" },
+      },
       // Zod has no JSON Schema for undefined, and throws, so the input gets none.
       {
         name: "liar",
@@ -46,6 +57,8 @@ describe("the commands connector", () => {
       running.call("commander.commands", "run", { name, input });
     expect(await run("upper", { text: "hi" })).toBe("HI");
     expect(await run("count", [1, 2, 3])).toBe(3);
+    expect(await run("shout", { text: "hi" })).toBe("HI!");
+    expect((await errorOf(run("shout", { text: 1 }))).code).toBe("RACK_INVALID_INPUT");
     const input = await errorOf(run("upper", { text: 1 }));
     expect([input.code, input.message]).toEqual([
       "RACK_INVALID_INPUT",
