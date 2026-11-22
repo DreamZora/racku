@@ -207,6 +207,7 @@ The standard connectors, and the factories that mount the standard devices. See 
 | `Kv` | constant | `kv/v1`, a store of string keys and string values: `get`, `set`, `delete`, `keys`, and the event `changed`. |
 | `Sql` | constant | `sql/v1`, a SQL database: `query`, `run`, and `batch`. |
 | `Http` | constant | `http/v2`, which the HTTP panel calls: `handle` for each request, `opened`, `message`, and `closed` for each WebSocket, `sockets`, and the events `send` and `close`. See [The http/v2 connector](../guides/http.md#the-httpv2-connector). |
+| `Commands` | constant | `commands/v1`, the commands that a device offers: `list`, which describes them, and `run`, which runs one by name. |
 
 ### Standard devices
 
@@ -231,6 +232,14 @@ The standard connectors, and the factories that mount the standard devices. See 
 | `HttpServer` | type | What `fetch` gets beside the request, as Bun's `Server`: `upgrade()`. |
 | `HttpSocket` | type | A WebSocket that a panel holds for the device: its `id`, its `data`, `send()`, and `close()`. |
 | `HttpSocketState` | type | A socket and its data, as `list()` returns them and `restore()` takes them. |
+
+### Commands
+
+| Export | Kind | What it is |
+|---|---|---|
+| `commands(table)` | function | Implements `commands/v1` from a table of commands by name, and validates the input and output of each. |
+| `Command` | type | One command of the table: `title`, `description`, `input` and `output` schemas, and `run`. |
+| `CommandInfo` | type | One command as `list()` describes it: `name`, `title`, `description`, and the JSON Schemas of its `input` and `output`. |
 
 ## rack42u/bench
 

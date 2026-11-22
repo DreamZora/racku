@@ -8,6 +8,7 @@
  */
 import { type SlotSpec, slot } from "../manifest.ts";
 
+export { type Command, type CommandInfo, Commands, commands } from "./commands.ts";
 export { Kv, Sql } from "./connectors.ts";
 export {
   type FetchHandler,
