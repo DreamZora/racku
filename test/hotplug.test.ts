@@ -216,8 +216,15 @@ describe("hot-plug directories in the manifest", () => {
     ]);
   });
 
-  test("a root that names a hot-plug model fails the manifest, and a missing directory holds no devices", async () => {
+  test("a root or a use entry that names a hot-plug model fails the manifest, and a missing directory holds no devices", async () => {
     const app = await hotplugApp();
+    const used = await errorOf(
+      startRack({ ...SPEC, use: { "test.tool/v1": "upper" } }, { baseDir: app.dir }),
+    );
+    expect([used.code, used.message]).toEqual([
+      "RACK_MANIFEST",
+      "use test.tool/v1: upper is a hot-plug model, which the manifest can't name",
+    ]);
     const root = await errorOf(
       startRack({ ...SPEC, roots: ["host", "upper"] }, { baseDir: app.dir }),
     );

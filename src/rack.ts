@@ -1309,6 +1309,20 @@ class Rack implements InstanceHost {
       };
     }
     const hot = await this.#scanHotplug(builds, fixed);
+    // The manifest names no hot-plug model, so that hot-plug devices leave the fixed plan as it
+    // is; roots, patched() addresses, and routes fail in the fixed plan already.
+    // @decision .agents/decisions/261121_065823-hot-plug-directories.md#hot-plug-directories
+    for (const [key, value] of Object.entries(scan.use)) {
+      const keyed = isConnectorId(key) ? undefined : key.slice(0, key.indexOf("."));
+      for (const named of [keyed, value]) {
+        if (named !== undefined && hot.has(named)) {
+          throw new RackError(
+            "RACK_MANIFEST",
+            `use ${key}: ${named} is a hot-plug model, which the manifest can't name`,
+          );
+        }
+      }
+    }
     const types = new Map([...fixed].map(([name, model]) => [name, model.type]));
     // Only use entries by connector id apply to hot-plug devices, whose models the manifest
     // can't name.
