@@ -17,11 +17,12 @@ An HTTP service that turns long URLs into short codes, and redirects from the co
 
 - The HTTP API, the making of codes, and the storage are separate devices, so that each can be replaced on its own.
 - The device that makes codes can be changed while the app runs, such as to make codes of 8 characters instead of 6, without a restart: links made before keep working, and new links get the new codes.
+- The app also builds into one executable, `dist/links`, which runs the app on its own. A new version of the device that makes codes, put beside the executable, takes the place of the one built into it, while the executable runs and without a restart.
 
 ## Checks
 
 - `bun test` tests each device on its own, with what it depends on stubbed.
-- `bun check.ts` starts the app on a free port, goes through every behavior above, the restart included, and stops the app. It exits with code 0, or prints what failed and exits with code 1.
+- `bun check.ts` starts the app on a free port, goes through every behavior above, the restart included, and stops the app. Then it builds the executable, runs it on a free port, and goes through the behaviors again. With the executable running, it puts a code maker for 8 characters beside it, and shows that new links get codes of 8 characters, while the old links still redirect. It exits with code 0, or prints what failed and exits with code 1.
 - The change while the app runs: with the app running, change the device that makes codes, and show that new links get the new codes while the old links still redirect. Say in `TRIAL.md` how you checked it.
 
 ## Done

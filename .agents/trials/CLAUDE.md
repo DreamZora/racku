@@ -4,7 +4,7 @@ This folder holds trial apps built on racku by agents that know racku only from 
 
 ## Your app
 
-- You build one app, in its subfolder, `links/`, `chat/`, `watcher/`, or `files/`, as its `SPEC.md` asks.
+- You build one app, in its subfolder, `links/`, `chat/`, `watcher/`, `files/`, or `bot/`, as its `SPEC.md` asks.
 - Work only in that subfolder. Don't look at the other apps, and don't change anything outside your subfolder.
 - Another trial runs at the same time, with an app of its own: never count on a fixed port being free, and use free ports in tests and checks.
 

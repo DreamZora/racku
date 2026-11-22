@@ -11,4 +11,6 @@ bun.lock
 *.log
 .env
 scratch/
+# Executables that the apps build, such as links', about 100 MB each with Bun's runtime.
+dist/
 .claude/settings.local.json

@@ -83,6 +83,12 @@ Its spec, `bot/SPEC.md`, asks for:
 - **rack42u itself:** nothing changes.
 - **For the user:** starting the round from a session in `.agents/trials/`, with "Run the workflow rack42u-trials with the args \"2M\"".
 
+## Implementation
+
+- `.agents/trials/bot/SPEC.md`, and the executable in `.agents/trials/links/SPEC.md`.
+- `ROUNDS` in `.agents/trials/.claude/workflows/racku-trials.js`; `CLAUDE.md`, `README.md`, and `.gitignore`, which leaves out `dist/`, in `.agents/trials/`.
+- The cleared apps: `04b492d`.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-22, with [the first formal release](261122_005312-first-formal-release.md) and [the fixes from the security review](261122_011655-security-review-fixes.md). The user's words: "All are approved. If the name rack is not already taken, rename rack42u to rack before publishing to npm."

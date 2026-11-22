@@ -1,6 +1,6 @@
 export const meta = {
   name: 'racku-trials',
-  description: 'Build the four trial apps on racku, two at a time, and merge the problems they meet into issues.json',
+  description: 'Build the five trial apps on racku, two at a time, and merge the problems they meet into issues.json',
   whenToUse: 'When the user asks, in .agents/trials/ of the racku repository, to run a round of trials. Pass the token budget the user names as args, such as "2M", or { budget, apps } to run only some apps; the workflow does not start without a budget.',
   phases: [
     { title: 'Trials', detail: 'one agent per app, two at a time', model: 'sonnet' },
@@ -8,12 +8,14 @@ export const meta = {
   ],
 }
 
-// The trials of racku, as .agents/decisions/261119_074252-trial-apps.md decides: four apps, two
-// at a time, on Sonnet 5.5, within the token budget that the user gives the run.
+// The trials of racku, as .agents/decisions/261119_074252-trial-apps.md decides: five apps, as
+// .agents/decisions/261122_005441-trials-of-the-newer-features.md adds bot, two at a time, on
+// Sonnet 5.5, within the token budget that the user gives the run.
 
 const ROUNDS = [
   ['links', 'chat'],
   ['watcher', 'files'],
+  ['bot'],
 ]
 // The output tokens that one trial, and the merge, may take; no round starts that the rest of the
 // budget can't cover together with the merge.
