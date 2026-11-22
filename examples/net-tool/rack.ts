@@ -1,15 +1,25 @@
 /**
  * The net tool's rack: the sockets at the bottom, the window's protocol above them, and the HTTP
  * panel on top, on 127.0.0.1 and a port the system picks. The tool's Tauri shell starts it with
- * `--stop-on-stdin-close --log json` and `NET_TOOL_TOKEN` set; see README.md.
+ * `--stop-on-stdin-close --log json` and `NET_TOOL_TOKEN` set, and `NET_TOOL_DEV` in a debug
+ * build; see README.md.
  *
  * @decision .agents/decisions/261118_173845-net-tool-example.md#the-rack
  */
 import { rack, slot } from "racku";
 import { httpPanel } from "racku/std";
 
-/** The development server's origin, and the built app's on macOS and Linux, and on Windows. */
-const ORIGINS = ["http://localhost:5173", "tauri://localhost", "http://tauri.localhost"];
+/**
+ * The built app's origins, on macOS and Linux, and on Windows; and the development server's, only
+ * when the shell of a debug build sets `NET_TOOL_DEV`.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#net-tool-and-ci
+ */
+const ORIGINS = [
+  "tauri://localhost",
+  "http://tauri.localhost",
+  ...(process.env.NET_TOOL_DEV === "1" ? ["http://localhost:5173"] : []),
+];
 
 export default rack("net-tool", {
   slots: {

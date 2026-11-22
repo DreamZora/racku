@@ -44,7 +44,7 @@ bun run tauri dev
 
 The first run compiles the shell, which takes a minute or more. The shell then:
 
-1. draws a token of 32 random bytes, and starts the rack with `bun` from your `PATH`: `src/cli.ts start examples/net-tool/rack.ts --stop-on-stdin-close --log json`, with `NET_TOOL_TOKEN` set to the token and its standard input a pipe;
+1. draws a token of 32 random bytes, and starts the rack with `bun` from your `PATH`: `src/cli.ts start examples/net-tool/rack.ts --stop-on-stdin-close --log json`, with `NET_TOOL_TOKEN` set to the token, `NET_TOOL_DEV` set to `1`, so that the rack accepts the development server's origin, and its standard input a pipe;
 2. prints the rack's log, one JSON object per line, to its console, and takes the panel's URL from the `listening` entry;
 3. gives the URL and the token to the window, which opens its WebSocket to `/ws`.
 
@@ -54,10 +54,12 @@ The window's **Devices** button opens a dialog with each device: its state, what
 
 ## How the window talks to the rack
 
-- The window offers the subprotocols `net-tool` and `token.<token>`, since a browser's `WebSocket` can't send headers. `ui` accepts the upgrade only when the `Origin` is one of its `origins` and the token matches, compared in constant time; any other upgrade gets 403. So neither a web page nor another program on the machine can drive the tool.
+- The window offers the subprotocols `net-tool` and `token.<token>`, since a browser's `WebSocket` can't send headers. `ui` accepts the upgrade only when the `Origin` is one of its `origins` and the token matches, compared in constant time; any other upgrade gets 403.
+  - The origins are the built app's, `tauri://localhost` and `http://tauri.localhost`. The development server's, `http://localhost:5173`, counts only when `NET_TOOL_DEV` is `1`, as the shell of a debug build sets it, and never in an installed app's rack, whose shell removes the variable.
+  - So a web page can't drive the tool, nor can a program of another user. A program that runs as your user can: it can read the token from the rack's environment.
 - Its commands are JSON text, `{ id, op, input }`, where `op` is a `net/v1` RPC, `open`, `send`, `close`, or `list`, and `input` is that RPC's input, with bytes as base64.
 - `ui` answers each command with `{ id, ok: true, value }` or `{ id, ok: false, error: { code, message } }`, and passes `net/v1`'s events, `{ event, ... }`, to every window: `opened`, `data`, and `closed`. An answer has `ok`, and an event has `event`.
-- The window reconnects when its WebSocket closes, after 0.5 s, doubling up to 5 s.
+- The window reconnects when its WebSocket closes, after 0.5 s, doubling up to 5 s, while the shell says that the rack runs. Once a rack that started has stopped, the shell says so, and the window shows it and stops reconnecting, so that it never sends the token to whatever listens on that port by then.
 - `list` adds `delivered` to each socket: the `data` events that `ui` passed on. The window shows the difference from the socket's `events` as events missed on the way.
 
 ## What it shows of racku
@@ -128,7 +130,7 @@ On macOS, the sidecar is `net-tool.app/Contents/MacOS/net-tool-rack`, and on Win
 | One UDP datagram | 65 507 bytes |
 | Bytes waiting to go out on one TCP socket | 1 MiB; a send beyond it fails with `RACK_OVERLOADED` |
 | One command from the window | 1 MiB, the panel's `webSocket.maxMessageSize` |
-| Messages the window keeps per socket | the last 10 000, of which it shows the last 500 |
+| Messages the window keeps per socket | the last 10 000, and at most 8 MiB of them, of which it shows the last 500 |
 | The wait for the rack to stop when the app exits | 15 s, then a kill |
 | A `ctl` of the Devices dialog | 60 s, then a kill, and the dialog shows the error |
 | The rack's log of an installed app | 10 MiB per run, for the run and the one before it |
@@ -150,4 +152,4 @@ The window itself and the Devices dialog aren't in CI. Check them by hand after 
 5. Close the window, and check in the console that the rack stopped: `rack net-tool stopped`.
 6. On Ubuntu, install the `.deb`, start the tool from the menu, connect, send, and receive. In the Devices dialog, switch **Replace devices**, restart the app, and replace `devices/ui.ts` both ways. Check that a broken replacement shows its error in the dialog, and exit.
 
-In development, the window also runs in a browser at `http://localhost:5173/?url=<panel URL>&token=<token>`, for a rack started by hand with `NET_TOOL_TOKEN` set.
+In development, the window also runs in a browser at `http://localhost:5173/?url=<panel URL>&token=<token>`, for a rack started by hand with `NET_TOOL_TOKEN` set, and `NET_TOOL_DEV=1`.

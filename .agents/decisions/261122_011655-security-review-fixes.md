@@ -234,6 +234,12 @@ Each of these decisions stays, and this decision comes first where they differ:
   - `src/log.ts`: `formatLogEntry()` escapes control characters.
   - Tests: in `test/firmware.test.ts`, `test/rack.test.ts`, `test/assembly.test.ts`, `test/safety.test.ts`, `test/hotplug.test.ts`, `test/cli.test.ts`, and `test/executable.test.ts`.
   - Documentation: devices, updates, running, the rack command, reports, limits, and net-tool's README.
+- **net-tool and CI:**
+  - `examples/net-tool/app/src-tauri/src/main.rs`: `ended()` makes `endpoint()` answer that the rack stopped, once a rack that started has ended; the shell sets `NET_TOOL_DEV` for a debug build's rack, and removes it for the sidecar, whose `examples/net-tool/rack.ts` then leaves out the development server's origin.
+  - `examples/net-tool/app/src/connection.ts`: the `Connection` asks the shell, through `endpoint()` in `shell.ts`, before it tries again, and stops once the shell says that the rack stopped. `kept.ts`: `keep()`, with `KEPT` and `KEPT_BYTES`.
+  - Tests: in `test/net-tool.test.ts`, and the smoke test, `examples/net-tool/app/scripts/smoke.ts`, stops a running app's rack with `ctl stop`.
+  - `.github/workflows/check.yml` and `net-tool.yml`: every checkout has `persist-credentials: false`.
+  - Documentation: net-tool's README.
 
 ## Confirmation
 

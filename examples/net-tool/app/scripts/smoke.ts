@@ -2,7 +2,9 @@
  * The installer workflow's smoke test, on the system that runs it. It installs the installer
  * that `bun run bundle` wrote, starts the installed app, replaces its `ui` device by hand and
  * then as the file changes, checks that a second copy of the app keeps its window with the
- * failure, and checks each time that the rack stops in order when the app is killed.
+ * failure, and checks each time that the rack stops in order when the app is killed. Last, it
+ * stops the rack of a running app with `ctl stop`, and checks that the shell says so and keeps
+ * the window.
  *
  * Run it in `examples/net-tool/app` as `bun scripts/smoke.ts`, on Linux with a display, such as
  * under `xvfb-run -a`. With `--app <shell>`, it starts that executable of a release build
@@ -348,6 +350,25 @@ async function smoke(): Promise<void> {
   step = "killing the second app";
   await kill(second, sidecar);
   await saveLogs("second");
+
+  // A rack that ends while its app runs: the shell says so, and the window stops reconnecting.
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#net-tool-and-ci
+  step = "stopping the rack while the app runs";
+  const third = await launch(shell, sidecar);
+  const stopped = ctl(sidecar, "stop");
+  if (!stopped.ok) fail(`ctl stop failed: ${stopped.stderr.trim()}`);
+  await until("the shell's note that the rack stopped, in rack.log", 30, () => {
+    const path = join(log, "rack.log");
+    const text = existsSync(path) ? readFileSync(path, "utf8") : "";
+    return text.split("\n").find((line) => line.includes("The rack stopped"));
+  });
+  await until("the sidecar's process ending", 20, () => !sidecarRuns());
+  await Bun.sleep(2_000);
+  if (third.process.exitCode !== null)
+    fail("the app exited when its rack stopped, without its window");
+  third.process.kill(9);
+  await third.process.exited;
+  await saveLogs("third");
 }
 
 try {

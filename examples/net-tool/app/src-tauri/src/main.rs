@@ -8,7 +8,11 @@
 //! - The rack runs with `--stop-on-stdin-close --log json`, and its standard input a pipe that
 //!   the shell holds: closing the pipe stops it in order, and so does the system when the shell
 //!   ends for any reason, a crash included.
-//! - The shell takes the URL from the panel's `listening` entry of the log.
+//! - The shell takes the URL from the panel's `listening` entry of the log. Once a rack that
+//!   started has ended, `endpoint()` answers with that, so that the window stops reconnecting
+//!   instead of sending the token to whatever listens on the port then.
+//! - Only a debug build's rack accepts the development server's origin: the shell sets
+//!   `NET_TOOL_DEV` for it, and removes the variable for the sidecar.
 //! - The window's Devices dialog reads the devices, reloads them, and changes the setting, with
 //!   three commands that run the rack's `ctl`.
 //!
@@ -123,14 +127,16 @@ impl Place {
                 if self.in_use == ReplaceDevices::Automatic {
                     command.arg("--watch");
                 }
-                // The sidecar reads the .env of the directory where it starts: the app's own.
-                command.current_dir(&self.base_dir);
+                // The installed app's rack accepts only the app's own origins.
+                command.current_dir(&self.base_dir).env_remove("NET_TOOL_DEV");
                 no_window(&mut command);
                 command
             }
             Runner::Source(cli) => {
                 let mut command = Command::new("bun");
                 command.arg(cli).arg("start").arg(self.base_dir.join("rack.ts"));
+                // The window of a debug build comes from the development server.
+                command.env("NET_TOOL_DEV", "1");
                 command
             }
         };
@@ -578,10 +584,38 @@ fn read_log(
         }
     }
     let last = errors.and_then(|reader| reader.join().ok().flatten());
-    if matches!(*rack.endpoint.lock().expect("the endpoint's lock"), Ok(None)) {
+    let (started, starting) = {
+        let known = rack.endpoint.lock().expect("the endpoint's lock");
+        (matches!(*known, Ok(Some(_))), matches!(*known, Ok(None)))
+    };
+    if started {
+        ended(&app);
+    } else if starting {
         let reason = last.unwrap_or_else(|| "it stopped before its panel listened".into());
         failed(&app, reason);
     }
+}
+
+/// Tells the window that the rack, which had started, has ended: `endpoint()` answers with that
+/// from now on, and the window stops reconnecting, since another program may listen on the
+/// rack's port by now.
+fn ended(app: &AppHandle) {
+    let rack = app.state::<Rack>();
+    // The rack's output has ended, so the process has exited or is about to.
+    let status = rack
+        .child
+        .lock()
+        .expect("the child's lock")
+        .as_mut()
+        .and_then(|child| child.wait().ok());
+    let how = status.map(|status| format!(" ({status})")).unwrap_or_default();
+    let message = match rack.log().whereabouts() {
+        Some(log) => format!("The rack stopped{how}; restart the app to start it again. {log}."),
+        None => format!("The rack stopped{how}; restart the app to start it again."),
+    };
+    rack.log().note(&message);
+    *rack.endpoint.lock().expect("the endpoint's lock") = Err(message);
+    rack.ready.notify_all();
 }
 
 /// Shows the window why the rack couldn't start. A release build keeps the window open with the

@@ -22,6 +22,8 @@ import {
   hexToBytes,
   textToBytes,
 } from "../examples/net-tool/app/src/codec.ts";
+import { Connection, type ConnectionState } from "../examples/net-tool/app/src/connection.ts";
+import { KEPT, KEPT_BYTES, keep } from "../examples/net-tool/app/src/kept.ts";
 import { Net } from "../examples/net-tool/connectors.ts";
 import {
   Cli,
@@ -429,7 +431,12 @@ describe("the net tool's rack", () => {
   test("a window's WebSocket opens a TCP connection to a test server and gets its bytes back", async () => {
     const app = await netTool();
     const server = echoServer();
-    const cli = new Cli(["start", "rack.ts", "--log", "json"], app.dir, { NET_TOOL_TOKEN: TOKEN });
+    // The shell of a debug build sets NET_TOOL_DEV, so that the development server's window
+    // connects.
+    const cli = new Cli(["start", "rack.ts", "--log", "json"], app.dir, {
+      NET_TOOL_TOKEN: TOKEN,
+      NET_TOOL_DEV: "1",
+    });
     processes.push(cli);
     const [, panel] = await cli.waitFor(
       /"device":"http-panel","message":"listening","data":\{"url":"([^"]+)"\}/,
@@ -608,6 +615,9 @@ describe("the net tool's rack as the sidecar of a built app", () => {
   test("a window with a built app's origin opens a TCP connection, and the end of input stops the rack", async () => {
     const server = echoServer();
     const { cli, base, panel } = await start(false);
+    // The development server's origin counts only in a debug build's rack.
+    // @decision .agents/decisions/261122_011655-security-review-fixes.md#net-tool-and-ci
+    await expect(connect(panel, ORIGIN)).rejects.toBeDefined();
     const [first = "", other = ""] = BUILT_ORIGINS;
     const { answer, messages, ws } = await connect(panel, first);
     const second = await connect(panel, other);
@@ -680,6 +690,61 @@ describe("the net tool's rack as the sidecar of a built app", () => {
     expect(await answer("list")).toMatchObject({ ok: true, value: [] });
     ws.close();
   }, 60_000);
+});
+
+// @decision .agents/decisions/261122_011655-security-review-fixes.md#net-tool-and-ci
+describe("the window's connection", () => {
+  test("it reconnects while the shell says that the rack runs, and stops once the rack has stopped", async () => {
+    let accepted = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request, served) {
+        accepted++;
+        // Each WebSocket closes at once, as when the rack's panel goes away.
+        return served.upgrade(request) ? undefined : new Response("no", { status: 400 });
+      },
+      websocket: { open: (ws) => ws.close(1001, "going away"), message() {} },
+    });
+    servers.push(server);
+    const target = { url: server.url.href, token: TOKEN };
+    let running = true;
+    const states: [ConnectionState, string][] = [];
+    const connection = new Connection(
+      target,
+      { state: (state, detail) => states.push([state, detail]), event() {} },
+      async () => {
+        if (running) return target;
+        throw new Error("The rack stopped (exit status: 0).");
+      },
+    );
+    try {
+      await waitFor(() => accepted >= 2);
+      running = false;
+      await waitFor(() => states.some(([state]) => state === "stopped"));
+      const before = accepted;
+      await Bun.sleep(1_200);
+      expect(accepted).toBe(before);
+      expect(states.at(-1)).toEqual(["stopped", "The rack stopped (exit status: 0)."]);
+    } finally {
+      connection.close();
+    }
+  }, 15_000);
+
+  test("it keeps at most 8 MiB and 10 000 messages of a socket, the newest", () => {
+    const message = (size: number) => ({ bytes: new Uint8Array(size) });
+    const list: { bytes: Uint8Array }[] = [];
+    let held = 0;
+    for (let i = 0; i < 9; i++) held = keep(list, message(1024 * 1024), held);
+    expect([list.length, held]).toEqual([8, KEPT_BYTES]);
+    const last = message(1);
+    held = keep(list, last, held);
+    expect([list.length, held, list.at(-1)]).toEqual([8, 7 * 1024 * 1024 + 1, last]);
+    const small: { bytes: Uint8Array }[] = [];
+    let few = 0;
+    for (let i = 0; i < KEPT + 5; i++) few = keep(small, message(1), few);
+    expect([small.length, few]).toEqual([KEPT, KEPT]);
+  });
 });
 
 describe("the window's codec", () => {

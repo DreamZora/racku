@@ -1,10 +1,11 @@
 /**
  * The window's connection to the rack: one WebSocket to the `ui` device, through the HTTP panel.
- * It reconnects with a backoff from 0.5 s to 5 s, and matches each answer to its command.
+ * It reconnects with a backoff from 0.5 s to 5 s while the shell says that the rack runs, and
+ * matches each answer to its command. It imports nothing of Tauri's, so that the suite tests it.
  *
  * @decision .agents/decisions/261118_173845-net-tool-example.md#the-windows-protocol
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#net-tool-and-ci
  */
-import { invoke } from "@tauri-apps/api/core";
 
 /** How long a command waits for its answer, a little longer than the rack's call timeout. */
 const ANSWER_TIMEOUT = 35_000;
@@ -43,7 +44,8 @@ type Answer =
   | { id: number; ok: true; value: unknown }
   | { id: number | null; ok: false; error: { code: string; message: string } };
 
-export type ConnectionState = "connecting" | "open" | "closed";
+/** `stopped`: the rack ended, and the connection doesn't try again. */
+export type ConnectionState = "connecting" | "open" | "closed" | "stopped";
 
 /** A command that failed, with the error code the rack gave. */
 export class CommandError extends Error {
@@ -56,19 +58,6 @@ export class CommandError extends Error {
   }
 }
 
-/**
- * Where the rack listens: from the Tauri shell, or, in a browser during development, from the
- * page's `?url=` and `&token=`.
- */
-export async function endpoint(): Promise<Endpoint> {
-  if ("__TAURI_INTERNALS__" in window) return invoke<Endpoint>("endpoint");
-  const params = new URLSearchParams(location.search);
-  const url = params.get("url");
-  const token = params.get("token");
-  if (import.meta.env.DEV && url !== null && token !== null) return { url, token };
-  throw new Error("no rack to connect to; start the tool with `bun run tauri dev`");
-}
-
 export class Connection {
   #ws: WebSocket | undefined;
   #commands = 0;
@@ -79,14 +68,35 @@ export class Connection {
   #delay = 500;
   #stopped = false;
 
+  /**
+   * @param target Where the rack listens, and its token.
+   * @param on What the window does with the connection's states and the rack's events.
+   * @param ask Asks the shell where the rack listens now; it rejects once the rack has stopped,
+   *   with the shell's message. The connection asks before it tries again, so that it never sends
+   *   the token to whatever listens on the port of a rack that ended.
+   */
   constructor(
-    readonly target: Endpoint,
+    public target: Endpoint,
     readonly on: {
       state(state: ConnectionState, detail: string): void;
       event(event: NetEvent): void;
     },
+    readonly ask: () => Promise<Endpoint>,
   ) {
     this.#connect();
+  }
+
+  /** Asks the shell whether the rack runs, then connects again, or stops for good. */
+  async #again(): Promise<void> {
+    if (this.#stopped) return;
+    try {
+      this.target = await this.ask();
+    } catch (error) {
+      this.#stopped = true;
+      this.on.state("stopped", error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (!this.#stopped) this.#connect();
   }
 
   #connect(): void {
@@ -105,7 +115,7 @@ export class Connection {
       if (this.#stopped) return;
       const seconds = this.#delay / 1000;
       this.on.state("closed", `closed with ${closed.code}; connecting again in ${seconds} s`);
-      setTimeout(() => this.#connect(), this.#delay);
+      setTimeout(() => void this.#again(), this.#delay);
       this.#delay = Math.min(this.#delay * 2, 5_000);
     });
   }

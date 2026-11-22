@@ -19,16 +19,15 @@ import {
   type Address,
   type ConnectionState,
   Connection,
-  endpoint,
   type NetEvent,
   type SocketInfo,
 } from "./connection.ts";
+import { keep } from "./kept.ts";
+import { endpoint } from "./shell.ts";
 import Devices from "./Devices.vue";
 import { icons } from "./icons.ts";
 
-/** The most messages the window keeps per socket. */
-const KEPT = 10_000;
-/** The most messages it shows at once, the newest. */
+/** The most messages it shows at once, the newest; it keeps more, as kept.ts says. */
 const SHOWN = 500;
 /** How often it reads the sockets' counters, in ms. */
 const REFRESH = 2_000;
@@ -46,6 +45,8 @@ interface SocketView extends SocketInfo {
   open: boolean;
   error?: string;
   messages: Message[];
+  /** The bytes of `messages`, at most `KEPT_BYTES` of kept.ts. */
+  kept: number;
 }
 
 type Kind = "tcp-client" | "tcp-server" | "udp";
@@ -81,7 +82,13 @@ const current = computed(() => (selected.value === undefined ? undefined : socke
 const shown = computed(() => current.value?.messages.slice(-SHOWN) ?? []);
 const hint = computed(() => kinds.find((kind) => kind.value === form.kind)?.hint ?? "");
 const stateLabel = computed(() =>
-  state.value === "open" ? "Connected" : state.value === "connecting" ? "Connecting…" : "Disconnected",
+  state.value === "open"
+    ? "Connected"
+    : state.value === "connecting"
+      ? "Connecting…"
+      : state.value === "stopped"
+        ? "Stopped"
+        : "Disconnected",
 );
 const hexProblem = computed(() => {
   if (outgoing.mode !== "hex") return "";
@@ -96,8 +103,7 @@ const hexProblem = computed(() => {
 function remember(id: number, message: Message): void {
   const socket = sockets.get(id);
   if (socket === undefined) return;
-  socket.messages.push(markRaw(message));
-  if (socket.messages.length > KEPT) socket.messages.splice(0, socket.messages.length - KEPT);
+  socket.kept = keep(socket.messages, markRaw(message), socket.kept);
 }
 
 function track(info: SocketInfo): SocketView {
@@ -106,7 +112,7 @@ function track(info: SocketInfo): SocketView {
     Object.assign(known, info, { open: true });
     return known;
   }
-  const created: SocketView = { ...info, open: true, messages: [] };
+  const created: SocketView = { ...info, open: true, messages: [], kept: 0 };
   sockets.set(info.id, created);
   return sockets.get(info.id) as SocketView;
 }
@@ -299,14 +305,25 @@ watch(
 
 onMounted(async () => {
   try {
-    connection = new Connection(await endpoint(), {
-      state(next, text) {
-        state.value = next;
-        detail.value = next === "open" ? text.replace(/^\w+:\/\//, "").replace(/\/$/, "") : text;
-        if (next === "open") void refresh();
+    connection = new Connection(
+      await endpoint(),
+      {
+        state(next, text) {
+          state.value = next;
+          detail.value =
+            next === "open"
+              ? text.replace(/^\w+:\/\//, "").replace(/\/$/, "")
+              : next === "stopped"
+                ? ""
+                : text;
+          // A rack that stopped doesn't come back: the shell's message says so, with its log.
+          if (next === "stopped") problem.value = text;
+          if (next === "open") void refresh();
+        },
+        event: onEvent,
       },
-      event: onEvent,
-    });
+      endpoint,
+    );
     timer = setInterval(() => void refresh(), REFRESH);
   } catch (error) {
     // Such as a rack that couldn't start, whose reason and log the shell gives.
@@ -649,6 +666,7 @@ body {
   background: var(--nt-warn);
 }
 .rack-state.closed .light,
+.rack-state.stopped .light,
 .light.failed {
   background: var(--nt-bad);
 }
