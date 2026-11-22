@@ -8,7 +8,7 @@ Say what you found, how to reproduce it, and which version or commit it affects.
 
 ## Versions that get fixes
 
-racku has no formal release yet: until 1.0.0, a fix goes into the next version, and earlier versions get none.
+Fixes go into the newest minor version of racku. A fix for a vulnerability comes as a patch of it, and its release notes say so. Earlier minor versions get none.
 
 ## What racku protects against
 

@@ -50,3 +50,37 @@ export async function typecheck(files: ReadonlyMap<string, string>): Promise<str
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+/**
+ * Type-checks the `.ts` files of an installed app, with racku and valibot from its own
+ * `node_modules`, so racku's sources as installed too, under this repository's settings and Bun's
+ * types. It writes `tsconfig.typecheck.json` into the app for the run, a name that firmware builds
+ * don't read.
+ *
+ * @param dir The app's directory.
+ * @returns What `tsc` printed; empty when the app type-checks.
+ * @throws When this repository's `tsc` can't be found.
+ */
+export async function typecheckInstalled(dir: string): Promise<string> {
+  const tsc = Bun.which("tsc", { PATH: join(ROOT, "node_modules", ".bin") });
+  if (tsc === null) throw new Error("no tsc under node_modules/.bin; run bun install");
+  const config = {
+    extends: join(ROOT, "tsconfig.json"),
+    compilerOptions: { typeRoots: [join(ROOT, "node_modules", "@types")] },
+    include: ["**/*.ts"],
+    exclude: ["node_modules", "**/.rack"],
+  };
+  const file = join(dir, "tsconfig.typecheck.json");
+  await Bun.write(file, JSON.stringify(config));
+  try {
+    const run = Bun.spawn([tsc, "-p", file], { stdout: "pipe", stderr: "pipe" });
+    const [, stdout, stderr] = await Promise.all([
+      run.exited,
+      new Response(run.stdout).text(),
+      new Response(run.stderr).text(),
+    ]);
+    return (stdout + stderr).trim();
+  } finally {
+    await rm(file, { force: true });
+  }
+}

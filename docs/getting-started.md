@@ -2,7 +2,7 @@
 
 This guide builds a small app of your own, outside the racku repository: a notes service that keeps its notes in SQLite, behind the HTTP panel. It takes the steps every app takes: add racku, define a connector, write devices, mount them in a rack, run it, test a device on the bench, and change a device while the rack runs.
 
-You need [Bun](https://bun.sh) 1.4.4 or later, git, and access to the racku repository on GitHub.
+You need [Bun](https://bun.sh) 1.4.4 or later.
 
 ## Create the app
 
@@ -23,16 +23,15 @@ Make a directory for the app, and write this `package.json` in it, whose scripts
 
 ## Add racku
 
-racku isn't published to a registry; an app depends on it through git, at a tag of its repository. In the app's directory, add it, and valibot for the schemas:
+In the app's directory, add racku from npm, and valibot for the schemas:
 
 ```sh
-bun add git+ssh://git@github.com/DreamZora/racku.git#v0.7.0 valibot
+bun add racku valibot
 ```
 
 - Run `bun add` in the app's directory, next to its `package.json`. In a directory without one, Bun adds the packages to the nearest `package.json` above it, another project's, without a warning.
-- Bun clones the repository with git, over HTTPS first and then over SSH. The repository is public, so neither needs credentials.
-- Pin a tag or a commit: until racku's first formal release, any version may break the API. Bun writes the ref into `package.json` as you typed it, and the commit it installed into `bun.lock`, so a branch, such as `#main`, or `HEAD` names a commit only through `bun.lock`: a fresh install, without it, takes the branch's latest commit. Bun reports the commit it installed, as `installed racku@git+…#<commit>`; to pin that commit, add racku again with it in place of the branch.
-- To use a local clone of racku instead, give its path as a URL, such as `git+file:///home/you/racku#v0.7.0`.
+- racku follows semantic versioning: a minor or a patch version keeps the public API, what the documents of the [reference](README.md#reference) give, and only a major version breaks it.
+- A commit that isn't released yet comes from racku's repository instead, through git, such as `bun add git+https://github.com/DreamZora/racku.git#<commit>`. Bun writes the ref into `package.json` as you typed it, and the commit it installed into `bun.lock`, so a branch, such as `#main`, or `HEAD` names a commit only through `bun.lock`: a fresh install, without it, takes the branch's latest commit. Bun reports the commit it installed, as `installed racku@git+…#<commit>`; to pin that commit, add racku again with it in place of the branch. A local clone works the same way, through its path as a URL, such as `git+file:///home/you/racku#<commit>`.
 
 ## Define a connector
 

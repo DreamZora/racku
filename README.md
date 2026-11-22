@@ -119,7 +119,7 @@ What works, on Linux, macOS, and Windows:
 - a rack in one executable, from `rack compile`, whose devices files beside it replace, at a reload or, with `--watch`, as they change;
 - hot-plug directories, whose devices come and go with their files and are left out when they can't run, every needs that reach them, and commands that hosts discover.
 
-There is no formal release yet: any version until the first one may break the API. Apps depend on racku through git, at a tag or a commit, as [Getting started](docs/getting-started.md#add-racku) shows.
+racku is on npm, and follows semantic versioning from 1.0.0: only a major version breaks the public API, what the documents of the [reference](docs/README.md#reference) give. Apps add it with `bun add racku`, as [Getting started](docs/getting-started.md#add-racku) shows.
 
 ### Not supported yet
 
