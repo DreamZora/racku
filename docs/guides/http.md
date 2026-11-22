@@ -77,13 +77,60 @@ The panel's call carries the method, URL, headers, route parameters, and body. `
   | No response head within `callTimeout`, or a device that stopped reading the body for `idleTimeout` | 504 |
   | A body sent whole that hasn't arrived within `idleTimeout`, or a streamed body that the client stopped sending for `idleTimeout`, or sent slower than 1 KiB/s | 408, and a warning in the log at most once a minute, with how many came since |
   | Any other error, and response headers that `Response` rejects | 502 |
-  | A body over `maxBodySize` | 413, with an empty body; a body that streamed fails at the device with `RACK_INVALID_INPUT` |
+  | A body over `maxBodySize` | 413, with an empty body. When the body was streaming to the device, the device's read of it fails with `RACK_INVALID_INPUT` too. |
   | Another host, on a loopback `hostname` | 403 |
   | No route matches, or a path that normalizing takes out of its route | 404, with the code `RACK_NO_ROUTE` |
 
 - **Clients.** The panel gives a device no client address. A panel that the internet reaches belongs behind a reverse proxy, which can buffer bodies, and limit clients by their address.
 
 - **After the head.** A response body that fails, or moves nothing for `idleTimeout`, after its head went out ends the response abruptly, so the client sees an incomplete body. A client that goes away cancels the call and its streams, with `RACK_CANCELLED` at the device.
+
+A file store puts these together. An upload streams to disk as it comes, and `maxBodySize` bounds it: a larger one gets 413, and fails the device's read with `RACK_INVALID_INPUT`, so the store removes what it wrote. A download leaves from disk with its `Content-Length`:
+
+```ts
+// devices/files.ts
+import { mkdir, rename, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { device, fileResponse } from "racku";
+import { Http, httpHandler } from "racku/std";
+
+/** A file's name: 1 to 64 letters, digits, `.`, `_`, and `-`, from a letter or a digit. */
+const NAME = /^[A-Za-z0-9][\w.-]{0,63}$/;
+
+export default device({
+  model: "files",
+  provides: { http: Http },
+  async powerOn(ctx) {
+    const dir = join(ctx.baseDir, "data", "files");
+    await mkdir(dir, { recursive: true });
+    return {
+      http: httpHandler(async (request) => {
+        const name = new URL(request.url).pathname.split("/").at(-1) ?? "";
+        if (!NAME.test(name)) return new Response("bad name", { status: 400 });
+        const path = join(dir, name);
+        if (request.method === "PUT") {
+          // Written as it streams in, then renamed, so that a download never gets half a file.
+          const draft = join(dir, `.${crypto.randomUUID()}`);
+          try {
+            await Bun.write(draft, new Response(request.body));
+            await rename(draft, path);
+          } finally {
+            await rm(draft, { force: true });
+          }
+          return new Response(null, { status: 204 });
+        }
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          return new Response(null, { status: 405 });
+        }
+        if (!(await Bun.file(path).exists())) return new Response("not found", { status: 404 });
+        return fileResponse(path);
+      }),
+    };
+  },
+});
+```
+
+Behind a panel with `routes: { "/files/:name": "files.http" }`, it keeps each file in `data/files/` under the base directory.
 
 ## WebSocket
 

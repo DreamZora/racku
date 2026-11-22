@@ -5,11 +5,12 @@
  * @decision .agents/decisions/261112_043034-device-api.md
  */
 import { afterEach, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { rack, slot, start } from "racku";
 import { httpPanel } from "racku/std";
 import { ROOT, type TempApp, tempApp, waitFor } from "./fixtures/app.ts";
+import { dripResponse } from "./fixtures/net.ts";
 import { typecheck } from "./fixtures/typecheck.ts";
 
 /** The guides, in the order of their file names. */
@@ -82,6 +83,7 @@ test("the greeter app of the guides runs as written", async () => {
   const sources = files();
   expect([...sources.keys()].sort()).toEqual([
     "connectors.ts",
+    "devices/files.ts",
     "devices/greeter.ts",
     "devices/web.ts",
     "rack.ts",
@@ -160,6 +162,47 @@ test("the swap example of the testing guide runs as written", async () => {
   expect(stderr).toContain("1 pass");
   expect(existsSync(join(app.dir, "devices", "greeter-next.ts"))).toBe(false);
 });
+
+// @doc docs/guides/http.md#requests
+test("the file store of the HTTP panel guide streams uploads to disk, and sends files with their length", async () => {
+  const app = await tempApp();
+  apps.push(app);
+  for (const [path, code] of files()) await app.write(path, code);
+  const port = await freePort();
+  const routes = { "/files/:name": "files.http" };
+  const running = await start(
+    rack("files", { slots: { 1: slot("./devices/files.ts"), 2: httpPanel({ port, routes }) } }),
+    { baseDir: app.dir, logger: () => {} },
+  );
+  const stored = join(app.dir, "data", "files");
+  const url = (name: string) => `http://127.0.0.1:${port}/files/${name}`;
+  try {
+    // 768 KiB passes the panel's streamThreshold, so the upload streams to the device.
+    const bytes = new Uint8Array(768 * 1024).map((_, i) => i % 251);
+    expect((await fetch(url("a.bin"), { method: "PUT", body: bytes })).status).toBe(204);
+    const got = await fetch(url("a.bin"));
+    expect([got.status, got.headers.get("content-length")]).toEqual([200, String(bytes.length)]);
+    expect(Bun.hash(await got.arrayBuffer())).toBe(Bun.hash(bytes));
+    expect((await fetch(url("missing.bin"))).status).toBe(404);
+    expect((await fetch(url(".hidden"))).status).toBe(400);
+    expect((await fetch(url("a.bin"), { method: "DELETE" })).status).toBe(405);
+
+    // A chunked body that streams, and then crosses maxBodySize, 1 MiB, leaves nothing behind.
+    const piece = "x".repeat(256 * 1024);
+    const pieces = [...Array(6).fill(`${piece.length.toString(16)}\r\n${piece}\r\n`), "0\r\n\r\n"];
+    const head = [
+      "PUT /files/big.bin HTTP/1.1",
+      `Host: 127.0.0.1:${port}`,
+      "Transfer-Encoding: chunked",
+      "Connection: close",
+    ];
+    expect(await dripResponse(port, head, pieces, 100)).toStartWith("HTTP/1.1 413");
+    await waitFor(() => readdirSync(stored).length === 1);
+    expect(readdirSync(stored)).toEqual(["a.bin"]);
+  } finally {
+    await running.stop();
+  }
+}, 30_000);
 
 // @doc docs/guides/running.md#running-a-rack-from-code
 test("the rack's log goes to the console, unless the program's logger takes it", async () => {

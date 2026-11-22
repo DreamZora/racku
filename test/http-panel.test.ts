@@ -262,6 +262,7 @@ describe("http-panel requests", () => {
   });
 
   // @doc docs/guides/http.md#configuration
+  // @doc docs/guides/http.md#requests
   test("answers 413 for a body over maxBodySize, with a declared length or chunked", async () => {
     // The chunked body passes streamThreshold, so that it streams to the device.
     const { running, port } = await panelRack({
