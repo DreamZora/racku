@@ -216,6 +216,11 @@ Each of these decisions stays, and this decision comes first where they differ:
   - `src/std/http.ts`: `httpHandler` keeps an accepted upgrade for `UPGRADE_MS`, and at most `UPGRADES` of them.
   - Tests: in `test/http-panel.test.ts` and `test/listeners.test.ts`.
   - Documentation: the HTTP and listeners guides, the limits table, and the skill.
+- **The management endpoint and rack ctl:**
+  - `src/control.ts`: `tokenOf()` with `TOKEN_MIN`; `privateDirectory()`; `controlPaths()` takes only absolute variables; the control file is written to a new file of mode 0600 and renamed; `answers()` gives up after `CHECK_MS`; `serve()` takes only `Bearer <token>`, and only the operations that `OPERATIONS` holds as its own.
+  - `src/commands.ts`: `sendOperation()` takes the token of `--url` from `tokenIn()`, for `--token-file`, or from `RACK_CONTROL_TOKEN`, and that of a control file only while `alive()` finds its process; `src/cli.ts` and `src/executable.ts` list `--token-file` in place of `--token`.
+  - Tests: in `test/control.test.ts`.
+  - Documentation: managing, and the rack command.
 
 ## Confirmation
 

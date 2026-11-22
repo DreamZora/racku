@@ -36,7 +36,7 @@ function rows(markdown: string, header: string): string[][] {
   return result;
 }
 
-/** The names that a cell lists in code spans, such as `` `--url <url>`, `--token <token>` ``. */
+/** The names that a cell lists in code spans, such as `` `--url <url>`, `--token-file <file>` ``. */
 function names(cell: string): string[] {
   return [...cell.matchAll(/`([^`]+)`/g)].map((match) => (match[1] ?? "").split(/[ (]/)[0] ?? "");
 }

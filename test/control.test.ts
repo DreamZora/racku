@@ -11,8 +11,9 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, stat, symlink, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { chmod, mkdir, mkdtemp, rm, stat, symlink, unlink } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join, posix, win32 } from "node:path";
 import { type SlotStatus, slot } from "racku";
 import { type ControlFile, controlPaths, controlTransport } from "../src/control.ts";
 import {
@@ -248,6 +249,10 @@ describe("the TCP endpoint", () => {
       (await fetch(`${url}/v1/status`, { headers: { authorization: `Bearer ${token}` } })).status,
     ).toBe(405);
     expect((await post("explode", { args: [] })).status).toBe(404);
+    // A name that every object has is no operation either.
+    expect((await post("constructor", { args: [] })).status).toBe(404);
+    // Only Bearer <token> authenticates, not the token alone.
+    expect((await post("status", { args: [] }, { authorization: token })).status).toBe(401);
     expect((await post("status", "not json")).status).toBe(400);
     expect((await post("swap", { args: [] })).status).toBe(400);
     expect(await (await post("swap", { args: ["ghost"] })).json()).toEqual({
@@ -258,20 +263,90 @@ describe("the TCP endpoint", () => {
     expect(existsSync(paths.file)).toBe(false);
   });
 
-  test("RACK_CONTROL_TOKEN sets the token, and rack ctl reaches a rack by --url and --token", async () => {
+  // @doc docs/reference/cli.md#flags-of-rack-ctl
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
+  test("RACK_CONTROL_TOKEN sets the token, and rack ctl reaches a rack by --url with it or --token-file", async () => {
     const created = await app();
-    const rack = run(["start", "--control-port", "0"], created.dir, {
-      RACK_CONTROL_TOKEN: "shared-secret",
-    });
+    const secret = "s".repeat(40);
+    const rack = run(["start", "--control-port", "0"], created.dir, { RACK_CONTROL_TOKEN: secret });
     await rack.waitFor(/control listening/);
     const { url, token } = (await Bun.file(controlPaths(created.dir).file).json()) as ControlFile;
-    expect(token).toBe("shared-secret");
-    const elsewhere = run(["ctl", "status", "--url", url, "--token", "shared-secret"], FIXTURES);
-    expect(await elsewhere.exited()).toBe(0);
-    expect(JSON.parse(elsewhere.output)[0]).toMatchObject({ name: "counter" });
-    const wrong = run(["ctl", "status", "--url", url, "--token", "nope"], FIXTURES);
+    expect(token).toBe(secret);
+    const byEnv = run(["ctl", "status", "--url", url], FIXTURES, { RACK_CONTROL_TOKEN: secret });
+    expect(await byEnv.exited()).toBe(0);
+    expect(JSON.parse(byEnv.output)[0]).toMatchObject({ name: "counter" });
+    // The token file's first line is the token.
+    await created.write("token", `${secret}\nthe rest is ignored\n`);
+    const byFile = run(
+      ["ctl", "status", "--url", url, "--token-file", join(created.dir, "token")],
+      FIXTURES,
+    );
+    expect(await byFile.exited()).toBe(0);
+    await created.write("wrong", `${"w".repeat(40)}\n`);
+    const wrong = run(
+      ["ctl", "status", "--url", url, "--token-file", join(created.dir, "wrong")],
+      FIXTURES,
+    );
     expect(await wrong.exited()).toBe(1);
     expect(wrong.output).toContain("the rack answered 401");
+    const none = run(["ctl", "status", "--url", url], FIXTURES, { RACK_CONTROL_TOKEN: "" });
+    expect(await none.exited()).toBe(1);
+    // No token goes on the command line, where every user on the machine can read it.
+    const flag = run(["ctl", "status", "--url", url, "--token", secret], FIXTURES);
+    expect(await flag.exited()).toBe(2);
+    expect(flag.output).toContain("--token-file <file>");
+  });
+
+  // @doc docs/guides/managing.md#who-can-connect
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
+  test("a token of fewer than 32 characters, an empty one included, fails the start, naming its source", async () => {
+    const created = await app();
+    const spec = { slots: { 1: slot("./devices/counter.ts") } };
+    const short = await errorOf(
+      startRack(spec, { baseDir: created.dir, control: { port: 0, token: "x".repeat(31) } }),
+    );
+    expect([short.code, short.message]).toEqual([
+      "RACK_MANIFEST",
+      "the management endpoint's token from control.token has 31 characters; it needs 32 or more",
+    ]);
+    const empty = run(["start", "--control-port", "0"], created.dir, { RACK_CONTROL_TOKEN: "" });
+    expect(await empty.exited()).toBe(1);
+    expect(empty.output).toContain(
+      "the management endpoint's token from RACK_CONTROL_TOKEN has 0 characters; it needs 32 or more",
+    );
+    expect(existsSync(controlPaths(created.dir).file)).toBe(false);
+  });
+
+  // @doc docs/reference/cli.md#flags-of-rack-ctl
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
+  test("rack ctl sends a control file's token only while the process that the file names runs", async () => {
+    const created = await app();
+    const paths = controlPaths(created.dir);
+    // What listens on the port of a rack that ended, such as another user's program.
+    const heard: (string | null)[] = [];
+    const taker = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        heard.push(request.headers.get("authorization"));
+        return Response.json({ ok: true, value: [] });
+      },
+    });
+    try {
+      const ended = Bun.spawn([process.execPath, "-e", ""]);
+      await ended.exited;
+      const file: ControlFile = { url: taker.url.origin, token: "t".repeat(43), pid: ended.pid };
+      await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+      await Bun.write(paths.file, JSON.stringify(file));
+      if (!WINDOWS) await unlink(paths.socket).catch(() => undefined);
+      const ctl = run(["ctl", "status"], created.dir);
+      expect(await ctl.exited()).toBe(1);
+      expect(ctl.output).toContain(`no running rack has the base directory ${created.dir}`);
+      expect(heard).toEqual([]);
+    } finally {
+      await taker.stop(true);
+      await unlink(paths.file).catch(() => undefined);
+    }
   });
 });
 
@@ -303,6 +378,20 @@ describe("transports by platform", () => {
       delete process.env.XDG_STATE_HOME;
       expect(controlPaths("/app", "linux").dir).toContain(".local/state/racku/control");
       expect(controlPaths("/app", "linux").socket).not.toContain("/app/");
+      // An empty or relative variable counts as unset, so the endpoint never lands where the
+      // rack happens to start.
+      // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
+      for (const value of ["", "relative/run"]) {
+        process.env.XDG_RUNTIME_DIR = value;
+        process.env.XDG_STATE_HOME = value;
+        expect(controlPaths("/app", "linux").dir).toBe(
+          posix.join(homedir(), ".local", "state", "racku", "control"),
+        );
+        process.env.LOCALAPPDATA = value;
+        expect(controlPaths("/app", "win32").dir).toBe(
+          win32.join(homedir(), "AppData", "Local", "racku", "control"),
+        );
+      }
     } finally {
       if (saved.local === undefined) delete process.env.LOCALAPPDATA;
       else process.env.LOCALAPPDATA = saved.local;
@@ -311,6 +400,79 @@ describe("transports by platform", () => {
       process.env.XDG_RUNTIME_DIR = saved.runtime ?? CONTROL_DIR;
     }
   });
+});
+
+// @doc docs/guides/managing.md#who-can-connect
+// @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
+describe.skipIf(WINDOWS)("a private control directory", () => {
+  const spec = { slots: { 1: slot("./devices/counter.ts") } };
+  /** Runs `body` with the control directory under a runtime directory of its own. */
+  async function withRuntime(body: (runtime: string) => Promise<void>): Promise<void> {
+    const runtime = await mkdtemp(join(tmpdir(), "racku-runtime-"));
+    process.env.XDG_RUNTIME_DIR = runtime;
+    try {
+      await body(runtime);
+    } finally {
+      process.env.XDG_RUNTIME_DIR = CONTROL_DIR;
+      await rm(runtime, { recursive: true, force: true });
+    }
+  }
+
+  test("a control directory that is a link fails the start", async () => {
+    const created = await app();
+    await withRuntime(async (runtime) => {
+      const elsewhere = join(runtime, "elsewhere");
+      await mkdir(elsewhere, { mode: 0o700 });
+      await symlink(elsewhere, join(runtime, "racku"));
+      const failed = await errorOf(startRack(spec, { baseDir: created.dir, control: true }));
+      expect([failed.code, failed.message]).toEqual([
+        "RACK_MANIFEST",
+        expect.stringContaining(
+          `the control directory ${join(runtime, "racku")} is a symbolic link`,
+        ),
+      ]);
+    });
+  });
+
+  test("a control directory of another user fails the start", async () => {
+    const created = await app();
+    const own = process.getuid?.() as number;
+    const getuid = process.getuid;
+    await withRuntime(async (runtime) => {
+      // The rack sees itself as another user, as when someone else made the directory first.
+      process.getuid = () => own + 1;
+      try {
+        const failed = await errorOf(startRack(spec, { baseDir: created.dir, control: true }));
+        expect([failed.code, failed.message]).toEqual([
+          "RACK_MANIFEST",
+          expect.stringContaining(`${join(runtime, "racku")} belongs to the user ${own}`),
+        ]);
+      } finally {
+        process.getuid = getuid;
+      }
+    });
+  });
+
+  test("an earlier rack's socket that accepts but doesn't answer within 5 s fails the start", async () => {
+    const created = await app();
+    await withRuntime(async () => {
+      const paths = controlPaths(created.dir);
+      await mkdir(paths.dir, { recursive: true, mode: 0o700 });
+      // Accepts every connection, and never answers.
+      const silent = Bun.listen({ unix: paths.socket, socket: { data() {} } });
+      try {
+        const started = performance.now();
+        const failed = await errorOf(startRack(spec, { baseDir: created.dir, control: true }));
+        expect([failed.code, failed.message]).toEqual([
+          "RACK_MANIFEST",
+          `a process accepted on ${paths.socket} but didn't answer within 5 s; stop it before starting this rack`,
+        ]);
+        expect(performance.now() - started).toBeGreaterThan(4_500);
+      } finally {
+        silent.stop(true);
+      }
+    });
+  }, 15_000);
 });
 
 // @doc docs/guides/managing.md#the-protocol

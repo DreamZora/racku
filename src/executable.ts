@@ -23,10 +23,17 @@ const START_FLAGS = [
   "--stop-on-stdin-close",
 ];
 
-const CTL_FLAGS = ["--base-dir", "--url", "--token", "--no-cascade", "--to"];
+const CTL_FLAGS = ["--base-dir", "--url", "--token-file", "--no-cascade", "--to"];
 
 /** Flags that take a value, as `--flag value` or `--flag=value`. */
-const VALUE_FLAGS = new Set(["--base-dir", "--control-port", "--log", "--url", "--token", "--to"]);
+const VALUE_FLAGS = new Set([
+  "--base-dir",
+  "--control-port",
+  "--log",
+  "--url",
+  "--token-file",
+  "--to",
+]);
 
 /**
  * Runs the executable's command line. The executable's main module calls it, after the prelude
@@ -50,7 +57,7 @@ export async function runExecutable(
         `       ${name} ctl status | metrics | reload | stop`,
         `       ${name} ctl swap <device> [source] | restart <device> [--no-cascade]`,
         `       ${name} ctl rollback <device> [--to <firmware>] | history [device]`,
-        "         [--base-dir <dir>] [--url <url> --token <token>]",
+        "         [--base-dir <dir>] [--url <url> [--token-file <file>]]",
       ].join("\n"),
     );
     process.exit(2);

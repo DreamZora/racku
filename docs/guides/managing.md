@@ -21,13 +21,15 @@ rack ctl stop                            # shut down in order, like Ctrl-C
 
 Nothing listens on the network.
 - On Linux and macOS, the endpoint is a Unix socket in a directory that only your user can enter: `$XDG_RUNTIME_DIR/racku/`, or `~/.local/state/racku/control/`. Only your user and root can connect.
+  - The rack opens its endpoint only in a directory that is a real directory, not a link, that your user owns, and whose mode is 0700 once the rack has set it. Otherwise the start fails with `RACK_MANIFEST`, saying what is wrong. An empty or relative `XDG_RUNTIME_DIR` or `XDG_STATE_HOME` counts as unset.
   - A socket left behind by a rack that crashed is replaced.
-  - While a rack answers on the socket, a second rack for the same directory refuses to start.
+  - While a rack answers on the socket, a second rack for the same directory refuses to start, and so it does when something accepts on the socket but doesn't answer within 5 s.
 - With `--control-port <port>`, and by default on Windows, the endpoint listens on loopback TCP, `127.0.0.1`.
-  - Every request needs the rack's token as `Authorization: Bearer <token>`. The token is random on each start, unless `RACK_CONTROL_TOKEN` sets it.
-  - The rack writes the address and the token to a control file in the same private directory. On Windows, that directory is `%LOCALAPPDATA%\racku\control\`.
+  - Every request needs the rack's token as `Authorization: Bearer <token>`; the token alone gets 401. The token is random on each start, unless `RACK_CONTROL_TOKEN` sets it, which needs 32 characters or more: a shorter one, an empty one included, fails the start with `RACK_MANIFEST`.
+  - The rack writes the address and the token to a control file in the same private directory, as a new file of mode 0600 that it renames into place. On Windows, that directory is `%LOCALAPPDATA%\racku\control\`.
   - The endpoint refuses requests that carry an `Origin` header or a `Host` other than its own, so a web page cannot drive it.
-  - `rack ctl --url <url> --token <token>` reaches such a rack from anywhere on the machine.
+  - `rack ctl` sends the token of a control file only while the process that the file names runs. For a rack that ended, it says that no running rack has the base directory, and sends nothing to whatever listens on the port now.
+  - `rack ctl --url <url>` reaches such a rack from anywhere on the machine, with the token on the first line of `--token-file <file>`, or else in `RACK_CONTROL_TOKEN`. No flag takes the token itself, since every user on the machine can read a command line.
 
 ## The protocol
 

@@ -14,7 +14,7 @@
  */
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { type Control, type ControlFile, controlPaths, openControl } from "./control.ts";
+import { alive, type Control, type ControlFile, controlPaths, openControl } from "./control.ts";
 import { isDeviceFileOrJson, type WatchOptions, watchAndReload } from "./dev.ts";
 import { RackError } from "./errors.ts";
 import { consoleLogger, jsonLogger, type LogEntry } from "./log.ts";
@@ -149,6 +149,10 @@ export async function printPlan(
  * Sends one operation to a running rack and prints its result as JSON. The rack is the one whose
  * base directory is `dir`, or the TCP endpoint at `--url`.
  *
+ * Without `--url`, the token is the control file's, which goes out only while the process that
+ * the file names runs. With `--url`, it is the first line of `--token-file`, or else
+ * `RACK_CONTROL_TOKEN`; no token goes on the command line, where other users could read it.
+ *
  * @param positional The operation and its arguments.
  * @param dir The base directory of the rack to reach without `--url`.
  * @param usage Prints the usage and exits; called on malformed arguments.
@@ -162,18 +166,26 @@ export async function sendOperation(
   const [op = "", ...rest] = positional;
   const args = ctlArgs(op, rest, flags, usage);
   let url = flags.get("--url");
-  let token = flags.get("--token") ?? process.env.RACK_CONTROL_TOKEN;
+  const tokenFile = flags.get("--token-file");
+  let token: string | undefined;
   let unix: string | undefined;
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
   if (url === undefined) {
+    if (tokenFile !== undefined) fail("--token-file goes with --url");
     const paths = controlPaths(dir);
+    const none = `no running rack has the base directory ${dir}`;
     if (process.platform !== "win32" && existsSync(paths.socket)) unix = paths.socket;
     else if (existsSync(paths.file)) {
       const file = (await Bun.file(paths.file).json()) as ControlFile;
+      // A file left by a rack that ended names a process that no longer runs; its token would
+      // go to whatever listens on its port now.
+      if (!alive(file.pid)) fail(none);
       url = file.url;
       token = file.token;
-    } else fail(`no running rack has the base directory ${dir}`);
-  } else if (token === undefined) {
-    fail("--url needs --token or RACK_CONTROL_TOKEN");
+    } else fail(none);
+  } else {
+    token = tokenFile === undefined ? process.env.RACK_CONTROL_TOKEN : await tokenIn(tokenFile);
+    if (token === undefined) fail("--url needs --token-file or RACK_CONTROL_TOKEN");
   }
   let response: Response;
   try {
@@ -195,6 +207,19 @@ export async function sendOperation(
     | { ok: false; error: { code: string; message: string } };
   if (!body.ok) fail(`${body.error.code}: ${body.error.message}`);
   console.log(JSON.stringify(body.value, null, 2));
+}
+
+/** The token on the first line of a file, for `--token-file`. */
+async function tokenIn(path: string): Promise<string> {
+  let text: string;
+  try {
+    text = await Bun.file(path).text();
+  } catch (error) {
+    fail(`cannot read the token file ${path}: ${describeError(error)}`);
+  }
+  const token = text.split(/\r?\n/, 1)[0] ?? "";
+  if (token === "") fail(`the token file ${path} has no token on its first line`);
+  return token;
 }
 
 /** The arguments of a `rack ctl` operation, from its command-line words and flags. */
