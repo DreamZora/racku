@@ -40,6 +40,56 @@ import {
 
 const WORKER_URL = new URL("./worker.ts", import.meta.url).href;
 
+/** A BroadcastChannel that can stop keeping the process alive, as Bun's can. */
+type Unrefable = BroadcastChannel & { unref(): void };
+
+/**
+ * Runs the main thread's handling of what device Workers post, in the order it came, in the
+ * dispatch of a BroadcastChannel's message instead of the dispatch of the message itself.
+ *
+ * Bun 1.4.4 and 1.4.5 dispatch no further message of a `MessagePort`, or of a Worker's channel,
+ * while code that resumed in the dispatch of one of its messages waits in `expect(...).resolves`
+ * or `.rejects`, which run the event loop inside that dispatch. A test that awaited one call of
+ * a device, then expected the next call to reject, waited until that call timed out. Bun still
+ * dispatches a BroadcastChannel's messages then, so the promises that the handling settles
+ * resume their code where the bug doesn't reach.
+ */
+class Relay {
+  readonly #tasks: (() => void)[] = [];
+  #send: BroadcastChannel | undefined;
+
+  /** Runs `task` after the tasks before it, once the current dispatch has ended. */
+  run(task: () => void): void {
+    this.#tasks.push(task);
+    if (this.#tasks.length > 1) return;
+    this.#send ??= this.#open();
+    this.#send.postMessage(null);
+  }
+
+  #open(): BroadcastChannel {
+    // Nothing else knows the name; a message on it would only run the tasks that are due.
+    const name = `racku-relay-${crypto.randomUUID()}`;
+    const send = new BroadcastChannel(name) as Unrefable;
+    const receive = new BroadcastChannel(name) as Unrefable;
+    // The Workers keep the process alive while they run; the channels don't need to.
+    send.unref();
+    receive.unref();
+    receive.addEventListener("message", () => {
+      for (const task of this.#tasks.splice(0)) {
+        try {
+          task();
+        } catch (error) {
+          // As uncaught as it was in the listener of the message, and the next tasks still run.
+          reportError(error);
+        }
+      }
+    });
+    return send;
+  }
+}
+
+const relay = new Relay();
+
 /** Where an instance reports what it receives. */
 export interface InstanceHost {
   onData(instance: Instance, message: DataFromWorker): void;
@@ -188,22 +238,34 @@ export class Instance {
     const channel = new MessageChannel();
     this.#data = channel.port1;
     this.#bootPort = channel.port2;
+    // Everything the Worker posts, and its error and exit, goes through the relay, in order.
     this.#worker.addEventListener("message", (event: MessageEvent<unknown>) => {
-      // Device code can post on this channel too; only the Worker host's messages count.
-      // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
-      if (isControlNotice(event.data)) this.#onControl(event.data);
-      else this.#dropForeign();
+      const data = event.data;
+      relay.run(() => {
+        // Device code can post on this channel too; only the Worker host's messages count.
+        // @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
+        if (isControlNotice(data)) this.#onControl(data);
+        else this.#dropForeign();
+      });
     });
     this.#worker.addEventListener("error", (event: ErrorEvent) => {
-      this.#lastError = event.message;
+      const message = event.message;
+      relay.run(() => {
+        this.#lastError = message;
+      });
     });
     this.#worker.addEventListener("close", (event: Event) => {
       const code = (event as CloseEvent).code;
-      this.#closed.resolve();
-      this.#exit(`exited with code ${code}${this.#lastError ? `: ${this.#lastError}` : ""}`);
+      relay.run(() => {
+        this.#closed.resolve();
+        this.#exit(`exited with code ${code}${this.#lastError ? `: ${this.#lastError}` : ""}`);
+      });
     });
     this.#data.addEventListener("message", (event) => {
-      if (!this.dead) this.#host.onData(this, (event as MessageEvent<DataFromWorker>).data);
+      const data = (event as MessageEvent<DataFromWorker>).data;
+      relay.run(() => {
+        if (!this.dead) this.#host.onData(this, data);
+      });
     });
     this.#data.start();
   }

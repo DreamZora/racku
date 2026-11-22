@@ -239,6 +239,38 @@ describe("the bench", () => {
     expect(partial.calls).toHaveLength(1);
   });
 
+  // Bun 1.4.4 and 1.4.5 hold back a channel's messages while expect().rejects or .resolves waits
+  // in code that resumed from one of them, which the main thread's relay in src/instance.ts
+  // avoids; these waits otherwise lasted until the calls timed out.
+  // @doc docs/guides/testing.md#members-of-a-bench
+  test("expect().rejects and .resolves get the outcome of a call that follows an awaited one", async () => {
+    const kv = stub(Kv, {
+      get: () => null,
+      set: ({ value }) => {
+        if (value.includes("refused")) throw new RackError("RACK_LINK_DOWN", "the store refused");
+      },
+    });
+    await using orders = await bench(ORDERS, {
+      baseDir: FIXTURES,
+      config: { currency: "EUR" },
+      needs: { kv, blobs: memoryBlobs().blobs },
+      callTimeout: 5_000,
+    });
+    const started = performance.now();
+    // The device answers calls on its data channel.
+    expect(await orders.call("orders", "create", { item: "tea", quantity: 1 })).toEqual({
+      id: "1",
+    });
+    await expect(
+      orders.call("orders", "create", { item: "refused", quantity: 1 }),
+    ).rejects.toMatchObject({ code: "RACK_LINK_DOWN" });
+    await expect(orders.call("orders", "count", undefined)).resolves.toBe(2);
+    // Its Worker host answers requests, such as for its counters, on the Worker's channel.
+    await orders.rack.metrics();
+    await expect(orders.rack.metrics()).resolves.toHaveProperty("devices");
+    expect(performance.now() - started).toBeLessThan(2_500);
+  });
+
   // @doc docs/guides/testing.md#members-of-a-bench
   // @doc docs/guides/testing.md#crashes-and-hangs
   test("a hot swap carries the state, a restart doesn't, and a crash resets the device", async () => {

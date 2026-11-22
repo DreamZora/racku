@@ -58,7 +58,7 @@ A test that gives the bench a base directory of its own, such as for the files t
 
 | Member | Purpose |
 |---|---|
-| `call(port, member, input, options?)` | Call a port of the device, as `rack.call()` calls `<device>.<port>`. |
+| `call(port, member, input, options?)` | Call a port of the device, as `rack.call()` calls `<device>.<port>`. It resolves with the result, or rejects with the `RackError` of the failed call, so `await expect(bench.call(…)).rejects.toMatchObject({ code })` checks a failure. |
 | `events` | The events the device emitted, as `{ port, event, payload, at }`. They come through the probe's Worker, so one can arrive just after the call that emitted it returns. |
 | `logs` | The rack's log entries, the device's included. |
 | `faults` | The device's crashes and watchdog bites, as `{ firmware, error, reset, at }`. |
