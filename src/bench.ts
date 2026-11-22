@@ -83,6 +83,11 @@ export interface StubDeviceSpec {
   channel: string;
   /** The need the stub stands in for, which names its port too. */
   need: string;
+  /**
+   * The key of the stub's messages on the channel; by default the need. A stub for one device
+   * of an every need has `<need>:<device>`.
+   */
+  key?: string;
   /** The need's connector, by its id and members. */
   connector: ConnectorInfo;
 }
@@ -103,6 +108,7 @@ export function stubDevice(spec: StubDeviceSpec) {
   const provides: Record<string, Connector> = {
     [spec.need]: connector(spec.connector.id, members),
   };
+  const key = spec.key ?? spec.need;
   return device<Record<never, Connector>, Record<string, Connector>>({
     model: "bench-stub",
     provides,
@@ -123,7 +129,7 @@ export function stubDevice(spec: StubDeviceSpec) {
 
       channel.addEventListener("message", (received) => {
         const data = received.data as Message;
-        if (!("stub" in data) || data.stub !== spec.need) return;
+        if (!("stub" in data) || data.stub !== key) return;
         if (data.kind === "result" || data.kind === "failed") {
           const waiting = pending.get(data.id);
           if (waiting === undefined) return;
@@ -135,9 +141,9 @@ export function stubDevice(spec: StubDeviceSpec) {
           const done =
             emit === undefined ? Promise.reject(noEvent(spec, data.event)) : emit(data.payload);
           done.then(
-            () => post({ kind: "emitted", stub: spec.need, id: data.id }),
+            () => post({ kind: "emitted", stub: key, id: data.id }),
             (error: unknown) =>
-              post({ kind: "emitted", stub: spec.need, id: data.id, error: toWireError(error) }),
+              post({ kind: "emitted", stub: key, id: data.id, error: toWireError(error) }),
           );
         }
       });
@@ -153,7 +159,7 @@ export function stubDevice(spec: StubDeviceSpec) {
         return new Promise<unknown>((resolve, reject) => {
           const cancel = () => {
             pending.delete(id);
-            post({ kind: "cancel", stub: spec.need, id, error: toWireError(call.signal.reason) });
+            post({ kind: "cancel", stub: key, id, error: toWireError(call.signal.reason) });
             reject(call.signal.reason);
           };
           if (call.signal.aborted) {
@@ -172,7 +178,7 @@ export function stubDevice(spec: StubDeviceSpec) {
           const value = taken === undefined ? input : taken.value;
           post({
             kind: "call",
-            stub: spec.need,
+            stub: key,
             id,
             member,
             value,
@@ -533,9 +539,12 @@ export interface BenchFault {
 }
 
 /** Options of {@link bench}. */
-export interface BenchOptions<N extends Record<string, Stub> = Record<string, Stub>>
+export interface BenchOptions<N extends BenchNeeds = BenchNeeds>
   extends Omit<StartOptions, "logger"> {
-  /** One stub per need of the device, own and patched needs included, by need name. */
+  /**
+   * One stub per need of the device, own and patched needs included, by need name; for an
+   * every need, an object of stubs by the names of the devices that the need reaches.
+   */
   needs?: N;
   /** The device's configuration, as `slot()` takes it. */
   config?: unknown;
@@ -543,9 +552,15 @@ export interface BenchOptions<N extends Record<string, Stub> = Record<string, St
   name?: string;
 }
 
+/**
+ * The stubs of a device's needs, by need name: for an every need, its stubs by device name.
+ *
+ * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+ */
+export type BenchNeeds = Record<string, Stub | Readonly<Record<string, Stub>>>;
+
 /** A device running on a bench; see {@link bench}. */
-export interface Bench<N extends Record<string, Stub> = Record<string, Stub>>
-  extends AsyncDisposable {
+export interface Bench<N extends BenchNeeds = BenchNeeds> extends AsyncDisposable {
   /** The device's name in its rack. */
   readonly name: string;
   /** The rack around the device, for `status()`, `metrics()`, `history()`, and the rest. */
@@ -614,7 +629,7 @@ export interface Bench<N extends Record<string, Stub> = Record<string, Stub>>
  *   that lacks members of the need, or a stub for a need the device doesn't have; and as
  *   `start()` does, `RACK_INVALID_CONFIG`, `RACK_HOOK_FAILED`, or `RACK_MANIFEST`.
  */
-export async function bench<N extends Record<string, Stub> = Record<never, Stub>>(
+export async function bench<N extends BenchNeeds = Record<never, Stub>>(
   source: string | URL,
   options: BenchOptions<N> = {},
 ): Promise<Bench<N>> {
@@ -654,7 +669,7 @@ export async function bench<N extends Record<string, Stub> = Record<never, Stub>
 
   let running: RackHandle;
   try {
-    const manifest = await writeRack(dir, channelName, source, name, config, fru);
+    const manifest = await writeRack(dir, channelName, source, name, config, fru, stubs);
     // A bench exists for tests, so it lets them inject faults.
     // @decision .agents/decisions/261119_205416-injected-faults.md#who-may-inject
     running = await start(manifest, { ...startOptions, baseDir, logger, faultInjection: true });
@@ -712,23 +727,16 @@ export async function bench<N extends Record<string, Stub> = Record<never, Stub>
  * @throws RackError `RACK_MANIFEST` for a need without a stub, a stub that doesn't fit its need,
  *   a stub given twice or serving another bench, and a stub for a need the device lacks.
  */
-function stubsFor(name: string, fru: Fru, needs: Record<string, Stub>): Map<string, BenchStub> {
+function stubsFor(name: string, fru: Fru, needs: BenchNeeds): Map<string, BenchStub> {
   const stubs = new Map<string, BenchStub>();
-  for (const [need, info] of Object.entries(fru.needs)) {
-    const given = needs[need];
-    if (given === undefined) {
-      throw new RackError(
-        "RACK_MANIFEST",
-        `bench: ${name} needs ${need}, a ${info.id}, and options.needs has no stub for it`,
-      );
-    }
+  const take = (given: unknown, info: Fru["needs"][string], key: string, label: string) => {
     if (!(given instanceof BenchStub)) {
-      throw new RackError("RACK_MANIFEST", `bench: options.needs.${need} isn't made by stub()`);
+      throw new RackError("RACK_MANIFEST", `bench: options.needs.${label} isn't made by stub()`);
     }
     if (given.connector.id !== info.id) {
       throw new RackError(
         "RACK_MANIFEST",
-        `bench: ${name}.${need} needs a ${info.id}, and its stub is a ${given.connector.id}`,
+        `bench: ${name}.${label} needs a ${info.id}, and its stub is a ${given.connector.id}`,
       );
     }
     const missing = Object.entries(info.members)
@@ -737,13 +745,43 @@ function stubsFor(name: string, fru: Fru, needs: Record<string, Stub>): Map<stri
     if (missing.length > 0) {
       throw new RackError(
         "RACK_MANIFEST",
-        `bench: the stub of ${info.id} for ${need} lacks ${missing.join(", ")}`,
+        `bench: the stub of ${info.id} for ${label} lacks ${missing.join(", ")}`,
       );
     }
     if (given.attached || [...stubs.values()].includes(given)) {
-      throw new RackError("RACK_MANIFEST", `bench: the stub for ${need} serves another need`);
+      throw new RackError("RACK_MANIFEST", `bench: the stub for ${label} serves another need`);
     }
-    stubs.set(need, given);
+    stubs.set(key, given);
+  };
+  for (const [need, info] of Object.entries(fru.needs)) {
+    const given = needs[need];
+    if (given === undefined) {
+      throw new RackError(
+        "RACK_MANIFEST",
+        `bench: ${name} needs ${need}, a ${info.id}, and options.needs has no stub for it`,
+      );
+    }
+    // An every need takes its stubs by the names of the devices that it reaches.
+    // @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
+    if (info.every) {
+      if (given instanceof BenchStub || typeof given !== "object" || given === null) {
+        throw new RackError(
+          "RACK_MANIFEST",
+          `bench: ${name}.${need} is an every need, and options.needs.${need} gives its stubs by device name`,
+        );
+      }
+      for (const [device, stubbed] of Object.entries(given)) {
+        if (!isDeviceName(device)) {
+          throw new RackError(
+            "RACK_MANIFEST",
+            `bench: options.needs.${need} names "${device}", which isn't a device name`,
+          );
+        }
+        take(stubbed, info, `${need}:${device}`, `${need}.${device}`);
+      }
+      continue;
+    }
+    take(given, info, need, need);
   }
   for (const need of Object.keys(needs)) {
     if (!Object.hasOwn(fru.needs, need)) {
@@ -764,6 +802,7 @@ async function writeRack(
   name: string,
   config: unknown,
   fru: Fru,
+  stubs: ReadonlyMap<string, BenchStub>,
 ) {
   await mkdir(dir, { recursive: true });
   const taken = new Set([name]);
@@ -778,7 +817,33 @@ async function writeRack(
   const patch: [string, string][] = [];
   let u = 1;
   let index = 0;
+  // The stubs of every needs go first, under the names that the device sees.
+  for (const key of stubs.keys()) {
+    const split = key.indexOf(":");
+    if (split < 0) continue;
+    const need = key.slice(0, split);
+    const device = key.slice(split + 1);
+    const info = fru.needs[need] as Fru["needs"][string];
+    if (taken.has(device)) {
+      throw new RackError(
+        "RACK_MANIFEST",
+        `bench: options.needs.${need} names ${device}, which is the device's own name`,
+      );
+    }
+    taken.add(device);
+    index++;
+    const file = join(dir, `stub-${index}.ts`);
+    const spec: StubDeviceSpec = {
+      channel,
+      need,
+      key,
+      connector: { id: info.id, members: info.members },
+    };
+    await writeFile(file, deviceFile("stubDevice", spec));
+    slots[u++] = slot(file, { name: device });
+  }
   for (const [need, info] of Object.entries(fru.needs)) {
+    if (info.every) continue;
     index++;
     const stubName = unique(`stub-${need}`, `stub-${index}`);
     const file = join(dir, `stub-${index}.ts`);

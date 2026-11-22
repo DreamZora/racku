@@ -5,7 +5,10 @@
  * @decision .agents/decisions/261121_065823-hot-plug-directories.md#every-needs
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { rack, slot } from "rack42u";
+import { join } from "node:path";
+import { connector, event, rack, rpc, slot } from "rack42u";
+import { bench, stub } from "rack42u/bench";
+import * as v from "valibot";
 import { codeOf, errorOf, type TempApp, useRacks, waitFor } from "./fixtures/app.ts";
 import { host, tool, toolApp } from "./fixtures/tools.ts";
 
@@ -212,5 +215,49 @@ describe("every needs in a scanned rack", () => {
     await running.reload(rack("test", spec(["host", "upper", "lower"])));
     expect(await host(running).names()).toEqual(["lower", "upper"]);
     expect(await host(running).run("lower", "Hi")).toBe("hi");
+  });
+});
+
+// @doc docs/guides/testing.md#stubs
+describe("every needs on the bench", () => {
+  // The connector of the tools, as the fixture's connectors.ts defines it.
+  const Tool = connector("test.tool/v1", {
+    run: rpc(v.string(), v.string()),
+    ran: event(v.object({ text: v.string() })),
+  });
+
+  test("take their stubs by the names of the devices that they reach", async () => {
+    const app = await toolApp(apps);
+    await using b = await bench(join(app.dir, "devices", "host.ts"), {
+      needs: {
+        tools: {
+          upper: stub(Tool, { run: (text) => text.toUpperCase() }),
+          lower: stub(Tool, { run: (text) => text.toLowerCase() }),
+        },
+      },
+    });
+    expect(await b.call("host", "names", undefined)).toEqual(["upper", "lower"]);
+    expect(await b.call("host", "run", { tool: "lower", text: "Hi" })).toBe("hi");
+    expect(b.needs.tools.lower.calls.map((call) => [call.member, call.input])).toEqual([
+      ["run", "Hi"],
+    ]);
+    // An event from a stub reaches the host with the stub's device name.
+    await b.needs.tools.upper.emit.ran({ text: "X" });
+    await waitFor(async () =>
+      ((await b.call("host", "heard", undefined)) as string[]).includes("upper:X"),
+    );
+  });
+
+  test("refuse one stub for an every need, and a name that isn't a device name", async () => {
+    const app = await toolApp(apps);
+    const source = join(app.dir, "devices", "host.ts");
+    const one = await errorOf(bench(source, { needs: { tools: stub(Tool, {}) } }));
+    expect(one.message).toBe(
+      "bench: host.tools is an every need, and options.needs.tools gives its stubs by device name",
+    );
+    const named = await errorOf(bench(source, { needs: { tools: { "no.dots": stub(Tool, {}) } } }));
+    expect(named.message).toBe(
+      'bench: options.needs.tools names "no.dots", which isn\'t a device name',
+    );
   });
 });

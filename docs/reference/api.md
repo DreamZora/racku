@@ -253,6 +253,7 @@ The test bench, which runs one device in a rack of its own. See [Testing a devic
 | `stub(connector, implementation)` | function | Makes a stand-in for one need of a device on a bench. |
 | `Bench` | type | A device running on a bench, as `bench()` resolves with it. |
 | `BenchOptions` | type | The options of `bench()`: `needs`, `config`, `name`, and those of `start()`. |
+| `BenchNeeds` | type | The stubs of `options.needs`: one per need, and for an every need, stubs by device name. |
 | `BenchEvent` | type | An event that the device on a bench emitted. |
 | `BenchFault` | type | A fault of the device on a bench: a crash, or a watchdog bite. |
 | `Stub` | type | A stand-in for one need, as `stub()` returns it, with its `calls`, `dropped`, and `emit`. |
