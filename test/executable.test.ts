@@ -259,11 +259,13 @@ describe("an executable from rack compile", () => {
         imports: 'import { SUFFIX } from "./suffix.ts";',
         suffix: "SUFFIX",
       }),
-      "devices/suffix.ts": 'export const SUFFIX = "!";\n',
+      "devices/suffix.ts": 'export { SUFFIX } from "../shared.ts";\n',
+      "shared.ts": 'export const SUFFIX = "!";\n',
     });
     const { cli, url } = await run(dir);
     // The file imports valibot, which the executable carries, racku from the Worker host, and
-    // a file of its own, which its firmware bundles.
+    // files of the app's own, beside it and above its folder, as connectors.ts would be, which
+    // its firmware bundles.
     expect(await greet(url)).toEqual({ text: "Hello, world!", from: "outside" });
     expect(cli.output).toContain(`hello runs ${join(dir, "devices", "hello.ts")}`);
     // The device's own RackError reaches the caller with its code.
