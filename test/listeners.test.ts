@@ -578,19 +578,8 @@ describe("listener defaults and limits", () => {
     for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, "app.test"]) {
       expect(await status(host)).toStartWith("HTTP/1.1 200");
     }
-  });
-
-  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
-  test("every spelling of loopback gets the Host check, which refuses a Host of any other form", async () => {
-    const { running } = await startRack(listenerRack({ hostname: "127.1" }));
-    const { port, hostname } = await urlOf(running);
-    expect(hostname).toBe("127.0.0.1");
-    const status = (host: string) =>
-      rawStatus(Number(port), ["GET /who HTTP/1.1", `Host: ${host}`, "Connection: close"]);
-    expect(await status("evil.test")).toStartWith("HTTP/1.1 403");
-    for (const host of [`127.0.0.1:${port}`, `127.1:${port}`, `LOCALHOST:${port}`]) {
-      expect(await status(host)).toStartWith("HTTP/1.1 200");
-    }
+    // A Host of another form than name, name:port, [ipv6], or [ipv6]:port gets 403.
+    // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
     for (const host of [
       `127.0.0.1:${port}x`,
       "127.0.0.1:99999",
@@ -600,6 +589,20 @@ describe("listener defaults and limits", () => {
       "127.0.0.1:",
     ]) {
       expect(await status(host)).toStartWith("HTTP/1.1 403");
+    }
+  });
+
+  // Windows binds no 127.1, as Linux and macOS do; there, no listener can have that spelling.
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
+  test.skipIf(WINDOWS)("every spelling of loopback gets the Host check", async () => {
+    const { running } = await startRack(listenerRack({ hostname: "127.1" }));
+    const { port, hostname } = await urlOf(running);
+    expect(hostname).toBe("127.0.0.1");
+    const status = (host: string) =>
+      rawStatus(Number(port), ["GET /who HTTP/1.1", `Host: ${host}`, "Connection: close"]);
+    expect(await status("evil.test")).toStartWith("HTTP/1.1 403");
+    for (const host of [`127.0.0.1:${port}`, `127.1:${port}`, `LOCALHOST:${port}`]) {
+      expect(await status(host)).toStartWith("HTTP/1.1 200");
     }
   });
 

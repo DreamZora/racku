@@ -277,11 +277,12 @@ describe("http-panel requests", () => {
     expect(await rawStatus(port, head(`Content-Length: ${128 * 1024}`))).toStartWith(
       "HTTP/1.1 413",
     );
-    const chunk = "x".repeat(16 * 1024);
-    const chunked = `${`${chunk.length.toString(16)}\r\n${chunk}\r\n`.repeat(8)}0\r\n\r\n`;
-    expect(await rawStatus(port, head("Transfer-Encoding: chunked"), chunked)).toStartWith(
-      "HTTP/1.1 413",
-    );
+    // Its pieces come 100 ms apart, so that it passes streamThreshold, and goes to the device,
+    // before it crosses maxBodySize, which a body that arrives at once, as on Windows, wouldn't.
+    const chunk = "x".repeat(32 * 1024);
+    const pieces = [...Array(4).fill(`${chunk.length.toString(16)}\r\n${chunk}\r\n`), "0\r\n\r\n"];
+    const answer = await dripResponse(port, head("Transfer-Encoding: chunked"), pieces, 100);
+    expect(answer).toStartWith("HTTP/1.1 413");
     // The chunked body reached the device as a stream, which failed when it crossed the limit.
     const streams = await waitFor(async () => {
       const served = (await metricsOf(running, "web")).provides.http?.handle;

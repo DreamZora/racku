@@ -10,7 +10,7 @@
  * @decision .agents/decisions/261118_015210-ci-with-windows.md#decision
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, stat, symlink, unlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
@@ -341,7 +341,10 @@ describe("the TCP endpoint", () => {
       if (!WINDOWS) await unlink(paths.socket).catch(() => undefined);
       const ctl = run(["ctl", "status"], created.dir);
       expect(await ctl.exited()).toBe(1);
-      expect(ctl.output).toContain(`no running rack has the base directory ${created.dir}`);
+      // rack ctl names the directory where it runs by its real path, as macOS gives it.
+      expect(ctl.output).toContain(
+        `no running rack has the base directory ${realpathSync(created.dir)}`,
+      );
       expect(heard).toEqual([]);
     } finally {
       await taker.stop(true);
