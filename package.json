@@ -6,7 +6,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/DreamZora/rack42u.git"
+    "url": "git+https://github.com/DreamZora/racku.git"
   },
   "engines": {
     "bun": ">=1.4.4"

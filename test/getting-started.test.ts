@@ -204,7 +204,7 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
   // Add racku as the guide does, from the repository of the files under test.
   const add = command("bun add ").split(" ");
   const shown = add.find((word) => word.startsWith("git+ssh://")) ?? "";
-  expect(shown).toMatch(/^git\+ssh:\/\/git@github\.com\/DreamZora\/rack42u\.git#v\d+\.\d+\.\d+$/);
+  expect(shown).toMatch(/^git\+ssh:\/\/git@github\.com\/DreamZora\/racku\.git#v\d+\.\d+\.\d+$/);
   const { url, commit } = await repository();
   const install = add.map((word) => (word === shown ? `${url}#${commit}` : word));
   const cache = join(WORK, "cache");

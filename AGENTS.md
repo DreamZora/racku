@@ -47,7 +47,8 @@ This file defines the project background, architectural constraints, and working
   - [Installers for net-tool, whose shell runs the rack as a sidecar compiled by rack compile](.agents/decisions/261120_203926-net-tool-installers.md) is implemented: `bun run bundle` in `examples/net-tool/app` builds a `.deb`, a `.dmg`, or an NSIS setup whose shell runs the compiled rack, with a Devices dialog and the setting `replaceDevices`, manual or automatic; `.github/workflows/net-tool.yml` builds and smoke-tests the three.
   - [Hot-plug directories, whose devices come and go with their files, and the contracts through which hosts reach them](.agents/decisions/261121_065823-hot-plug-directories.md) is implemented: `hotplug` in scanned manifests, whose devices start on their own and are left out when they can't run; every needs, which reach every device below that provides a connector; the standard connector `commands/v1`; the bench's stubs by device name; and the watch of the hot-plug directories under `rack start`.
 - [The first formal release, 1.0.0, published to npm from a public repository](.agents/decisions/261122_005312-first-formal-release.md) is accepted, and waits for what its [Before 1.0.0](.agents/decisions/261122_005312-first-formal-release.md#before-100) lists, such as [the fixes from the security review](.agents/decisions/261122_011655-security-review-fixes.md) and [a trial round on the newer features](.agents/decisions/261122_005441-trials-of-the-newer-features.md).
-- The project and its package are named racku, as [The project and its package are named racku](.agents/decisions/261122_044025-the-name-racku.md) decides. The repository keeps the name rack42u until the user renames it, and so do the informal tags up to v0.6.0 and the decisions before that one.
+- The project and its package are named racku, as [The project and its package are named racku](.agents/decisions/261122_044025-the-name-racku.md) decides; the informal tags up to v0.6.0, and the decisions before that one, keep the name rack42u.
+- The repository is public since 2026-11-22, as `DreamZora/racku`, as [The repository is public before the first formal release](.agents/decisions/261122_062703-public-before-the-first-release.md) records: with `SECURITY.md`, private vulnerability reporting, and actions pinned by commit.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
 
 ## Project positioning
@@ -182,7 +183,7 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 
 [Informal versions until the first release, and the Bun versions racku follows](.agents/decisions/261119_054816-versions-and-bun.md) decides these rules.
 
-- racku has no formal release yet. Until the user cuts the first one, every version is informal: any may break the API, a version is tagged only at the user's word, and the repository stays private. Apps depend on racku through git.
+- racku has no formal release yet. Until the user cuts the first one, every version is informal: any may break the API, and a version is tagged only at the user's word. The repository is public since 2026-11-22, as [The repository is public before the first formal release](.agents/decisions/261122_062703-public-before-the-first-release.md) records. Apps depend on racku through git.
 - racku names a minimum Bun version, not a pinned one, and supports every later release.
   - The minimum is 1.4.4: Bun 1.3.13 crashes when a Worker that used a transferred `MessagePort` ends, and the backplane's data channel is such a port.
   - `engines.bun` names it as `>=1.4.4`. `@types/bun`, `.github/workflows/check.yml` and `net-tool.yml`, the README's Requirements, and this file name the same version, and `test/bun-version.test.ts` checks that they agree.
@@ -242,6 +243,7 @@ docs/                user documentation; README.md is its map
   images/            rack.html, the source of the README's image, and rack.png, which
                      bun run render:images renders with Chrome or Chromium
 LICENSE              MIT
+SECURITY.md          how to report a vulnerability privately, and what racku protects against
 package.json         manifest, exports, bin, and scripts
 tsconfig.json        TypeScript configuration
 biome.json           formatter and linter configuration
