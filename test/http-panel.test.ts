@@ -517,37 +517,40 @@ describe("http-panel requests", () => {
     });
     const port = Number(new URL(rec.panelUrl()).port);
     const size = 64 * MiB;
-    let got = 0;
-    let reading = false;
-    let closed = false;
-    const socket = netConnect({ host: "127.0.0.1", port }, () => {
-      socket.write(
-        `GET /big?size=${size} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
-      );
-    });
-    socket.on("data", (chunk: Buffer) => {
-      got += chunk.byteLength;
-      // The client reads 1 MiB, and then nothing, until the test lets it read again.
-      if (got > MiB && !reading) socket.pause();
-    });
-    socket.on("close", () => {
-      closed = true;
-    });
-    socket.on("error", () => {});
-    const stopped = () =>
-      rec.logs.filter((e) => e.message === "a client stopped reading its response");
-    const started = performance.now();
-    await waitFor(() => stopped().length > 0, 10_000);
-    expect(performance.now() - started).toBeLessThan(8_000);
-    expect(stopped()).toEqual([
-      expect.objectContaining({ level: "warn", data: { route: "big.http" } }),
-    ]);
-    // What the client reads now ends short of the body.
-    reading = true;
-    socket.resume();
-    await waitFor(() => closed, 10_000);
-    expect(got).toBeLessThan(size);
-  }, 20_000);
+    const client = Bun.spawn(
+      [process.execPath, join(FIXTURES, "stalled-reader.ts"), String(port), String(size)],
+      { stdout: "pipe", stderr: "inherit" },
+    );
+    const output: string[] = [];
+    const reading = (async () => {
+      const decoder = new TextDecoder();
+      for await (const chunk of client.stdout) output.push(decoder.decode(chunk, { stream: true }));
+    })();
+    try {
+      await waitFor(() => output.join("").includes("stopped"), 10_000);
+      // A frozen process reads nothing, so the kernel's buffers fill, as for a client that hangs.
+      if (process.platform !== "win32") process.kill(client.pid, "SIGSTOP");
+      const stopped = () =>
+        rec.logs.filter((e) => e.message === "a client stopped reading its response");
+      const started = performance.now();
+      await waitFor(() => stopped().length > 0, 10_000);
+      expect(performance.now() - started).toBeLessThan(8_000);
+      expect(stopped()).toEqual([
+        expect.objectContaining({ level: "warn", data: { route: "big.http" } }),
+      ]);
+      // What the client reads once it goes on ends short of the body.
+      if (process.platform !== "win32") process.kill(client.pid, "SIGCONT");
+      await client.exited;
+      await reading;
+      const closed = /closed (\d+)/.exec(output.join(""));
+      expect(Number(closed?.[1])).toBeLessThan(size);
+    } finally {
+      if (client.exitCode === null) {
+        if (process.platform !== "win32") process.kill(client.pid, "SIGCONT");
+        client.kill();
+      }
+    }
+  }, 30_000);
 
   // @doc docs/guides/http.md#configuration
   test("streamThreshold decides which request bodies go to the device as bytes and which stream", async () => {
