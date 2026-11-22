@@ -13,6 +13,7 @@ import { errorOf, useRacks } from "./fixtures/app.ts";
 const startRack = useRacks();
 
 // @doc docs/reference/api.md#commands
+// @doc docs/guides/hotplug.md#commands
 describe("the commands connector", () => {
   test("list() describes each command, with the JSON Schemas that its schemas give", async () => {
     const { running } = await startRack({ slots: { 1: slot("./devices/commander.ts") } });
@@ -55,6 +56,7 @@ describe("the commands connector", () => {
     expect((await errorOf(run("nothing", undefined))).code).toBe("RACK_NO_ROUTE");
   });
 
+  // @doc docs/reference/limits.md#hot-plug-devices
   test("commands() refuses more than 256 commands, a name that isn't one, and a command without schemas or run", () => {
     const one = { input: z.string(), run: (text: string) => text };
     const many = Object.fromEntries(Array.from({ length: 257 }, (_, i) => [`c${i}`, one]));

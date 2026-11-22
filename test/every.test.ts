@@ -19,6 +19,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
 
+// @doc docs/guides/hotplug.md#every-needs
 describe("every needs in a rack placed by hand", () => {
   test("reach every device below that provides the connector, in slot order, and call each by name", async () => {
     const app = await toolApp(apps);
@@ -119,6 +120,7 @@ export default device({ model: "both", provides: { a: Tool, b: Tool }, powerOn: 
     ]);
   });
 
+  // @doc docs/reference/limits.md#hot-plug-devices
   test("calls to one device wait for its own bound, and calls to the others go on", async () => {
     const app = await toolApp(apps);
     // A tool that answers no call, and ends each one only when the call is cancelled.
@@ -164,6 +166,7 @@ export default device({
   }, 15_000);
 });
 
+// @doc docs/guides/hotplug.md#every-needs
 describe("every needs in a scanned rack", () => {
   test("place what they reach below the device, start nothing, and see devices that the plan starts", async () => {
     const app = await toolApp(apps);

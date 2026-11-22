@@ -35,7 +35,7 @@ test("greeter greets and remembers the last name", async () => {
 
 | Option | Meaning |
 |---|---|
-| `needs` | One `stub()` per need, by need name, `own` and `patched()` needs included. |
+| `needs` | One `stub()` per need, by need name, `own` and `patched()` needs included. For an [every need](hotplug.md#every-needs), an object of stubs by the names of the devices that it reaches, such as `{ tools: { upper: stub(Tool, { … }) } }`. |
 | `config`, `name` | As `slot()` takes them. |
 | Others | Those of `start()`, such as `baseDir`, `callTimeout`, and `watchdog`; the bench records the log itself. |
 

@@ -28,6 +28,7 @@ The documentation ships with the package, and this skill names each document by 
 - In-memory state lives in the device file's module variables, which belong to one instance, since each instance runs in a Worker of its own: `node_modules/rack42u/docs/guides/devices.md#a-device-file`. It reaches a new instance only through `snapshot` and `restore`, and only in a swap; a crash or a restart starts the device without it. Keep state that matters in a storage device: `node_modules/rack42u/docs/guides/updates.md#hot-swaps-cold-swaps-and-restarts` and `node_modules/rack42u/docs/guides/faults.md#crashes`.
 - A device that must never run twice at once, such as one that holds a file or a lock, declares `swap: "cold"`: `node_modules/rack42u/docs/guides/updates.md#hot-swaps-cold-swaps-and-restarts`.
 - Device files import the framework as `rack42u` and `rack42u/std`, tests as `rack42u/bench` too, and the app declares its dependencies in its `package.json`, so that firmware keeps them outside the bundle: `node_modules/rack42u/docs/concepts.md#firmware`.
+- Plugins of an app are devices in a hot-plug directory, which start on their own and come and go with their files. A host reaches them with `every(connector)`, calls the extension points that they provide, and discovers their own calls through `commands/v1`; nothing registers by a call: `node_modules/rack42u/docs/guides/hotplug.md`.
 
 ## Pitfalls
 

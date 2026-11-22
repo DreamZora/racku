@@ -92,7 +92,7 @@ See [A rack in one executable](../guides/running.md#a-rack-in-one-executable).
 
 ## Watching
 
-`rack dev`, and an executable with `--watch`, watch the base directory and reload the rack after changes.
+`rack dev`, and an executable with `--watch`, watch the base directory and reload the rack after changes; `rack start` watches it for changes in its hot-plug directories.
 
 | Bound | Value | Beyond it |
 |---|---|---|
@@ -102,6 +102,20 @@ See [A rack in one executable](../guides/running.md#a-rack-in-one-executable).
 | Builds per reload | One per device file, as at `ctl reload` | |
 
 See [Hot reload with rack dev](../guides/running.md#hot-reload-with-rack-dev) and [A rack in one executable](../guides/running.md#a-rack-in-one-executable).
+
+## Hot-plug devices
+
+| Bound | Value | Beyond it |
+|---|---|---|
+| Hot-plug devices | The rack's `size`, less what the fixed instances take | The hot-plug devices that come last in the order of placement are left out. |
+| Devices that an every need reaches | Those below its device, fewer than the rack's `size` | |
+| Calls that wait for one device of an every need | `queueLimit`, for each device on its own | A call fails at once with `RACK_OVERLOADED`. |
+| `changed()` calls | One for each change of what an every need reaches | |
+| Commands of one device | 256, each named with 1 to 64 letters, digits, `.`, `_`, and `-`, from a letter | `commands()` throws `RACK_INVALID_INPUT`, and the device fails to power on. |
+| Log entries about a file that is left out | One at each start, and one when the file or the reason changes | |
+| The watch of `rack start` | As for `rack dev`, in [Watching](#watching) | |
+
+See [Hot-plug devices](../guides/hotplug.md).
 
 ## The bench
 

@@ -45,6 +45,7 @@ This file defines the project background, architectural constraints, and working
 - P4 is under way on `feat/p4`. Its first decision, [A rack in one executable, which runs devices from files beside it and falls back to the ones inside](.agents/decisions/261120_011627-single-executables.md), is implemented: `rack compile` packages a rack into one executable, which runs a device from a file in its base directory when there is one, and falls back to the device packaged inside.
   - [Executables that apply changed device files on command, or as they change with --watch](.agents/decisions/261120_221450-watching-outside-files.md) is implemented: an executable with `--watch` reloads its rack as device files and JSON in its base directory change, with the watcher of `rack dev`, which no longer ends when its base directory is removed. [A watching rack also watches its base directory's parent](.agents/decisions/261121_034144-watching-the-parent-directory.md), so that it notices that removal on macOS too.
   - [Installers for net-tool, whose shell runs the rack as a sidecar compiled by rack compile](.agents/decisions/261120_203926-net-tool-installers.md) is implemented: `bun run bundle` in `examples/net-tool/app` builds a `.deb`, a `.dmg`, or an NSIS setup whose shell runs the compiled rack, with a Devices dialog and the setting `replaceDevices`, manual or automatic; `.github/workflows/net-tool.yml` builds and smoke-tests the three.
+  - [Hot-plug directories, whose devices come and go with their files, and the contracts through which hosts reach them](.agents/decisions/261121_065823-hot-plug-directories.md) is implemented, on `feat/hot-plug`: `hotplug` in scanned manifests, whose devices start on their own and are left out when they can't run; every needs, which reach every device below that provides a connector; the standard connector `commands/v1`; the bench's stubs by device name; and the watch of the hot-plug directories under `rack start`.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
 
 ## Project positioning
@@ -267,6 +268,7 @@ src/                 framework source
   std/               entry point of rack42u/std and the standard devices
     http.ts          the http/v2 connector and httpHandler
     http-panel.ts    the standard HTTP panel device
+    commands.ts      the commands/v1 connector and commands(), through which devices offer calls
 test/                bun:test tests, named *.test.ts
   fixtures/          test devices, connectors, and helpers; no tests
 examples/shop-api/   the example app

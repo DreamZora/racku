@@ -116,7 +116,8 @@ What works, on Linux, macOS, and Windows:
 - crash resets, watchdogs, bounded backlogs, and threads stuck in native code;
 - listeners that devices open, and the HTTP panel, with WebSocket, files sent from disk, and certificates that change without a restart;
 - the standard `memkv` and `sqlite` devices, the `rack` command, a test bench, injected faults, counters, and logs for other programs;
-- a rack in one executable, from `rack compile`, whose devices files beside it replace, at a reload or, with `--watch`, as they change.
+- a rack in one executable, from `rack compile`, whose devices files beside it replace, at a reload or, with `--watch`, as they change;
+- hot-plug directories, whose devices come and go with their files and are left out when they can't run, every needs that reach them, and commands that hosts discover.
 
 There is no formal release yet: any version until the first one may break the API. Apps depend on rack42u through git, at a tag or a commit, as [Getting started](docs/getting-started.md#add-rack42u) shows.
 

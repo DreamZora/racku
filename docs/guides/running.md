@@ -35,6 +35,10 @@ A program written in Bun can instead run a rack inside itself with `start()`, wi
 - **A removed base directory:** watching stops, the log errors `stopped watching <dir>: it was removed`, and the rack runs on until it is stopped.
 - **A watch that can't start,** such as at the system's limit of watches, logs `cannot watch <dir>`, and the rack runs on; `rack ctl reload` applies changes.
 
+## Hot-plug directories under rack start
+
+`rack start` watches the hot-plug directories of a scanned rack, as [Hot-plug devices](hotplug.md#when-changes-apply) describes, with the watcher of `rack dev`. A change of a device file or of JSON in them reloads the hot-plug devices alone: a new file's device is plugged in, a changed one is swapped, and a removed one is unplugged. The fixed devices change at `rack ctl reload`, and the log says `watching the hot-plug directories plugins/ for changes`.
+
 ## Running a rack from code
 
 A program starts a rack with `start()`. This one runs the app that the guides build, the greeter, and calls it twice:

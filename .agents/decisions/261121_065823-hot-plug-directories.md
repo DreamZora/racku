@@ -339,6 +339,25 @@ None. Standard JSON Schema is an interface that `commands()` checks for; the tes
   - A test of devices that come and go under a host runs a rack, since the bench's stubs are given at its start.
 - Follow-up work, each with a decision of its own when it is needed: routes of the HTTP panel through every needs; every needs of hot-plug devices; commands that stream; and a device whose commands change while its instance runs.
 
+## Implementation
+
+- **Every needs.**
+  - `src/device.ts`: `every()`, `isEvery()`, and the types `Every`, `PortSet`, `ReachedDevice`, and `EveryEvents`; `src/protocol.ts`: `NeedInfo.every`, and the request `members`.
+  - `src/worker.ts`: an `EveryState` for each every need, with a need state for each device that it reaches, under the key `<need>:<device>`, which shares the declared need's handlers and counters; `portSet()`, `everyEvents()`, and `setMembers()`.
+  - `src/backplane.ts`: `connect()` links what an instance's every needs reach and sends the lists before its hooks, `syncEvery()` brings them up to date, and `install()` and `release()` move and release those links too.
+  - `src/rack.ts`: `#everyOf()` works out what each every need reaches, and `#syncEvery()` runs after each operation, before an unplug drains, and after a fallback. `src/plan.ts`: `place()` puts what every needs reach below their devices, and `cycleOf()` names a cycle's path.
+- **Hot-plug directories.**
+  - `src/manifest.ts`: `hotplug` in `ScannedRackSpec` and `ScanSpec`; `src/rack.ts` refuses one that overlaps a devices directory, and a `use` entry that names a hot-plug model.
+  - `src/rack.ts`: `#scanHotplug()` builds and describes the hot-plug files, `#withHotplug()` places them with `placeHotplug()` of `src/plan.ts`, and `#prepare()`, `#powerUp()`, and `#beginChange()` leave out the groups that fail. `#startCrashes` keeps the hot-plug devices that crash while the rack starts out of the start's fault.
+  - `reloadHotplug()` reloads the hot-plug devices alone, which `runRack()` in `src/commands.ts` calls from the watch of `rack start`.
+  - `status()` gives `hotplug`; `#logHotplugStart()` and `#logLeftOut()` write the log's entries; `planRack()` reports `hotplug` and `leftOut`, which `rack plan` prints.
+  - `src/compile.ts` refuses `hotplug`.
+- **Commands:** `src/std/commands.ts`, `Commands`, `commands()`, `Command`, and `CommandInfo`.
+- **The bench:** `BenchNeeds`, and the `key` of `StubDeviceSpec`, in `src/bench.ts`.
+- **Tests:** `test/every.test.ts`, `test/hotplug.test.ts`, and `test/std-commands.test.ts`, with `test/fixtures/tools.ts` and `test/fixtures/devices/commander.ts`. The tools app of the guide runs in `test/hotplug.test.ts`.
+- **Documentation:** `docs/guides/hotplug.md`, and hot-plug devices in Concepts, Racks, Devices, Running, Testing, the reference of the API, the `rack` command, the reports, and the limits, the README's status, and the skill.
+- The watch of `rack start` logs `watching the hot-plug directories <directories> for changes`, which names the directories.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-21, after three drafts. On the first, the user answered: "1. Call it hotplug. 2. Plugins also need to be monitored for changes. 3. Also, there is another issue with plugins: how they are invoked—for example, registering some hooks and providing some calls—needs to be able to hook in, and devices that support plugins need to discover the calls they provide. All of this needs careful consideration."

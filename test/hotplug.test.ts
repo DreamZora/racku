@@ -11,11 +11,21 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { rack } from "rack42u";
+import { type RackManifest, rack, start } from "rack42u";
 import { compileRack } from "../src/compile.ts";
 import { planRack, reloadHotplug } from "../src/rack.ts";
-import { Cli, errorOf, type TempApp, tempApp, useControlDir, useRacks } from "./fixtures/app.ts";
+import {
+  Cli,
+  errorOf,
+  Recorder,
+  ROOT,
+  type TempApp,
+  tempApp,
+  useControlDir,
+  useRacks,
+} from "./fixtures/app.ts";
 import { CONNECTORS, HOST, host, tool } from "./fixtures/tools.ts";
+import { typecheck } from "./fixtures/typecheck.ts";
 
 const startRack = useRacks();
 useControlDir();
@@ -40,6 +50,11 @@ async function hotplugApp(): Promise<TempApp> {
 
 const names = (running: { status(): { name: string }[] }) => running.status().map((s) => s.name);
 
+// @doc docs/guides/hotplug.md#hot-plug-directories
+// @doc docs/guides/hotplug.md#when-changes-apply
+// @doc docs/guides/hotplug.md#when-a-hot-plug-device-fails
+// @doc README.md#status
+// @doc docs/guides/hotplug.md#watching-hot-plug-devices
 describe("hot-plug directories", () => {
   test("their devices start without roots, below the host that reaches them, and the plan file records the fixed instances alone", async () => {
     const app = await hotplugApp();
@@ -163,6 +178,7 @@ export default device({
     expect(await host(running).run("upper", "Hi")).toBe("HI");
   });
 
+  // @doc docs/reference/limits.md#hot-plug-devices
   test("hot-plug devices that don't fit the rack are left out, last in order first", async () => {
     const app = await hotplugApp();
     const { running, rec } = await startRack({ ...SPEC, size: 2 }, { baseDir: app.dir });
@@ -201,6 +217,7 @@ export default device({
   });
 });
 
+// @doc docs/guides/hotplug.md#hot-plug-directories
 describe("hot-plug directories in the manifest", () => {
   test("a directory outside the base directory, or one that overlaps a devices directory, fails the manifest", async () => {
     expect(() => rack("test", { ...SPEC, hotplug: ["../plugins"] })).toThrow(
@@ -252,6 +269,8 @@ describe("hot-plug directories in the manifest", () => {
   });
 });
 
+// @doc docs/guides/hotplug.md#when-changes-apply
+// @doc docs/guides/running.md#hot-plug-directories-under-rack-start
 describe("the rack command with hot-plug directories", () => {
   const running: Cli[] = [];
   afterEach(async () => {
@@ -283,4 +302,84 @@ describe("the rack command with hot-plug directories", () => {
     await cli.waitFor(/upper unplugged/);
     expect(cli.process.exitCode).toBeNull();
   }, 30_000);
+});
+
+// @doc docs/guides/hotplug.md#extension-points
+// @doc docs/guides/hotplug.md#commands
+// @doc docs/guides/hotplug.md#where-hot-plug-devices-go
+describe("the tools app of the hot-plug guide", () => {
+  /** The files of the guide's app, as its code blocks give them. */
+  const guideFiles = async () => {
+    const guide = await Bun.file(join(ROOT, "docs", "guides", "hotplug.md")).text();
+    const files = new Map<string, string>();
+    for (const [, code = ""] of guide.matchAll(/```ts\n([\s\S]*?)```/g)) {
+      const path = /^\/\/ (tools\/[\w./-]+\.ts)\n/.exec(code)?.[1];
+      if (path !== undefined) files.set(path, code);
+    }
+    return files;
+  };
+
+  test("type-checks", async () => {
+    const files = await guideFiles();
+    expect([...files.keys()].sort()).toEqual([
+      "tools/connectors.ts",
+      "tools/devices/tools.ts",
+      "tools/plugins/exclaim.ts",
+      "tools/plugins/upper.ts",
+      "tools/rack.ts",
+    ]);
+    expect(await typecheck(files)).toBe("");
+  }, 60_000);
+
+  test("runs its transforms as a pipeline, lists and runs its devices' commands, and plugs in a new one", async () => {
+    const app = await tempApp();
+    apps.push(app);
+    for (const [path, code] of await guideFiles()) {
+      await app.write(path, code.replace("port: 3000", "port: 0"));
+    }
+    const rec = new Recorder();
+    const imported = (await import(join(app.dir, "tools", "rack.ts"))) as { default: RackManifest };
+    const running = await start(imported.default, {
+      baseDir: join(app.dir, "tools"),
+      logger: rec.logger,
+    });
+    try {
+      expect(running.status().map((s) => `U${s.u} ${s.name}`)).toEqual([
+        "U1 exclaim",
+        "U2 upper",
+        "U3 tools",
+        "U4 http-panel",
+      ]);
+      expect((await app.read("tools/tools.plan")).split("\n").slice(2)).toEqual([
+        "U1 tools tools -",
+        "U2 http-panel http-panel - tools_http=tools.http",
+        "",
+      ]);
+      const url = rec.panelUrl();
+      const post = (path: string, body: string) => fetch(`${url}${path}`, { method: "POST", body });
+      expect(await (await post("tools", "hi")).text()).toBe("HI!");
+      expect(await (await fetch(`${url}tools`)).json()).toEqual([
+        { device: "upper", commands: [{ name: "shout", description: "Upper-cases a text" }] },
+      ]);
+      const shout = await post("tools/upper/shout", JSON.stringify({ text: "hey" }));
+      expect(await shout.json()).toBe("HEY");
+      // A new file runs at the next reload, which the watch of rack start or rack dev starts.
+      await app.write(
+        "tools/plugins/twice.ts",
+        `import { device } from "rack42u";
+import { Transform } from "../connectors.ts";
+
+export default device({
+  model: "twice",
+  provides: { transform: Transform },
+  powerOn: () => ({ transform: { apply: (text) => text + text } }),
+});
+`,
+      );
+      await running.reload();
+      expect(await (await post("tools", "ab")).text()).toBe("AB!AB!");
+    } finally {
+      await running.stop();
+    }
+  });
 });

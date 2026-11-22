@@ -1471,11 +1471,9 @@ class Rack implements InstanceHost {
    */
   async #logHotplugStart(): Promise<void> {
     for (const [dir, count] of this.#hotplugFiles) {
-      const holds =
-        count === undefined
-          ? "doesn't exist"
-          : `holds ${count} device file${count === 1 ? "" : "s"}`;
-      this.#log("info", `hot-plug directory ${dir}/ ${holds}`);
+      if (count === undefined) this.#log("info", `hot-plug directory ${dir}/ doesn't exist`);
+      else if (count === 1) this.#log("info", `hot-plug directory ${dir}/ holds 1 device file`);
+      else this.#log("info", `hot-plug directory ${dir}/ holds ${count} device files`);
     }
     await this.#logLeftOut();
   }

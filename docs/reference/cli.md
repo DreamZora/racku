@@ -20,6 +20,8 @@
 
 ## Flags of rack start and rack dev
 
+`rack start` watches the hot-plug directories of a scanned rack, and applies the changes of its hot-plug devices alone, as [Hot-plug directories under rack start](../guides/running.md#hot-plug-directories-under-rack-start) describes; `rack dev` watches the whole base directory.
+
 | Flag | Meaning |
 |---|---|
 | `--no-plan` | Run a scanned rack without its plan file: the dependency graph and the priorities alone decide the order. See [The plan file](../guides/racks.md#the-plan-file). |

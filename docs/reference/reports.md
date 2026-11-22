@@ -23,6 +23,7 @@ A running rack reports what it does in four ways: `status()`, `metrics()`, `hist
 | `stuck` | The threads of earlier instances that are stuck in native code, each with its `firmware`, `since`, and the `listeners` it kept. |
 | `listeners` | The installed instance's listeners, each with its `url`, `certificates`, `requests` in flight, and open `webSockets`. |
 | `owner` | For a copy that serves an `own` need, the instance whose need it serves. |
+| `hotplug` | `true` for a device of a [hot-plug directory](../guides/hotplug.md), and for a copy that one owns; absent otherwise. |
 
 ## metrics()
 
@@ -109,7 +110,9 @@ The rack's entries that a program or an operator may look for:
 | `<device> swapped` | info | A hot swap installed a new instance of the device. | |
 | `<device> crashed: <detail>` | error | A device crashed. | |
 | `<device> resetting` | warn | The rack resets a device after a crash or a watchdog bite. | |
-| `watching <directory> for changes` | info | `rack dev` watches the base directory. | |
+| `watching <directory> for changes` | info | `rack dev` watches the base directory, and `rack start` the hot-plug directories, which it names as `the hot-plug directories plugins/`. | |
+| `hot-plug directory <directory>/ holds <n> device files` | info | At start, for each hot-plug directory: `holds 1 device file` for one, and `doesn't exist` for a directory that doesn't. | |
+| `<path> left out: <reason>` | warn | A hot-plug file can't run; at start, and at a reload when the file or the reason changed. | `code` |
 | `standard input closed` | info | With `--stop-on-stdin-close`, the rack's standard input closed, and the rack shuts down. | |
 
 The other entries are messages for people, and their wording may change.

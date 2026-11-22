@@ -90,6 +90,10 @@ The rack contains a fault to the device that has it, and recovers along a define
 
 External connections belong to devices. A device opens HTTP and WebSocket listeners with `ctx.serve()`, and the rack hands them over when the device swaps, so that a port keeps answering. A panel is a device whose job is such connections: the standard [HTTP panel](guides/http.md) routes requests and WebSocket messages to ports of other devices. [Listeners](guides/listeners.md) describes the handover and its limits.
 
+## Hot-plug devices
+
+A scanned rack can name hot-plug directories, whose devices start on their own and come and go with their files while the rack runs, without an edit of the manifest. Nothing that the plan file records depends on them: a host device reaches them through an every need, which reaches every device below that provides a connector, so a hot-plug device that fails is left out and the rest of the rack runs as before. An app defines its extension points as connectors, which hot-plug devices provide, and they offer calls of their own through the standard `commands/v1`. [Hot-plug devices](guides/hotplug.md) gives the rules.
+
 ## Watching a rack
 
 A running rack reports what it does: `status()` gives each device's state and firmware, `metrics()` counts calls and events, `history()` lists the updates, and the log says what the rack and each device did. `rack ctl` reaches the same operations from a terminal, through a management endpoint that only the rack's user can use. [Managing a running rack](guides/managing.md) and [Reports](reference/reports.md) describe them.

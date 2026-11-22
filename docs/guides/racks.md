@@ -51,6 +51,7 @@ export default rack("app", {
   - Every `.ts`, `.tsx`, `.js`, and `.mjs` file below a directory, at any depth, must default-export a device. Files and folders whose names start with `_` or `.` are skipped, and so is `node_modules`.
   - A `slot()` or standard-device spec adds one file, and its `config` becomes that model's default. A `name` in it defines a variant: the same file under another model name.
 - **`roots`** names the models the rack starts on its own. Everything else starts only when something needs it, such as the models that a panel's routes name.
+- **`hotplug`** names directories whose devices start on their own, and come and go with their files while the rack runs, as [Hot-plug devices](hotplug.md) describes.
 
 ## Shared instances and own copies
 

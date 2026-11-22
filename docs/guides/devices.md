@@ -63,7 +63,7 @@ The first argument of every hook, `ctx`, provides:
 
 | Member | Purpose |
 |---|---|
-| `ctx.ports.<need>.<method>(input, { timeout?, signal?, transfer?, streamTimeout? })` | Call a needed connector. |
+| `ctx.ports.<need>.<method>(input, { timeout?, signal?, transfer?, streamTimeout? })` | Call a needed connector. For an [every need](hotplug.md#every-needs), `ctx.ports.<need>` lists the devices it reaches, and `get(name)` gives each one's port. |
 | `ctx.on.<need>.<event>(handler)` | Subscribe to an event; returns an unsubscribe function. |
 | `ctx.emit.<port>.<event>(payload)` | Publish an event on a provided port. |
 | `ctx.serve(options)` | Open a listener, in `powerOn` only; see [Listeners](listeners.md). |

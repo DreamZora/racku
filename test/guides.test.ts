@@ -31,7 +31,10 @@ function files(): Map<string, string> {
   for (const { name, text } of GUIDES) {
     for (const [, code = ""] of text.matchAll(/```ts\n([\s\S]*?)```/g)) {
       const path = /^\/\/ ([\w./-]+\.ts)\n/.exec(code)?.[1];
-      if (path === undefined) continue;
+      // The hot-plug guide stands on its own, with an app of its own under tools/, which
+      // test/hotplug.test.ts runs and type-checks.
+      // @decision .agents/decisions/261121_065823-hot-plug-directories.md#tests
+      if (path === undefined || path.startsWith("tools/")) continue;
       if (result.has(path))
         throw new Error(`${path} appears twice in the guides, again in ${name}`);
       result.set(path, code);
