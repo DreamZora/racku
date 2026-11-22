@@ -1,0 +1,4 @@
+# racku plan of rack bot: slot, instance, model, owner, and wiring.
+# Written by `rack dev` and `rack plan --write`; do not edit by hand.
+U1 bot bot -
+U2 http-panel http-panel - bot_http=bot.http

@@ -1,0 +1,14 @@
+{
+  "name": "files",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "rack start",
+    "dev": "rack dev",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "racku": "git+file:///home/zmmfly/prjs/rack42u#76ec9c28a930ab6d0d6e6260980764cdaaddd616",
+    "valibot": "^1.5.0"
+  }
+}
