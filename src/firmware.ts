@@ -7,7 +7,7 @@
  * @decision .agents/decisions/261119_213017-firmware-import-meta.md
  * @decision .agents/decisions/261120_011627-single-executables.md
  */
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -195,6 +195,15 @@ function carriedPackages(carried: NonNullable<PackagedBuild["carried"]>): Bun.Bu
  * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
  */
 function insideBaseDir(baseDir: string): Bun.BunPlugin {
+  // Bun resolves to real paths, as /private/var/... for /var/... on macOS.
+  const real = (() => {
+    try {
+      return realpathSync(baseDir);
+    } catch {
+      // A base directory that doesn't resolve has no files inside to resolve to.
+      return baseDir;
+    }
+  })();
   return {
     name: "racku-inside-base-dir",
     setup(build) {
@@ -208,7 +217,7 @@ function insideBaseDir(baseDir: string): Bun.BunPlugin {
           // The build reports a package that doesn't resolve, as it reports any other.
           return undefined;
         }
-        if (!isAbsolute(found) || within(found, baseDir)) return undefined;
+        if (!isAbsolute(found) || within(found, baseDir) || within(found, real)) return undefined;
         throw new Error(
           `${specifier} resolves to ${found}, outside the base directory ${baseDir}, and the executable doesn't carry it`,
         );

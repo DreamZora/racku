@@ -7,7 +7,7 @@
  * @decision .agents/decisions/261120_221450-watching-outside-files.md#tests
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -364,9 +364,9 @@ describe("an executable from rack compile", () => {
     const { cli, url } = await run(dir);
     expect(await greet(url)).toEqual({ text: "Hello, world", from: "packaged" });
     expect(cli.output).toContain("hello runs its packaged firmware: ");
-    expect(cli.output).toContain(
-      `above-the-base resolves to ${join(parent, "node_modules", "above-the-base", "index.js")}, outside the base directory`,
-    );
+    // Bun names the file by its real path, as /private/var/... for /var/... on macOS.
+    const file = join(realpathSync(parent), "node_modules", "above-the-base", "index.js");
+    expect(cli.output).toContain(`above-the-base resolves to ${file}, outside the base directory`);
     // A package inside the base directory is the base directory's own, and may come from there.
     const own = await baseDir({
       "node_modules/inside-the-base/package.json": JSON.stringify({
