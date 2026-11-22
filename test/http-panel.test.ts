@@ -114,6 +114,16 @@ const chatState = async (url: URL): Promise<ChatState> =>
 /** The socket id at the end of the chat device's welcome message. */
 const idOf = (welcome: string | undefined) => welcome?.split(" ").at(-1) as string;
 
+/**
+ * Waits until the rack has handled what the devices' Workers posted so far. A panel posts a log
+ * entry before it writes the response it is about, but the entry travels on its Worker's channel
+ * and the response on its socket, so a test that got a response may not have the entry yet. The
+ * answer to a request on the same channel comes after it.
+ */
+const handled = async (running: RackHandle) => {
+  await running.metrics();
+};
+
 /** Error entries of the panel's log. */
 const panelErrors = (rec: { logs: { device?: string; level: string; message: string }[] }) =>
   rec.logs.filter((e) => e.device === "http-panel" && e.level === "error");
@@ -188,7 +198,7 @@ describe("http-panel requests", () => {
 
   // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
   test("answers a failed call with 502, as it does response headers that Response rejects, and the log keeps the details", async () => {
-    const { get, rec } = await panelRack();
+    const { running, get, rec } = await panelRack();
     const failed = await get("/web/boom");
     expect([failed.status, await failed.json()]).toEqual([
       502,
@@ -199,6 +209,7 @@ describe("http-panel requests", () => {
       502,
       { code: "RACK_INVALID_OUTPUT", message: "the device's answer isn't valid" },
     ]);
+    await handled(running);
     const warnings = rec.logs.filter((e) => e.device === "http-panel" && e.level === "warn");
     expect(warnings).toContainEqual(
       expect.objectContaining({
@@ -216,13 +227,15 @@ describe("http-panel requests", () => {
   test("a failure of one code and route goes to the log once a minute, with how many came since", async () => {
     // A minute, shortened for the test; the panel's Worker copies the environment as it starts.
     process.env.RACKU_TEST_PANEL_WARN_MS = "400";
-    const { get, rec } = await panelRack();
+    const { running, get, rec } = await panelRack();
     for (let i = 0; i < 3; i++) expect((await get("/web/boom")).status).toBe(502);
     const failures = () =>
       rec.logs.filter((e) => e.device === "http-panel" && e.message === "a request failed");
+    await handled(running);
     expect(failures()).toHaveLength(1);
     await Bun.sleep(500);
     expect((await get("/web/boom")).status).toBe(502);
+    await handled(running);
     expect(failures()).toHaveLength(2);
     expect(failures()[1]?.data).toEqual({
       route: "web.http",
@@ -351,7 +364,7 @@ describe("http-panel requests", () => {
   // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-http-panel-and-listeners
   test("a streamed body may take longer than idleTimeout at 1 KiB/s or more, and gets 408 below", async () => {
     // Every body of 1 byte or more streams, so that the rate decides.
-    const { port, rec } = await panelRack({ idleTimeout: 1, streamThreshold: 0 });
+    const { running, port, rec } = await panelRack({ idleTimeout: 1, streamThreshold: 0 });
     const head = (extra: string) => [
       "POST /web/upload HTTP/1.1",
       `Host: 127.0.0.1:${port}`,
@@ -373,6 +386,7 @@ describe("http-panel requests", () => {
       expect(answer).toContain("the client sent its body too slowly");
       expect(performance.now() - started).toBeLessThan(2_500);
     }
+    await handled(running);
     const warnings = rec.logs.filter(
       (e) =>
         e.device === "http-panel" && e.message === "a client's body stalled or came too slowly",
@@ -736,7 +750,7 @@ describe("http-panel files", () => {
   test("a file that can't be read gets 502 with RACK_DEVICE_FAULT, and its path goes to the log only", async () => {
     const dir = await mkdtemp(join(tmpdir(), "racku-files-"));
     try {
-      const { rec, get } = await panelRack();
+      const { running, rec, get } = await panelRack();
       const unreadable = [join(dir, "gone.bin"), dir];
       for (const path of unreadable) {
         const response = await get(`/web/file?path=${encodeURIComponent(path)}`);
@@ -745,6 +759,7 @@ describe("http-panel files", () => {
           { code: "RACK_DEVICE_FAULT", message: "the file of the response can't be read" },
         ]);
       }
+      await handled(running);
       const logged = rec.logs.filter(
         (e) => e.device === "http-panel" && e.message === "the file of a response can't be read",
       );
@@ -903,11 +918,12 @@ describe("http-panel WebSocket", () => {
 
   // @doc docs/reference/limits.md#the-http-panel
   test("upgrades beyond maxConnections get 503, and the log says when refusing starts and ends", async () => {
-    const { url, port, rec } = await panelRack({ webSocket: { maxConnections: 2 } });
+    const { running, url, port, rec } = await panelRack({ webSocket: { maxConnections: 2 } });
     const first = await socketTo(url, "/chat");
     await socketTo(url, "/chat");
     expect(await rawStatus(port, upgrade(port, "/chat"))).toStartWith("HTTP/1.1 503");
     expect(await rawStatus(port, upgrade(port, "/chat"))).toStartWith("HTTP/1.1 503");
+    await handled(running);
     const entries = (message: string) =>
       rec.logs.filter((e) => e.device === "http-panel" && e.message === message);
     expect(entries("refusing WebSocket upgrades")).toEqual([
