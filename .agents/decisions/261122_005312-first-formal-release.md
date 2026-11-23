@@ -122,6 +122,24 @@ In this order:
 - **For the user:** making the repository public, turning on private vulnerability reporting, and publishing to npm.
 - **Runtime:** nothing changes.
 
+## Implementation
+
+- **Before 1.0.0**, on `release/1.0.0`:
+  - The security review's findings are fixed in v0.7.0, as [Fixes from the security review](261122_011655-security-review-fixes.md) records.
+  - The trial round ran on 2026-11-22, and its issues, #23 to #30, are fixed, as [the trials of the newer features](261122_005441-trials-of-the-newer-features.md#implementation) record.
+  - The package: `package.json` has `keywords`, `homepage`, and `bugs`. `test/getting-started.test.ts` checks that the tarball of `bun pm pack` holds `package.json` and only what `files` names, installs it into the guide's app, which runs, tests, and type-checks with racku as installed, through `typecheckInstalled()` in `test/fixtures/typecheck.ts`, and installs racku through git at a commit as well.
+  - `SECURITY.md`, and the scan of the history, before the repository went public, as [The repository is public before the first formal release](261122_062703-public-before-the-first-release.md) records. `SECURITY.md` now says which versions get fixes, as [After 1.0.0](#after-100) says.
+  - CI on the commit that became 1.0.0: `check.yml` passed all four jobs, in run 45056981161, and `net-tool.yml` passed on Linux, macOS, and Windows, in run 45056986402.
+- **The day of the release**, 2026-11-22:
+  - `chore(release): set the package version to 1.0.0`, 5b4bcfd, went into `main`, and was tagged v1.0.0 at the user's word. CI passed on `main` as well, in run 45057636371.
+  - The second step came first: the repository is public since earlier that day, as [The repository is public before the first formal release](261122_062703-public-before-the-first-release.md) records.
+  - The user handed publishing to the Agent: "Go ahead, my npm access token in env var, named NPM_ACCESS_TOKEN, trial round done." npm refused every attempt, on 2026-11-22 and 2026-11-23, and nothing was published:
+    - the first token had no right to publish: 403;
+    - the token of an `npm login`: 403, since npm publishes only with two-factor authentication, or with a granular token that bypasses it;
+    - a granular token that bypasses it: 404 on the upload, which npm answers, among other cases, when a token may not create the package. npm's answer didn't say what the token lacked.
+- **Publishing waits.** On 2026-11-23 the user put it off: "The npm package won't be published for now; I don't have FIDO2 hardware." As [What can go wrong](#what-can-go-wrong) says, the tag stays, and publishing is repeated once its cause is fixed. The GitHub release comes after it, and waits with it: the tag's message, which the release takes, says that racku is on npm.
+- Getting started, the README, and the skill add racku with `bun add racku valibot`, which fails until racku is on npm, and `AGENTS.md`'s Versions gives the rules from 1.0.0 on.
+
 ## Confirmation
 
 - The user accepted this decision on 2026-11-22, with [the fixes from the security review](261122_011655-security-review-fixes.md) and [the trials of the newer features](261122_005441-trials-of-the-newer-features.md). The Agent's report had named its choices: 1.0.0 rather than a public 0.x first, publishing by the user under their npm account, and what a public history shows, the author's email and six local paths. The user's words: "All are approved. If the name rack is not already taken, rename rack42u to rack before publishing to npm."
