@@ -53,6 +53,10 @@ type Unrefable = BroadcastChannel & { unref(): void };
  * a device, then expected the next call to reject, waited until that call timed out. Bun still
  * dispatches a BroadcastChannel's messages then, so the promises that the handling settles
  * resume their code where the bug doesn't reach.
+ *
+ * Bun has the bug as its issue #37189, which its `main` fixes; the relay goes once racku's
+ * minimum Bun release has the fix.
+ * @decision .agents/decisions/261122_215551-watching-a-third-bun-bug.md#the-workaround-stays
  */
 class Relay {
   readonly #tasks: (() => void)[] = [];
