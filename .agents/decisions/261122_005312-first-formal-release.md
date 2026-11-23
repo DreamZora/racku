@@ -138,7 +138,7 @@ In this order:
     - the token of an `npm login`: 403, since npm publishes only with two-factor authentication, or with a granular token that bypasses it;
     - a granular token that bypasses it: 404 on the upload, which npm answers, among other cases, when a token may not create the package. npm's answer didn't say what the token lacked.
 - **Publishing waits.** On 2026-11-23 the user put it off: "The npm package won't be published for now; I don't have FIDO2 hardware." As [What can go wrong](#what-can-go-wrong) says, the tag stays, and publishing is repeated once its cause is fixed. The GitHub release comes after it, and waits with it: the tag's message, which the release takes, says that racku is on npm.
-- Getting started, the README, and the skill add racku with `bun add racku valibot`, which fails until racku is on npm, and `AGENTS.md`'s Versions gives the rules from 1.0.0 on.
+- Getting started, the README, and the skill added racku with `bun add racku valibot`, and `AGENTS.md`'s Versions gives the rules from 1.0.0 on. While racku isn't on npm, they add it through git at the tag of its newest version instead, as [Apps add racku through git until racku is on npm](261123_020201-git-installs-until-npm.md) decides.
 
 ## Confirmation
 

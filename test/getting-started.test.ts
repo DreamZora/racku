@@ -1,14 +1,16 @@
 /**
  * Builds the app of docs/getting-started.md as the guide says, outside this repository: racku
- * installed from the tarball that `bun pm pack` makes of the files under test, as from npm, the
- * guide's files, its commands, and the answers it shows. So the guide and this test change
- * together. Another test installs racku through git, from a repository of the files under test.
+ * installed from the tarball that `bun pm pack` makes of the files under test, as npm is to get
+ * it, in place of racku's repository at the tag the guide names, then the guide's files, its
+ * commands, and the answers it shows. So the guide and this test change together. Another test
+ * installs racku through git, at a tag and at a commit, from a repository of the files under test.
  *
  * The installs fetch valibot and @standard-schema/spec from the registry, into a cache of the
  * test's own, which goes with the test's directory.
  *
  * @decision .agents/decisions/261119_055008-documentation.md#tests-that-hold-the-documentation
  * @decision .agents/decisions/261122_005312-first-formal-release.md#before-100
+ * @decision .agents/decisions/261123_020201-git-installs-until-npm.md#until-racku-is-on-npm
  */
 import { afterAll, expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
@@ -19,6 +21,10 @@ import { ROOT } from "./fixtures/app.ts";
 import { typecheck, typecheckInstalled } from "./fixtures/typecheck.ts";
 
 const GUIDE = await Bun.file(join(ROOT, "docs", "getting-started.md")).text();
+/** The version under test, and the URL of racku's repository, which the guide's command names. */
+const { version: VERSION, repository: REPOSITORY } = (await Bun.file(
+  join(ROOT, "package.json"),
+).json()) as { version: string; repository: { url: string } };
 const WORK = await mkdtemp(join(tmpdir(), "racku-start-"));
 afterAll(async () => {
   await rm(WORK, { recursive: true, force: true });
@@ -53,7 +59,10 @@ async function exec(
   return { code, stdout, output: stdout + stderr };
 }
 
-/** Copies the files under test into a new repository, and returns its URL and its commit. */
+/**
+ * Copies the files under test into a new repository, with the tag of the version under test, and
+ * returns its URL and its commit.
+ */
 async function repository(): Promise<{ url: string; commit: string }> {
   const dir = join(WORK, "racku");
   const listed = await exec(
@@ -79,6 +88,9 @@ async function repository(): Promise<{ url: string; commit: string }> {
     const result = await git(...args);
     if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${result.output}`);
   }
+  // A tag of its own, unsigned whatever git's settings say.
+  const tagged = await git("-c", "tag.gpgSign=false", "tag", `v${VERSION}`);
+  if (tagged.code !== 0) throw new Error(`git tag failed: ${tagged.output}`);
   const commit = (await git("rev-parse", "HEAD")).stdout.trim();
   return { url: `git+${Bun.pathToFileURL(dir).href}`, commit };
 }
@@ -223,11 +235,13 @@ test("the app of the getting-started guide installs, runs, tests, and reloads as
   });
   await Bun.write(join(app, "package.json"), manifest ?? "");
 
-  // Add racku as the guide does, from npm, here from the tarball of the files under test.
-  expect(command("bun add ")).toBe("bun add racku valibot");
+  // Add racku as the guide does, through git at the tag of the version under test, here from the
+  // tarball of the files under test, which npm is to get. A test below installs through git.
+  const shown = `${REPOSITORY.url}#v${VERSION}`;
+  expect(command("bun add ")).toBe(`bun add ${shown} valibot`);
   const install = command("bun add ")
     .split(" ")
-    .map(async (word) => (word === "racku" ? await tarball() : word));
+    .map(async (word) => (word === shown ? await tarball() : word));
   const cache = join(WORK, "cache");
   const added = await exec(
     [
@@ -344,33 +358,39 @@ test("the tarball of bun pm pack holds package.json and only what its files fiel
 }, 60_000);
 
 // @doc docs/getting-started.md#add-racku
-test("racku installs through git from its repository at a commit, which package.json keeps", async () => {
-  const app = join(WORK, "from-git");
-  await mkdir(app, { recursive: true });
-  await Bun.write(join(app, "package.json"), JSON.stringify({ name: "app", private: true }));
+test("racku installs through git from its repository at a tag or a commit, which package.json keeps", async () => {
   const { url, commit } = await repository();
-  const added = await exec(
-    [
-      process.execPath,
-      "add",
-      `${url}#${commit}`,
-      `--cache-dir=${join(WORK, "cache")}`,
-      "--prefer-offline",
-    ],
-    app,
-  );
-  expect({ code: added.code, output: added.code === 0 ? "" : added.output }).toEqual({
-    code: 0,
-    output: "",
-  });
-  expect((await Bun.file(join(app, "package.json")).json()).dependencies.racku).toBe(
-    `${url}#${commit}`,
-  );
-  const imported = await exec(
-    [process.execPath, "-e", 'const { rack } = await import("racku"); console.log(typeof rack);'],
-    app,
-  );
-  expect(imported.stdout.trim()).toBe("function");
+  for (const [name, ref] of [
+    ["tag", `v${VERSION}`],
+    ["commit", commit],
+  ] as const) {
+    const app = join(WORK, `from-git-${name}`);
+    await mkdir(app, { recursive: true });
+    await Bun.write(join(app, "package.json"), JSON.stringify({ name: "app", private: true }));
+    const added = await exec(
+      [
+        process.execPath,
+        "add",
+        `${url}#${ref}`,
+        `--cache-dir=${join(WORK, "cache")}`,
+        "--prefer-offline",
+      ],
+      app,
+    );
+    expect({ name, code: added.code, output: added.code === 0 ? "" : added.output }).toEqual({
+      name,
+      code: 0,
+      output: "",
+    });
+    expect((await Bun.file(join(app, "package.json")).json()).dependencies.racku).toBe(
+      `${url}#${ref}`,
+    );
+    const imported = await exec(
+      [process.execPath, "-e", 'const { rack } = await import("racku"); console.log(typeof rack);'],
+      app,
+    );
+    expect({ name, imported: imported.stdout.trim() }).toEqual({ name, imported: "function" });
+  }
 }, 60_000);
 
 // @doc docs/getting-started.md#add-racku
