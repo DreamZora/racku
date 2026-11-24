@@ -156,7 +156,7 @@ export function openDashboard(options: DashboardOptions): Dashboard {
   const token = randomBytes(32).toString("base64url");
   const wanted = Buffer.from(token);
   let waiting = 0;
-  /** Whether the rack answered the last request that the dashboard forwarded. */
+  /** Whether the rack answered the last `status` that the dashboard forwarded. */
   let answering: boolean | undefined;
 
   // Only `Bearer <token>`, compared in constant time; a bare token, or none, gets 401.
@@ -166,11 +166,22 @@ export function openDashboard(options: DashboardOptions): Dashboard {
     return given.length === wanted.length && timingSafeEqual(given, wanted);
   };
 
-  /** Prints a line when the rack stops answering, and when it answers again. */
-  const answered = (yes: boolean, why = "") => {
-    if (yes && answering === false) print("the rack answers");
-    if (!yes && answering !== false) print(`the rack doesn't answer: ${why}`);
-    answering = yes;
+  /**
+   * Prints a line when the rack stops answering, and when it answers again, as its answers to
+   * `status` tell: the rack answers status at once, and the page tells its connection by it too.
+   * A read of another kind may fail on its own, as `events` does on a rack of racku 1.0.0, which
+   * the page shows; and each operation prints a line of its own.
+   *
+   * @decision .agents/decisions/261124_055114-rack-dashboard.md#rack-dashboard
+   */
+  const answered = (answer: Answer) => {
+    if ("text" in answer) {
+      if (answering === false) print("the rack answers");
+      answering = true;
+    } else {
+      if (answering !== false) print(`the rack doesn't answer: ${answer.message}`);
+      answering = false;
+    }
   };
 
   const forward = async (
@@ -193,8 +204,7 @@ export function openDashboard(options: DashboardOptions): Dashboard {
     } finally {
       waiting--;
     }
-    if ("text" in answer) answered(true);
-    else answered(false, answer.message);
+    if (op === "status") answered(answer);
     if (spec.kind === "operation") {
       print(
         `${[op, ...args.map(word)].join(" ")}: ${"text" in answer ? answer.outcome : answer.message}`,

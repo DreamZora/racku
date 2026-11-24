@@ -453,6 +453,8 @@ describe("forwarding to a running rack", () => {
       502,
       { error: "the rack answered 500 Internal Server Error" },
     ]);
+    // Status still answers, so the rack does: the reads that fail print no line of their own.
+    expect((await api(d, "status")).status).toBe(200);
     await d.cli.waitFor(/^reload: the rack answered 500/m);
     expect(lines(d.cli).slice(1)).toEqual([
       "swap counter: ok",
@@ -460,7 +462,6 @@ describe("forwarding to a running rack", () => {
       "restart counter: COUNTER_FAILED: first line\\n[rack] forged line",
       'rollback counter {"to":"abc"}: ok',
       "stop: ok",
-      "the rack doesn't answer: the answer isn't the JSON of a rack's management endpoint",
       "reload: the rack answered 500 Internal Server Error",
     ]);
   }, 30_000);
@@ -791,6 +792,42 @@ describe("the rack it watches", () => {
     ]);
   }, 30_000);
 
+  // The page, too, shows the rack live while status answers, whatever else fails.
+  // @doc docs/reference/cli.md#flags-of-rack-dashboard
+  test("prints that the rack doesn't answer, and that it answers again, by its answers to status alone", async () => {
+    let failing = false;
+    const endpoint = stub((op) => {
+      // A rack of racku 1.0.0 has no operation events, which its endpoint answers with 404.
+      if (op === "events") return new Response(null, { status: 404 });
+      if (op === "reload") return new Response(null, { status: 500 });
+      if (op === "status" && failing) return new Response(null, { status: 503 });
+      return Response.json({ ok: true, value: [] });
+    });
+    const d = inProcess({ url: endpoint.url, token: "t".repeat(43) }, {});
+    /** One tick of the page: status, then events, which fails each time. */
+    const tick = async (status: number) => {
+      expect((await api(d, "status")).status).toBe(status);
+      expect(await answer(api(d, "events", [0]))).toEqual([
+        502,
+        { error: "the rack answered 404 Not Found" },
+      ]);
+    };
+    for (let round = 0; round < 5; round++) await tick(200);
+    // An operation that fails prints its own line alone.
+    expect((await api(d, "reload")).status).toBe(502);
+    await tick(200);
+    expect(d.lines).toEqual(["reload: the rack answered 500 Internal Server Error"]);
+    failing = true;
+    for (let round = 0; round < 3; round++) await tick(502);
+    failing = false;
+    for (let round = 0; round < 3; round++) await tick(200);
+    expect(d.lines).toEqual([
+      "reload: the rack answered 500 Internal Server Error",
+      "the rack doesn't answer: the rack answered 503 Service Unavailable",
+      "the rack answers",
+    ]);
+  }, 30_000);
+
   // @doc docs/reference/cli.md#flags-of-rack-dashboard
   // @doc docs/reference/cli.md#exit-codes
   // @doc docs/reference/cli.md#environment-variables
@@ -947,6 +984,8 @@ describe("the command", () => {
   test("closes on SIGINT with code 0, and prints the token in its URL alone", async () => {
     const created = await app();
     const d = await dashboard(["--dir", created.dir], FIXTURES, {}, "console");
+    // What the page asks first: status, which tells the dashboard that no rack answers.
+    expect((await api(d, "status")).status).toBe(502);
     expect(await answer(api(d, "reload"))).toEqual([
       502,
       { error: `no running rack has the base directory ${created.dir}` },
