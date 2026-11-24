@@ -369,6 +369,54 @@ describe("forwarding to a running rack", () => {
     expect(lines(d.cli)).toEqual([`dashboard of ${created.dir} at ${d.url}`]);
   }, 30_000);
 
+  // The page sends no others. A rollback's `to`, of any length, would go into the record of the
+  // history that a failed rollback leaves.
+  test("takes no options but restart's cascade, true or false, and rollback's to, a string of 128 characters at most", async () => {
+    const endpoint = stub();
+    const d = inProcess({ url: endpoint.url, token: "t".repeat(43) }, {});
+    const refused: [string, unknown[]][] = [
+      ["restart", ["counter", { cascade: "false" }]],
+      ["restart", ["counter", { cascade: 0 }]],
+      ["restart", ["counter", { cascade: null }]],
+      ["restart", ["counter", { cascade: false, to: "abc" }]],
+      ["restart", ["counter", { force: true }]],
+      ["rollback", ["counter", { to: 1 }]],
+      ["rollback", ["counter", { to: ["abc"] }]],
+      ["rollback", ["counter", { to: null }]],
+      ["rollback", ["counter", { to: "f".repeat(129) }]],
+      ["rollback", ["counter", { to: "abc", cascade: false }]],
+      ["rollback", ["counter", { source: "./devices/counter.ts" }]],
+    ];
+    for (const [op, args] of refused) {
+      expect([op, args, ...(await answer(api(d, op, args)))]).toEqual([
+        op,
+        args,
+        400,
+        {
+          error: expect.stringContaining(
+            op === "restart"
+              ? 'an object that may hold "cascade", true or false'
+              : `an object that may hold "to", a firmware's hash of 128 characters at most`,
+          ),
+        },
+      ]);
+    }
+    const taken: [string, unknown[]][] = [
+      ["restart", ["counter", { cascade: false }]],
+      ["restart", ["counter", { cascade: true }]],
+      ["restart", ["counter", {}]],
+      ["rollback", ["counter", { to: "f".repeat(128) }]],
+      ["rollback", ["counter", {}]],
+    ];
+    for (const [op, args] of taken) {
+      expect([op, args, (await api(d, op, args)).status]).toEqual([op, args, 200]);
+    }
+    // Only what it took reached the rack.
+    expect(endpoint.heard.map(({ path, body }) => [path, JSON.parse(body).args])).toEqual(
+      taken.map(([op, args]) => [`/v1/${op}`, args]),
+    );
+  });
+
   test("forwards an operation as the endpoint takes it, with the token of --url, and passes the answer on unchanged", async () => {
     const created = await app();
     const rackToken = "r".repeat(43);

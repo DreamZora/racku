@@ -85,12 +85,34 @@ export interface Dashboard {
   stop(): Promise<void>;
 }
 
+/**
+ * The most characters of a rollback's `to`: 128, far more than the hash of any firmware. The rack
+ * keeps the `to` of a rollback that fails in a record of its history.
+ */
+const FIRMWARE_MAX = 128;
+
+/** What an option of a forwarded operation is. */
+type Option =
+  /** `true` or `false`, as restart's `cascade`. */
+  | "boolean"
+  /** A firmware's hash, as rollback's `to`: a string of {@link FIRMWARE_MAX} characters at most. */
+  | "firmware";
+
+/** What each kind of option is, for the message of a 400. */
+const OPTION_TEXT: Readonly<Record<Option, string>> = {
+  boolean: "true or false",
+  firmware: `a firmware's hash of ${FIRMWARE_MAX} characters at most`,
+};
+
 /** What an argument of a forwarded operation is. */
 type Argument =
   /** A device's name. */
   | "name"
-  /** An object of options, such as `{ cascade: false }` or `{ to }`. */
-  | "options"
+  /**
+   * An object that may hold these options, each of its kind, and no others, such as
+   * `{ cascade: false }` or `{ to }`.
+   */
+  | Readonly<Record<string, Option>>
   /** A value that the rack checks itself, as `events()` checks `after`. */
   | "value";
 
@@ -107,7 +129,8 @@ interface Forwarded {
  * The operations that the dashboard forwards, with the arguments that the endpoint takes, apart
  * from `swap`, which takes the device's name only: a swap to another device file, `plug`, and
  * `unplug` stay with `rack ctl` and code, so that a dashboard's URL can't make the rack run a file
- * that it doesn't run already.
+ * that it doesn't run already. The options of `restart` and `rollback` are the ones that the page
+ * sends.
  */
 const FORWARDED: Readonly<Record<string, Forwarded>> = {
   status: { kind: "read", min: 0, args: [] },
@@ -116,8 +139,8 @@ const FORWARDED: Readonly<Record<string, Forwarded>> = {
   events: { kind: "read", min: 0, args: ["value"] },
   reload: { kind: "operation", min: 0, args: [] },
   swap: { kind: "operation", min: 1, args: ["name"] },
-  restart: { kind: "operation", min: 1, args: ["name", "options"] },
-  rollback: { kind: "operation", min: 1, args: ["name", "options"] },
+  restart: { kind: "operation", min: 1, args: ["name", { cascade: "boolean" }] },
+  rollback: { kind: "operation", min: 1, args: ["name", { to: "firmware" }] },
   stop: { kind: "operation", min: 0, args: [] },
 };
 
@@ -375,10 +398,27 @@ function argumentsOf(body: string, spec: Forwarded): unknown[] | undefined {
   const fits = (arg: unknown, kind: Argument | undefined): boolean =>
     kind === "name"
       ? typeof arg === "string"
-      : kind === "options"
-        ? typeof arg === "object" && arg !== null && !Array.isArray(arg)
+      : typeof kind === "object"
+        ? fitsOptions(arg, kind)
         : true;
   return args.every((arg, index) => fits(arg, spec.args[index])) ? args : undefined;
+}
+
+/**
+ * Whether an argument is an object that holds only the options that `options` names, each of its
+ * kind, as the page sends them.
+ *
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#what-the-dashboard-forwards
+ */
+function fitsOptions(arg: unknown, options: Readonly<Record<string, Option>>): boolean {
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) return false;
+  return Object.entries(arg).every(([name, value]) => {
+    // Only the options that the table lists, not the names that every object has.
+    const kind = Object.hasOwn(options, name) ? options[name] : undefined;
+    return kind === "boolean"
+      ? typeof value === "boolean"
+      : kind === "firmware" && typeof value === "string" && value.length <= FIRMWARE_MAX;
+  });
 }
 
 /** What an operation takes, for the message of a 400. */
@@ -391,7 +431,13 @@ function takes(spec: Forwarded): string {
         ? `${max} argument${max === 1 ? "" : "s"}`
         : `${spec.min} to ${max} arguments`;
   const kinds = spec.args.map((kind) =>
-    kind === "name" ? "a device's name" : kind === "options" ? "an object" : "a value",
+    kind === "name"
+      ? "a device's name"
+      : typeof kind === "object"
+        ? `an object that may hold ${Object.entries(kind)
+            .map(([name, option]) => `"${name}", ${OPTION_TEXT[option]}`)
+            .join(", and ")}`
+        : "a value",
   );
   return kinds.length === 0 ? count : `${count}: ${kinds.join(", then ")}`;
 }
