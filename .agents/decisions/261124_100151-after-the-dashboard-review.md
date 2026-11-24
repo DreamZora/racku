@@ -62,6 +62,14 @@ Status: accepted
   - Code that gave `rollback()` a `to` that isn't a string of at most 128 characters, or `restart()` a `cascade` that isn't a boolean, now gets `RACK_INVALID_INPUT`, in place of `RACK_SWAP_REJECTED` or a cascade.
 - **Files:** `src/commands.ts`, `src/rack.ts`, `src/reports.ts`, `src/instance.ts`, `src/index.ts`, and `src/dashboard/server.ts`; their tests; and `docs/reference/api.md`, `cli.md`, `errors.md`, and `limits.md`.
 
+## Implementation
+
+- **The page:** `src/dashboard/page/feed.ts` asks `events` for the records after `newest - 1`, as the branch of the dashboard already did.
+- **rack ctl:** `sendOperation` in `src/commands.ts` waits within `boundOf(op)`: `READ_TIMEOUT_MS` for the operations of `READS`, and `OPERATION_TIMEOUT_MS` for the others, through `postOperation` with an `AbortSignal.timeout`, so that `timeout: false` turns Bun's idle timeout off. `unanswered` writes what it says past a bound, and the dashboard's 504 uses it too. `test/cli.test.ts` holds it, with `BUN_CONFIG_HTTP_IDLE_TIMEOUT` set to 1 for a stand-in endpoint that answers after 10 s.
+- **The options:** `wrongOptions` in `src/rack.ts`, with `TO_MAX`, checks them in the rack handle's `restart` and `rollback` before their operation joins the queue. `test/safety.test.ts` holds it.
+- **The types:** `src/reports.ts` declares the deprecated `ListenerState` as a `ListenerStatus` with `index` and `listening`, which `src/index.ts` exports with `ListenerStatus`. The main thread's own type of a listener, in `src/instance.ts`, is `InstanceListener`. `test/listeners.test.ts` types what `status()` reports of a listener as `ListenerStatus[]`.
+- **The documents:** `docs/reference/api.md` lists `ListenerStatus`, and `ListenerState` as deprecated; `errors.md` names the options among the arguments that fail with `RACK_INVALID_INPUT`; `limits.md` gives `rack ctl`'s bounds, and `cli.md` names them.
+
 ## Confirmation
 
 - On 2026-11-24 the Agent reported the departure and the three problems, and asked how to go on. The user's answers: "2. Make your decision, choose best one." for the departure, and "5. Fix old issues, join watching list if truely bug" for the problems. The user authorized the Agent to decide them, so this decision is accepted on the Agent's choice, with those answers as the authorization. Each choice had a clear tradeoff, as Alternatives shows, so none went to the review model first.
