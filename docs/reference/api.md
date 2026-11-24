@@ -130,7 +130,7 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 
 ### The rack handle
 
-`start()` resolves with a `RackHandle`, whose methods are these. `status()`, `history()`, and `subscribe()` answer at once, and the others return promises:
+`start()` resolves with a `RackHandle`, whose methods are these. `status()`, `history()`, `events()`, and `subscribe()` answer at once, and the others return promises:
 
 | Method | Returns | Purpose |
 |---|---|---|
@@ -141,6 +141,7 @@ The rack runtime: connectors, devices, manifests, starting a rack, and its handl
 | `reload(manifest?)` | `Promise<ReloadResult[]>` | Rebuild all firmware and replace the devices whose hash changed; with a manifest, also move to its layout. |
 | `rollback(name, { to? })` | `Promise<ReloadResult[]>` | Go back to earlier firmware that the history keeps. |
 | `history(name?)` | `UpdateRecord[]` | List the updates, newest first. |
+| `events(after?)` | `EventRecord[]` | List the rack's recent events, oldest first: those whose `seq` is greater than `after`, or every one the rack keeps. See [Reports](reports.md#events). |
 | `plug(u, slot(...))` / `unplug(name)` | `Promise<void>` | Add a device to a free slot, or remove one that nothing uses. |
 | `subscribe(listener)` | `() => void` | Receive power, swap, fault, and log events, until the function it returns is called. |
 | `metrics()` | `Promise<RackMetrics>` | Read each device's call and event counters, and the rack's counters of calls from outside the rack. |
@@ -159,6 +160,7 @@ The types of what the methods take and return:
 | `ListenerState` | type | A listener of an instance, as `status()` reports it: its URL, certificates, requests in flight, and open WebSockets. |
 | `CertificateInfo` | type | A certificate of a listener, as `status()` reports it: its subject, server name, and expiry. |
 | `RackEvent` | type | What `subscribe()` delivers: a `power`, `swap`, `fault`, or `log` event. |
+| `EventRecord` | type | One record of the rack's recent events, as `events()` lists it: an event with its `seq` and `time`, and `cut` when it was cut. See [Reports](reports.md#events). |
 | `ReloadResult` | type | One device that `reload()` or `restart()` tried to replace, with its old and new firmware, its mode, and its error. |
 | `ReloadMode` | type | How a device was replaced: `"hot"`, `"cold"`, `"restart"`, `"plug"`, or `"unplug"`. |
 | `RestartOptions` | type | The options of `restart()`: `cascade`. |

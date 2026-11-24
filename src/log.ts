@@ -38,10 +38,10 @@ export function formatLogEntry(entry: LogEntry): string {
 
 function stringify(data: unknown): string {
   try {
-    return JSON.stringify(data, bigints) ?? String(data);
+    return JSON.stringify(data, bigints) ?? detailText(data);
   } catch {
     // Circular or otherwise unserializable details still produce a line.
-    return String(data);
+    return detailText(data);
   }
 }
 
@@ -74,9 +74,36 @@ function oneLine(text: string): string {
   return from === 0 ? text : line + text.slice(from);
 }
 
-/** Writes a `bigint`, which JSON can't hold, as a string ending in `n`. */
-function bigints(_key: string, value: unknown): unknown {
+/**
+ * The replacer of `JSON.stringify` with which the log and the rack's feed of recent events write
+ * details: a `bigint`, which JSON can't hold, as a string ending in `n`.
+ *
+ * @param _key The key of the value, which the replacer doesn't use.
+ * @param value The value to write.
+ * @returns The value, or for a `bigint`, its digits followed by `n`.
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+ */
+export function bigints(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? `${value}n` : value;
+}
+
+/**
+ * Details that JSON can't hold, such as circular ones, as the log and the rack's feed of recent
+ * events write them: their `String()`, or the `[object <Type>]` tag of a value that has no
+ * conversion to a string. It never throws.
+ *
+ * @param data The details.
+ * @returns Their text.
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+ */
+export function detailText(data: unknown): string {
+  try {
+    return String(data);
+  } catch {
+    // `String()` throws for a value without a conversion to a primitive, such as
+    // `Object.create(null)`, and for an array too deep to join; the tag still names its type.
+    return Object.prototype.toString.call(data);
+  }
 }
 
 /**
@@ -101,7 +128,7 @@ export function formatLogJson(entry: LogEntry): string {
     return JSON.stringify(fields, bigints);
   } catch {
     // Circular or otherwise unserializable details still produce a line.
-    return JSON.stringify({ ...fields, data: String(data) });
+    return JSON.stringify({ ...fields, data: detailText(data) });
   }
 }
 

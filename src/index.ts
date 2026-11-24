@@ -104,6 +104,7 @@ export type {
 } from "./metrics.ts";
 export type { CertificateInfo } from "./protocol.ts";
 export {
+  type EventRecord,
   type RackEvent,
   type RackHandle,
   type ReloadMode,

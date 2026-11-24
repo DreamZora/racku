@@ -25,6 +25,7 @@
  * @decision .agents/decisions/261117_185131-ending-instances.md#failed-hot-swaps
  * @decision .agents/decisions/261117_185225-outside-call-metrics.md#decision
  * @decision .agents/decisions/261120_011627-single-executables.md
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dirent } from "node:fs";
@@ -44,7 +45,7 @@ import {
   sweepFirmware,
 } from "./firmware.ts";
 import { Instance, type InstanceHost, timedOut, type Wire } from "./instance.ts";
-import { consoleLogger, type LogEntry, type Logger } from "./log.ts";
+import { bigints, consoleLogger, detailText, type LogEntry, type Logger } from "./log.ts";
 import {
   checkDeviceName,
   isRackManifest,
@@ -83,6 +84,7 @@ import {
   WATCHDOG_MIN,
 } from "./protocol.ts";
 import type {
+  EventRecord,
   ListenerStatus,
   RackEvent,
   ReloadMode,
@@ -236,6 +238,20 @@ export interface RackHandle {
    * @param name Only the records of this device.
    */
   history(name?: string): UpdateRecord[];
+  /**
+   * Reads the rack's feed of recent events: the events that `subscribe()` delivers, apart from
+   * log entries of level `debug`, as records numbered from 1 when the rack starts. It answers at
+   * once, and after `stop()` too. The rack keeps the last 1 000 records, in memory; a record
+   * longer than 4 096 characters as JSON loses its details, has its messages cut, and carries
+   * `cut: true`.
+   *
+   * @param after Only the records whose `seq` is greater: a whole number, 0 or more. A first
+   *   record whose `seq` is greater than `after + 1` means that the records between them dropped
+   *   out before they were read.
+   * @returns The records, oldest first; without `after`, every record the rack keeps.
+   * @throws RackError `RACK_INVALID_INPUT` for an `after` that isn't a whole number of 0 or more.
+   */
+  events(after?: number): EventRecord[];
   /**
    * Replaces a device, optionally with another device file; rolls back on failure.
    *
@@ -402,6 +418,15 @@ class Rack implements InstanceHost {
   /** Update records, oldest first, at most `#historyLimit`. */
   readonly #history: UpdateRecord[] = [];
   #seq = 0;
+  /**
+   * The feed of recent events, oldest first, at most {@link FEED_LIMIT} records. Each is kept as
+   * its JSON text, so that the text bounds its memory, and a read only parses it.
+   *
+   * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+   */
+  readonly #feed: string[] = [];
+  /** The `seq` of the feed's newest record; 0 before the first. */
+  #feedSeq = 0;
   /** Each device's known-good firmware, by device name. */
   readonly #knownGood = new Map<string, Firmware>();
   /** Devices on probation, by name, with the devices that fall back together with them. */
@@ -541,6 +566,7 @@ class Rack implements InstanceHost {
         this.#operate("rollback", () => this.#rollback(name, options.to)),
       history: (name?: string) =>
         this.#history.filter((record) => name === undefined || record.device === name).reverse(),
+      events: (after?: number) => this.#events(after),
       plug: (u: number, spec: SlotSpec) => this.#operate("plug", () => this.#plug(u, spec)),
       unplug: (name: string) => this.#operate("unplug", () => this.#unplug(name)),
       subscribe: (listener: (event: RackEvent) => void) => {
@@ -4098,6 +4124,8 @@ class Rack implements InstanceHost {
 
   #emit(event: RackEvent, group?: GroupKey): void {
     if (event.type === "swap") this.#record(event, group);
+    // Kept before the listeners run, so that one that reads the feed finds the event there.
+    this.#keep(event);
     for (const listener of [...this.#listeners]) {
       try {
         listener(event);
@@ -4105,6 +4133,36 @@ class Rack implements InstanceHost {
         // A failing listener must not break the rack or the other listeners.
       }
     }
+  }
+
+  /**
+   * Keeps an event in the feed as the JSON text of its record, unless it is a log entry of level
+   * `debug`, which costs nothing: a device's debugging can't push the other records out. A
+   * record beyond {@link FEED_LIMIT} drops the oldest.
+   *
+   * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+   */
+  #keep(event: RackEvent): void {
+    if (event.type === "log" && event.level === "debug") return;
+    // A log entry keeps its own time, which the spread puts in place of the rack's.
+    const record: EventRecord = { seq: ++this.#feedSeq, time: Date.now(), ...event };
+    this.#feed.push(recordText(record));
+    if (this.#feed.length > FEED_LIMIT) this.#feed.shift();
+  }
+
+  /**
+   * The records of the feed whose `seq` is greater than `after`, oldest first; all of them for 0.
+   *
+   * @throws RackError `RACK_INVALID_INPUT` for an `after` that isn't a whole number of 0 or more.
+   * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+   */
+  #events(after = 0): EventRecord[] {
+    if (!(Number.isInteger(after) && after >= 0)) {
+      throw new RackError("RACK_INVALID_INPUT", "events: after must be a whole number, 0 or more");
+    }
+    // The records are numbered without gaps, so the newest one's number places the first to read.
+    const first = Math.max(0, this.#feed.length - (this.#feedSeq - after));
+    return this.#feed.slice(first).map((text) => JSON.parse(text) as EventRecord);
   }
 
   #log(level: LogEntry["level"], message: string, data?: unknown, device?: string): void {
@@ -4128,6 +4186,97 @@ class Rack implements InstanceHost {
       .filter((slot) => !slot.removed)
       .map(({ name, u, height }) => ({ name, u, height }));
   }
+}
+
+/**
+ * The most records the feed of recent events keeps: a new one beyond them drops the oldest.
+ *
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
+ */
+const FEED_LIMIT = 1_000;
+
+/**
+ * The most characters of one record of the feed, as JSON; a longer record is cut.
+ *
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
+ */
+const RECORD_MAX = 4_096;
+
+/**
+ * The most characters of each message of a record that is cut, the last of them `…`.
+ *
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+ */
+const CUT_MESSAGE = 1_024;
+
+/**
+ * A record of the feed as the JSON text that the feed keeps, of at most {@link RECORD_MAX}
+ * characters. A longer one loses its `data` and its error's `data`, has its message and its
+ * error's message cut to {@link CUT_MESSAGE} characters, and gets `cut: true`.
+ *
+ * Messages full of characters that JSON escapes, which take up to six characters each, can leave
+ * the record too long still, and so can a device's name or an error's code thousands of
+ * characters long: those texts are then cut shorter, by half each time, until the record fits.
+ *
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+ */
+function recordText(record: EventRecord): string {
+  let text = recordJson(record);
+  for (let limit = CUT_MESSAGE; text.length > RECORD_MAX && limit >= 1; limit >>= 1) {
+    text = recordJson(cutRecord(record, limit, limit < CUT_MESSAGE));
+  }
+  return text;
+}
+
+/**
+ * A record as JSON, with its details as `--log json` writes them: a `bigint` as a string ending in
+ * `n`, and details that JSON can't hold otherwise, such as circular ones, as their `String()`.
+ * A log record's details are its `data`, and a swap's or a fault's, its error's `data`.
+ */
+function recordJson(record: EventRecord): string {
+  try {
+    return JSON.stringify(record, bigints);
+  } catch {
+    // Only the details can fail: every other field is a string, a number, a boolean, or null.
+    return JSON.stringify(detailsAsText(record));
+  }
+}
+
+/** A record whose details are their text, as {@link detailText} gives it. */
+function detailsAsText(record: EventRecord): EventRecord {
+  if (record.type === "log") return { ...record, data: detailText(record.data) };
+  if (record.type === "power" || record.error === undefined) return record;
+  return { ...record, error: { ...record.error, data: detailText(record.error.data) } };
+}
+
+/**
+ * A record without its details, and with its messages cut to `limit` characters; with `names`,
+ * also its device's name and its error's code.
+ */
+function cutRecord(record: EventRecord, limit: number, names: boolean): EventRecord {
+  const shorten = (text: unknown) => (typeof text === "string" ? cutText(text, limit) : text);
+  const fields: Record<string, unknown> = { ...record, cut: true };
+  // JSON leaves out a field that is undefined.
+  fields.data = undefined;
+  fields.message = shorten(fields.message);
+  if (names) fields.device = shorten(fields.device);
+  if (record.type !== "power" && record.type !== "log" && record.error !== undefined) {
+    const { code, message } = record.error;
+    fields.error = { code: names ? shorten(code) : code, message: shorten(message) };
+  }
+  return fields as EventRecord;
+}
+
+/**
+ * A text cut to `max` characters, the last of them `…`, and never between the two halves of a
+ * character outside the Basic Multilingual Plane; a text that fits stays as it is.
+ */
+function cutText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let end = max - 1;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${text.slice(0, end)}…`;
 }
 
 /** An instance being ended: the device it belongs to, and whether its thread stopped in time. */

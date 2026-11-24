@@ -1,6 +1,6 @@
 # Reports
 
-A running rack reports what it does in four ways: `status()`, `metrics()`, `history()`, and the log. `rack ctl` prints the first three as JSON. [Managing a running rack](../guides/managing.md) shows how to reach them.
+A running rack reports what it does in five ways: `status()`, `metrics()`, `history()`, `events()`, and the log. `rack ctl` prints the first three as JSON. [Managing a running rack](../guides/managing.md) shows how to reach them.
 
 ## status()
 
@@ -89,6 +89,29 @@ A running rack reports what it does in four ways: `status()`, `metrics()`, `hist
 | `group` | For a group replaced together, the `seq` of the group's first record. |
 
 The history keeps at most `historyLimit` records, 256 by default, in memory, and a restart of the rack starts it empty.
+
+## events()
+
+`events(after?)` lists the rack's recent events, oldest first, as `EventRecord`s. They are the events that `subscribe()` delivers, `power`, `swap`, `fault`, and `log`, apart from log entries of level `debug`, so that a device's debugging can't push the other records out. Those entries still go to the logger and to subscribers. A record is the event with two more fields, and a third when it was cut:
+
+```js
+{ seq: 214, time: 1763300000000, type: "fault", device: "orders", firmware: "7f3a…",
+  error: { code: "RACK_DEVICE_FAULT", message: "orders: instance exited with code 1: …" }, reset: true }
+{ seq: 215, time: 1763300000002, type: "log", level: "warn", message: "orders resetting", data: { crashes: 1 } }
+```
+
+| Field | What it holds |
+|---|---|
+| `seq` | The number of the record. The rack numbers its records from 1 each time it starts, one more for each record. |
+| `time` | When the rack emitted the event, a millisecond timestamp. A log entry keeps its own `time`. |
+| `cut` | `true` for a record that was cut, as below; absent otherwise. |
+
+- With `after`, it lists the records whose `seq` is greater; without it, every record the rack keeps. `after` is a whole number, 0 or more, and another value fails with `RACK_INVALID_INPUT`.
+- It answers at once, not with a promise, and still answers after `stop()`.
+- The rack keeps the last 1 000 records, in memory: a new one beyond them drops the oldest. A restart of the rack starts the feed empty, from `seq` 1, as it does the history.
+- A reader that asks for the records after the last `seq` it read, and gets a first record whose `seq` is greater than that `seq` plus 1, knows that the records between them dropped out before it read them.
+- A record holds at most 4 096 characters as JSON. A longer one loses its `data` and its error's `data`, and its message and its error's message are cut to 1 024 characters, the last of them `…`; it then carries `cut: true`. One that is still longer, as when its messages are full of characters that JSON escapes, or its device's name or its error's code runs to thousands of characters, has those texts cut shorter until it fits.
+- `data` is kept as `--log json` writes it: a `bigint` as a string ending in `n`, such as `"12345678901234567890n"`, and details that JSON can't hold otherwise, such as circular ones, as their `String()`.
 
 ## The log
 
