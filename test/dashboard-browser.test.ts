@@ -1,9 +1,9 @@
 /**
  * The dashboard's page in a browser, as an operator uses it: headless Chrome opens the URL that
  * `rack dashboard` prints, sees the rack's devices and their states, a crash as it happens, and
- * a restart that it confirms, and shows nothing of the rack without the URL's fragment. The
- * tests run where a browser is found; in CI, which has one on each system, a missing browser
- * fails them instead.
+ * a restart that it confirms; it keeps a device's details within a phone's screen, and shows
+ * nothing of the rack without the URL's fragment. The tests run where a browser is found; in CI,
+ * which has one on each system, a missing browser fails them instead.
  *
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#tests
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-page
@@ -154,6 +154,39 @@ describe.skipIf(chrome === undefined)("the dashboard's page in a browser", () =>
       expect(cli.stdout).toContain("restart counter: ok");
 
       // No exception, CSP violation, failed request, or console call along the way.
+      expect(page.messages).toEqual([]);
+    },
+    TEST_MS,
+  );
+
+  test(
+    "keeps a device's details within the screen's width on a phone 320 px wide",
+    async () => {
+      const { url } = await rackWithDashboard();
+      const page = await newPage();
+      // A phone's screen, whose browser applies the page's viewport tag.
+      await page.send("Emulation.setDeviceMetricsOverride", {
+        width: 320,
+        height: 640,
+        deviceScaleFactor: 1,
+        mobile: true,
+      });
+      await page.navigate(url);
+      await page.click('button[data-device="counter"]', SHOWN_MS);
+      // The details with their parts, such as the watchdogs and listeners, and the counters.
+      await page.waitFor(
+        "document.querySelectorAll('.device-body .parts .part').length > 0 && document.querySelector('.counters table') !== null",
+        SHOWN_MS,
+      );
+      expect(await page.evaluate("document.documentElement.clientWidth")).toBe(320);
+      // Nothing in the details is wider than their panel, and nothing makes the page wider than
+      // the screen; a wide table scrolls within itself.
+      expect(
+        await page.evaluate(
+          "(() => { const panel = document.querySelector('.details-panel'); return panel.scrollWidth - panel.clientWidth; })()",
+        ),
+      ).toBe(0);
+      expect(await page.evaluate("document.documentElement.scrollWidth")).toBe(320);
       expect(page.messages).toEqual([]);
     },
     TEST_MS,
