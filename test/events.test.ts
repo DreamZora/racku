@@ -1,13 +1,14 @@
 /**
  * Tests for the rack's feed of recent events: the records that `events()` returns, their order,
  * numbers, and times; the debug entries it leaves out; its bounds, 1 000 records of at most 4 096
- * characters each; and details as `--log json` writes them.
+ * characters each; details as `--log json` writes them; and the endpoint's operation `events`, on
+ * the Unix socket and on TCP with its token.
  *
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#tests
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import {
   type EventRecord,
   type LogEntry,
@@ -17,17 +18,33 @@ import {
   type StartOptions,
   slot,
 } from "racku";
+import { type ControlFile, controlPaths } from "../src/control.ts";
 import { formatLogJson } from "../src/log.ts";
 import {
+  CONTROL_DIR,
   errorOf,
   type TempApp,
   type TestRack,
   tempApp,
+  useControlDir,
   useRacks,
+  WINDOWS,
   waitFor,
 } from "./fixtures/app.ts";
 
 const startRack = useRacks();
+useControlDir();
+
+// The racks with an endpoint put it in the runtime directory that useControlDir() removes.
+let savedRuntime: string | undefined;
+beforeAll(() => {
+  savedRuntime = process.env.XDG_RUNTIME_DIR;
+  process.env.XDG_RUNTIME_DIR = CONTROL_DIR;
+});
+afterAll(() => {
+  if (savedRuntime === undefined) delete process.env.XDG_RUNTIME_DIR;
+  else process.env.XDG_RUNTIME_DIR = savedRuntime;
+});
 
 const apps: TempApp[] = [];
 afterEach(async () => {
@@ -403,5 +420,57 @@ describe("reading the feed", () => {
     const fresh = again.events();
     expect(fresh[0]?.seq).toBe(1);
     expect(fresh.map(messageOf)).not.toContain("before the stop");
+  });
+});
+
+/**
+ * Checks the operation `events` of an endpoint that `post` reaches with a request's body: with
+ * and without `after`, with too many arguments, and with an `after` the rack refuses.
+ */
+async function checkOperation(
+  running: RackHandle,
+  post: (body: unknown) => Promise<Response>,
+): Promise<void> {
+  await say(running, { level: "info", message: "through the endpoint" });
+  await logRecord(running, (message) => message === "through the endpoint");
+  const all = running.events();
+  expect(await (await post({ args: [] })).json()).toEqual({ ok: true, value: all });
+  expect(await (await post({})).json()).toEqual({ ok: true, value: all });
+  const newest = all.at(-1)?.seq ?? 0;
+  expect(await (await post({ args: [newest - 2] })).json()).toEqual({
+    ok: true,
+    value: all.slice(-2),
+  });
+  expect((await post({ args: [1, 2] })).status).toBe(400);
+  expect(await (await post({ args: ["x"] })).json()).toEqual({
+    ok: false,
+    error: {
+      code: "RACK_INVALID_INPUT",
+      message: "events: after must be a whole number, 0 or more",
+    },
+  });
+}
+
+// @doc docs/reference/reports.md#events
+describe("the operation events", () => {
+  test.skipIf(WINDOWS)("the Unix socket serves the feed", async () => {
+    const { created, running } = await talkerRack({ control: true });
+    const socket = controlPaths(created.dir).socket;
+    await checkOperation(running, (body) =>
+      fetch("http://localhost/v1/events", {
+        method: "POST",
+        unix: socket,
+        body: JSON.stringify(body),
+      }),
+    );
+  });
+
+  test("the TCP endpoint serves the feed with its token", async () => {
+    const { created, running } = await talkerRack({ control: { port: 0 } });
+    const { url, token } = (await Bun.file(controlPaths(created.dir).file).json()) as ControlFile;
+    const post = (body: unknown, headers: Record<string, string>) =>
+      fetch(`${url}/v1/events`, { method: "POST", headers, body: JSON.stringify(body) });
+    await checkOperation(running, (body) => post(body, { authorization: `Bearer ${token}` }));
+    expect((await post({ args: [] }, {})).status).toBe(401);
   });
 });

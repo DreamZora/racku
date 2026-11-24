@@ -1,6 +1,6 @@
 # Reports
 
-A running rack reports what it does in five ways: `status()`, `metrics()`, `history()`, `events()`, and the log. `rack ctl` prints the first three as JSON. [Managing a running rack](../guides/managing.md) shows how to reach them.
+A running rack reports what it does in five ways: `status()`, `metrics()`, `history()`, `events()`, and the log. `rack ctl` prints the first four as JSON. [Managing a running rack](../guides/managing.md) shows how to reach them.
 
 ## status()
 
@@ -112,6 +112,8 @@ The history keeps at most `historyLimit` records, 256 by default, in memory, and
 - A reader that asks for the records after the last `seq` it read, and gets a first record whose `seq` is greater than that `seq` plus 1, knows that the records between them dropped out before it read them.
 - A record holds at most 4 096 characters as JSON. A longer one loses its `data` and its error's `data`, and its message and its error's message are cut to 1 024 characters, the last of them `…`; it then carries `cut: true`. One that is still longer, as when its messages are full of characters that JSON escapes, or its device's name or its error's code runs to thousands of characters, has those texts cut shorter until it fits.
 - `data` is kept as `--log json` writes it: a `bigint` as a string ending in `n`, such as `"12345678901234567890n"`, and details that JSON can't hold otherwise, such as circular ones, as their `String()`.
+
+The management endpoint serves the same records as the operation `events`, `{ "args": [after?] }`, which `rack ctl events [--after <seq>]` runs.
 
 ## The log
 

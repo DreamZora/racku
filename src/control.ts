@@ -7,6 +7,7 @@
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-unix-socket
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-tcp-endpoint
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-protocol
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
  */
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
@@ -72,6 +73,7 @@ const OPERATIONS: Record<string, readonly [min: number, max: number]> = {
   restart: [1, 2],
   rollback: [1, 2],
   history: [0, 1],
+  events: [0, 1],
   plug: [2, 2],
   unplug: [1, 1],
   stop: [0, 0],
@@ -403,6 +405,9 @@ function run(handle: RackHandle, op: string, args: unknown[]): unknown {
       return handle.rollback(first as string, (second ?? {}) as { to?: string });
     case "history":
       return handle.history(first as string | undefined);
+    case "events":
+      // An `after` that isn't a whole number of 0 or more fails with RACK_INVALID_INPUT.
+      return handle.events(first as number | undefined);
     case "plug": {
       const spec = (second ?? {}) as { source?: unknown; name?: string; config?: unknown };
       if (typeof spec.source !== "string") {
