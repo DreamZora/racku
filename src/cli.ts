@@ -37,6 +37,7 @@ const USAGE = [
   "       rack ctl status | metrics | reload | stop",
   "       rack ctl swap <device> [source] | restart <device> [--no-cascade]",
   "       rack ctl rollback <device> [--to <firmware>] | history [device]",
+  "       rack ctl events [--after <seq>]",
   "         [--dir <base directory>] [--url <url> [--token-file <file>]]",
 ].join("\n");
 
@@ -45,7 +46,7 @@ const FLAGS: Record<string, readonly string[]> = {
   dev: ["--no-plan", "--no-watchdog", "--control-port", "--log", "--stop-on-stdin-close"],
   plan: ["--write", "--check"],
   compile: ["--outfile", "--target"],
-  ctl: ["--dir", "--url", "--token-file", "--no-cascade", "--to"],
+  ctl: ["--dir", "--url", "--token-file", "--no-cascade", "--to", "--after"],
 };
 
 /** Flags that take a value, as `--flag value` or `--flag=value`. */
@@ -55,6 +56,7 @@ const VALUE_FLAGS = new Set([
   "--url",
   "--token-file",
   "--to",
+  "--after",
   "--log",
   "--outfile",
   "--target",

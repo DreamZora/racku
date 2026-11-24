@@ -338,6 +338,15 @@ function ctlArgs(
     case "history":
       at(0, 1);
       return rest;
+    case "events": {
+      at(0, 0);
+      const after = flags.get("--after");
+      if (after === undefined) return [];
+      // A whole number of 0 or more, the only `after` that events() takes.
+      // @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+      if (!/^\d+$/.test(after) || !Number.isSafeInteger(Number(after))) usage();
+      return [Number(after)];
+    }
     default:
       return usage();
   }

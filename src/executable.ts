@@ -23,7 +23,7 @@ const START_FLAGS = [
   "--stop-on-stdin-close",
 ];
 
-const CTL_FLAGS = ["--base-dir", "--url", "--token-file", "--no-cascade", "--to"];
+const CTL_FLAGS = ["--base-dir", "--url", "--token-file", "--no-cascade", "--to", "--after"];
 
 /** Flags that take a value, as `--flag value` or `--flag=value`. */
 const VALUE_FLAGS = new Set([
@@ -33,6 +33,7 @@ const VALUE_FLAGS = new Set([
   "--url",
   "--token-file",
   "--to",
+  "--after",
 ]);
 
 /**
@@ -57,6 +58,7 @@ export async function runExecutable(
         `       ${name} ctl status | metrics | reload | stop`,
         `       ${name} ctl swap <device> [source] | restart <device> [--no-cascade]`,
         `       ${name} ctl rollback <device> [--to <firmware>] | history [device]`,
+        `       ${name} ctl events [--after <seq>]`,
         "         [--base-dir <dir>] [--url <url> [--token-file <file>]]",
       ].join("\n"),
     );

@@ -597,6 +597,33 @@ export default rack("cli", {
 });
 
 describe("rack ctl", () => {
+  // @doc docs/reference/cli.md#operations-of-rack-ctl
+  // @doc docs/reference/cli.md#flags-of-rack-ctl
+  // @doc docs/reference/cli.md#exit-codes
+  // @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+  test("rack ctl events takes --after <seq>, a whole number of 0 or more, and no other words", async () => {
+    const { dir } = await app();
+    const wrong = [
+      ["--after", "x"],
+      ["--after", "-1"],
+      ["--after", "1.5"],
+      ["--after", "1e3"],
+      ["--after"],
+      ["counter"],
+    ];
+    const runs = wrong.map((args) => run(["ctl", "events", ...args], dir));
+    for (const [index, ctl] of runs.entries()) {
+      expect([wrong[index], await ctl.exited()]).toEqual([wrong[index], 2]);
+      expect(ctl.output).toContain("rack ctl events [--after <seq>]");
+    }
+    // A whole number gets past the command line to the rack, of which none runs here.
+    for (const after of ["0", "42"]) {
+      const ctl = run(["ctl", "events", "--after", after], dir);
+      expect(await ctl.exited()).toBe(1);
+      expect(ctl.output).toContain("no running rack has the base directory");
+    }
+  });
+
   // @doc docs/reference/cli.md#flags-of-rack-ctl
   // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
   test("rack ctl sends its operation and token to the endpoint directly, never through a proxy that HTTP_PROXY names", async () => {

@@ -59,6 +59,7 @@ The two exclude each other, and a rack placed by hand takes neither.
 | `rack ctl restart <device> [--no-cascade]` | `restart(device)`, or `restart(device, { cascade: false })` |
 | `rack ctl rollback <device> [--to <firmware>]` | `rollback(device)`, or `rollback(device, { to })` |
 | `rack ctl history [device]` | `history(device?)` |
+| `rack ctl events [--after <seq>]` | `events(after?)`: the records of the rack's recent events, oldest first |
 | `rack ctl stop` | `stop()`, which shuts the rack down in order |
 
 ## Flags of rack ctl
@@ -69,6 +70,7 @@ The two exclude each other, and a rack placed by hand takes neither.
 | `--url <url>`, `--token-file <file>` | Reach a rack's TCP endpoint at `url` from anywhere on the machine, with the token on the first line of `file`, or else `RACK_CONTROL_TOKEN`. No flag takes the token itself, since every user on the machine can read a command line. |
 | `--no-cascade` | With `restart`: leave the device's consumers running. |
 | `--to <firmware>` | With `rollback`: go back to this firmware, which the history keeps. |
+| `--after <seq>` | With `events`: only the records whose `seq` is greater than `seq`, a whole number of 0 or more. Another value is a wrong command line, with exit code 2. |
 
 ## The command line of an executable
 
