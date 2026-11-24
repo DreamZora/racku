@@ -150,7 +150,7 @@ test("the rack handle's table lists every method of RackHandle, with the type it
   for (const [, name = "", returns = ""] of body.matchAll(/^ {2}(\w+)\(.*\): (.+);$/gm)) {
     methods[name] = returns;
   }
-  expect(Object.keys(methods)).toHaveLength(13);
+  expect(Object.keys(methods)).toHaveLength(14);
 
   const api = await read("docs/reference/api.md");
   const listed: Record<string, string> = {};
