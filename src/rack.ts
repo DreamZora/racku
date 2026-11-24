@@ -4210,13 +4210,25 @@ const RECORD_MAX = 4_096;
 const CUT_MESSAGE = 1_024;
 
 /**
+ * The most characters of the device's name in a record kept at its minimum, the last of them `…`.
+ * JSON writes a character as six at most, so that record stays well within {@link RECORD_MAX}.
+ *
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
+ */
+const MINIMAL_NAME = 256;
+
+/**
  * A record of the feed as the JSON text that the feed keeps, of at most {@link RECORD_MAX}
  * characters. A longer one loses its `data` and its error's `data`, has its message and its
  * error's message cut to {@link CUT_MESSAGE} characters, and gets `cut: true`.
  *
  * Messages full of characters that JSON escapes, which take up to six characters each, can leave
- * the record too long still, and so can a device's name or an error's code thousands of
- * characters long: those texts are then cut shorter, by half each time, until the record fits.
+ * the record too long still, and so can a device's name, an error's code, or a swap's `from` or
+ * `to` thousands of characters long: those texts are then cut shorter, by half each time, until
+ * the record fits, and a `from` or `to` that isn't a string is cut as its `String()`.
+ *
+ * Its text never exceeds the bound: a record that the cuts leave too long is kept at its minimum,
+ * as {@link minimalText} writes it.
  *
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
  */
@@ -4225,7 +4237,7 @@ function recordText(record: EventRecord): string {
   for (let limit = CUT_MESSAGE; text.length > RECORD_MAX && limit >= 1; limit >>= 1) {
     text = recordJson(cutRecord(record, limit, limit < CUT_MESSAGE));
   }
-  return text;
+  return text.length <= RECORD_MAX ? text : minimalText(record);
 }
 
 /**
@@ -4242,6 +4254,23 @@ function recordJson(record: EventRecord): string {
   }
 }
 
+/**
+ * A record at its minimum, as JSON: its `seq`, `time`, and `type`, its device's name cut to
+ * {@link MINIMAL_NAME} characters, and `cut: true`. Every field is one the rack sets, so JSON
+ * writes it, and its text stays within {@link RECORD_MAX}.
+ */
+function minimalText(record: EventRecord): string {
+  const minimal: Record<string, unknown> = {
+    seq: record.seq,
+    time: record.time,
+    type: record.type,
+  };
+  // Every record but a log entry of the rack's own names a device.
+  if (typeof record.device === "string") minimal.device = cutText(record.device, MINIMAL_NAME);
+  minimal.cut = true;
+  return JSON.stringify(minimal);
+}
+
 /** A record whose details are their text, as {@link detailText} gives it. */
 function detailsAsText(record: EventRecord): EventRecord {
   if (record.type === "log") return { ...record, data: detailText(record.data) };
@@ -4251,15 +4280,26 @@ function detailsAsText(record: EventRecord): EventRecord {
 
 /**
  * A record without its details, and with its messages cut to `limit` characters; with `names`,
- * also its device's name and its error's code.
+ * also its device's name, its error's code, and a swap's `from` and `to`. A value that isn't a
+ * string, such as a `to` that code gave rollback() against its type, is cut as its `String()`,
+ * so that it can't keep the record long; `null` stays.
  */
 function cutRecord(record: EventRecord, limit: number, names: boolean): EventRecord {
-  const shorten = (text: unknown) => (typeof text === "string" ? cutText(text, limit) : text);
+  const shorten = (value: unknown) =>
+    value === null || value === undefined
+      ? value
+      : cutText(typeof value === "string" ? value : detailText(value), limit);
   const fields: Record<string, unknown> = { ...record, cut: true };
   // JSON leaves out a field that is undefined.
   fields.data = undefined;
   fields.message = shorten(fields.message);
-  if (names) fields.device = shorten(fields.device);
+  if (names) {
+    fields.device = shorten(fields.device);
+    if (record.type === "swap") {
+      fields.from = shorten(record.from);
+      fields.to = shorten(record.to);
+    }
+  }
   if (record.type !== "power" && record.type !== "log" && record.error !== undefined) {
     const { code, message } = record.error;
     fields.error = { code: names ? shorten(code) : code, message: shorten(message) };

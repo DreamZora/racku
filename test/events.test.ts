@@ -391,6 +391,46 @@ describe("the bounds", () => {
       cut: true,
     });
   });
+
+  test("a failed rollback whose to runs to thousands of characters, or is an object, leaves records within 4 096 characters, with that to cut", async () => {
+    const { running } = await talkerRack();
+    const read = running.events().at(-1)?.seq ?? 0;
+    const long = "f".repeat(60_000);
+    // Only the type of rollback() keeps code from giving an object, and the endpoint passes on
+    // what a request's JSON holds.
+    const object = { hash: long } as unknown as string;
+    for (const to of [long, object]) {
+      expect((await errorOf(running.rollback("talker", { to }))).code).toBe("RACK_SWAP_REJECTED");
+    }
+    const records = running.events(read);
+    for (const record of records) expect(length(record)).toBeLessThanOrEqual(4_096);
+    const swaps = records.filter((record) => record.type === "swap");
+    expect(swaps.map((record) => record.cut)).toEqual([true, true]);
+    const [text, named] = swaps.map((record) => record.to);
+    expect(text?.length).toBeLessThan(1_024);
+    expect(text).toBe(`${long.slice(0, (text?.length ?? 0) - 1)}…`);
+    // A to that isn't a string becomes its String().
+    expect(named).toBe("[object Object]");
+  });
+
+  test("on a device whose name runs to thousands of characters, a rollback to a number leaves records within 4 096 characters, the number cut as its String()", async () => {
+    const name = `t${"x".repeat(4_999)}`;
+    const { running } = await talkerRack(
+      {},
+      { slots: { 1: slot("./devices/talker.ts", { name }) } },
+    );
+    const read = running.events().at(-1)?.seq ?? 0;
+    const error = await errorOf(running.rollback(name, { to: 12_345 as unknown as string }));
+    expect(error.code).toBe("RACK_SWAP_REJECTED");
+    const records = running.events(read);
+    for (const record of records) expect(length(record)).toBeLessThanOrEqual(4_096);
+    // The name makes the record too long, and the cut writes its to as text.
+    expect(records.find((record) => record.type === "swap")).toMatchObject({
+      type: "swap",
+      to: "12345",
+      cut: true,
+    });
+  });
 });
 
 // @doc docs/reference/reports.md#events
