@@ -140,6 +140,8 @@ describe.skipIf(WINDOWS)("the Unix socket", () => {
   // README.md, "Managing a running rack".
   // @doc docs/guides/managing.md#rack-ctl
   // @doc docs/guides/managing.md#who-can-connect
+  // @doc docs/reference/reports.md#events
+  // @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
   test("rack start opens a socket only its user can use, and rack ctl operates the rack through it", async () => {
     const created = await app();
     const rack = run(["start"], created.dir);
@@ -162,6 +164,22 @@ describe.skipIf(WINDOWS)("the Unix socket", () => {
     const history = run(["ctl", "history", "counter"], created.dir);
     expect(await history.exited()).toBe(0);
     expect(JSON.parse(history.output)[0]).toMatchObject({ cause: "restart", ok: true });
+
+    // The feed holds the start and the restart, numbered from 1 without gaps.
+    const events = run(["ctl", "events"], created.dir);
+    expect(await events.exited()).toBe(0);
+    const records = JSON.parse(events.output) as { seq: number }[];
+    expect(records.map((record) => record.seq)).toEqual(records.map((_, index) => index + 1));
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "log", message: "rack ctl started" }),
+        expect.objectContaining({ type: "swap", device: "counter", mode: "restart" }),
+      ]),
+    );
+    const newest = records.at(-1) as { seq: number };
+    const after = run(["ctl", "events", "--after", String(newest.seq - 1)], created.dir);
+    expect(await after.exited()).toBe(0);
+    expect(JSON.parse(after.output)[0]).toEqual(newest);
 
     const stop = run(["ctl", "stop"], created.dir);
     expect(await stop.exited()).toBe(0);

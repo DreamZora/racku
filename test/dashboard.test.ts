@@ -264,6 +264,9 @@ describe("forwarding to a running rack", () => {
     const devices = (metrics as { value: { devices: { device: string }[] } }).value.devices;
     expect(devices.map((device) => device.device)).toEqual(["counter"]);
     expect(await answer(api(d, "history"))).toEqual([200, { ok: true, value: [] }]);
+    expect(await answer(api(d, "events"))).toEqual([200, { ok: true, value: running.events() }]);
+    const newest = running.events().at(-1)?.seq ?? 0;
+    expect(await answer(api(d, "events", [newest]))).toEqual([200, { ok: true, value: [] }]);
     expect(await answer(api(d, "reload"))).toEqual([200, { ok: true, value: [] }]);
 
     const first = running.status()[0]?.firmware;
