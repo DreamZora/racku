@@ -676,6 +676,30 @@ describe("bounds", () => {
     ]);
   }, 15_000);
 
+  // Bun's fetch also ends a request whose connection stays idle past BUN_CONFIG_HTTP_IDLE_TIMEOUT,
+  // which Bun reads as it starts: by default after 5 to 7 minutes, before an operation's bound,
+  // with the TimeoutError of a bound. With 1 s, Bun 1.4.4 ends such a request after 8 s.
+  test("waits for the rack past the idle timeout of Bun's fetch, within the bounds of a read and an operation", async () => {
+    const late = 10_000;
+    const endpoint = stub(async () => {
+      await Bun.sleep(late);
+      return Response.json({ ok: true, value: null });
+    });
+    const d = await dashboard(["--url", endpoint.url], FIXTURES, {
+      RACK_CONTROL_TOKEN: "t".repeat(43),
+      BUN_CONFIG_HTTP_IDLE_TIMEOUT: "1",
+    });
+    const started = performance.now();
+    const answers = await Promise.all([answer(api(d, "status")), answer(api(d, "reload"))]);
+    expect(answers).toEqual([
+      [200, { ok: true, value: null }],
+      [200, { ok: true, value: null }],
+    ]);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(late - 50);
+    await d.cli.waitFor(/^reload: /m);
+    expect(lines(d.cli).slice(1)).toEqual(["reload: ok"]);
+  }, 30_000);
+
   test("answers 504 to metrics while a device hangs past the bound, and status at once", async () => {
     const created = await app();
     const { running } = await startRack(SPEC, {

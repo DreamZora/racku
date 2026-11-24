@@ -268,9 +268,12 @@ export async function findEndpoint(target: RackTarget): Promise<Endpoint | strin
  * Posts one operation to a management endpoint, as `{ "args": [...] }`, directly: never through
  * a proxy that `HTTP_PROXY` names.
  *
- * @param signal Aborts the request, and the reading of its answer.
+ * @param signal Aborts the request, and the reading of its answer. With it, it alone bounds the
+ *   wait. Without it, as for `rack ctl`, Bun's fetch ends a request whose connection stays idle
+ *   past `BUN_CONFIG_HTTP_IDLE_TIMEOUT`, by default 5 minutes.
  * @returns The endpoint's answer.
- * @throws What `fetch` throws when nothing answers, or when `signal` aborts.
+ * @throws What `fetch` throws when nothing answers, when `signal` aborts, or without `signal`,
+ *   when Bun's idle timeout ends the request.
  */
 export function postOperation(
   endpoint: Endpoint,
@@ -290,7 +293,11 @@ export function postOperation(
     // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
     proxy: false,
     ...(endpoint.unix === undefined ? {} : { unix: endpoint.unix }),
-    ...(signal === undefined ? {} : { signal }),
+    // Bun's idle timeout, by default 5 minutes, ends a request after 5 to 7 minutes: before the
+    // dashboard's bound of 10 minutes for an operation, with a TimeoutError like the bound's own.
+    // A request with a signal has the signal's bound alone.
+    // @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
+    ...(signal === undefined ? {} : { signal, timeout: false }),
   });
 }
 
