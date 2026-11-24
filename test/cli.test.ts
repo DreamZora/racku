@@ -595,3 +595,47 @@ export default rack("cli", {
     expect(await greeting(url)).toBe("hello");
   });
 });
+
+describe("rack ctl", () => {
+  // @doc docs/reference/cli.md#flags-of-rack-ctl
+  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
+  test("rack ctl sends its operation and token to the endpoint directly, never through a proxy that HTTP_PROXY names", async () => {
+    const { dir } = await app();
+    const token = "t".repeat(43);
+    const heard: (string | null)[] = [];
+    const endpoint = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        heard.push(request.headers.get("authorization"));
+        return Response.json({ ok: true, value: [] });
+      },
+    });
+    const proxied: string[] = [];
+    const proxy = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        proxied.push(request.url);
+        return new Response(null, { status: 502 });
+      },
+    });
+    try {
+      const through = `http://127.0.0.1:${proxy.port}`;
+      const ctl = run(["ctl", "status", "--url", endpoint.url.origin], dir, {
+        RACK_CONTROL_TOKEN: token,
+        HTTP_PROXY: through,
+        http_proxy: through,
+        NO_PROXY: "",
+        no_proxy: "",
+      });
+      expect(await ctl.exited()).toBe(0);
+      expect(JSON.parse(ctl.output)).toEqual([]);
+      expect(heard).toEqual([`Bearer ${token}`]);
+      expect(proxied).toEqual([]);
+    } finally {
+      await endpoint.stop(true);
+      await proxy.stop(true);
+    }
+  });
+});

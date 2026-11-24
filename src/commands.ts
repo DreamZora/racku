@@ -265,7 +265,8 @@ export async function findEndpoint(target: RackTarget): Promise<Endpoint | strin
 }
 
 /**
- * Posts one operation to a management endpoint, as `{ "args": [...] }`.
+ * Posts one operation to a management endpoint, as `{ "args": [...] }`, directly: never through
+ * a proxy that `HTTP_PROXY` names.
  *
  * @param signal Aborts the request, and the reading of its answer.
  * @returns The endpoint's answer.
@@ -284,6 +285,10 @@ export function postOperation(
       ...(endpoint.token === undefined ? {} : { authorization: `Bearer ${endpoint.token}` }),
     },
     body: JSON.stringify({ args }),
+    // The endpoint listens on loopback. Bun's fetch sends a request for 127.0.0.1 through the
+    // proxy of HTTP_PROXY unless NO_PROXY names it, and the token with it.
+    // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
+    proxy: false,
     ...(endpoint.unix === undefined ? {} : { unix: endpoint.unix }),
     ...(signal === undefined ? {} : { signal }),
   });
