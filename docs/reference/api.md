@@ -157,7 +157,8 @@ The types of what the methods take and return:
 | `SlotState` | type | The state of a slot: `"online"`, `"swapping"`, `"degraded"`, `"resetting"`, or `"faulted"`. |
 | `StuckThread` | type | A thread of an ended instance that is still stuck in native code, with its firmware and since when. |
 | `WatchdogStatus` | type | A watchdog of an instance, as `status()` reports it: its name, timeout, and last feed. |
-| `ListenerState` | type | A listener of an instance, as `status()` reports it: its URL, certificates, requests in flight, and open WebSockets. |
+| `ListenerStatus` | type | A listener of an instance, as `status()` reports it: its URL, certificates, requests in flight, and open WebSockets. |
+| `ListenerState` | type | Deprecated: a `ListenerStatus` with the listener's `index` and whether it is `listening`, which `status()` doesn't report. It goes in the next major version. |
 | `CertificateInfo` | type | A certificate of a listener, as `status()` reports it: its subject, server name, and expiry. |
 | `RackEvent` | type | What `subscribe()` delivers: a `power`, `swap`, `fault`, or `log` event. |
 | `EventRecord` | type | One record of the rack's recent events, as `events()` lists it: an event with its `seq` and `time`, and `cut` when it was cut. See [Reports](reports.md#events). |

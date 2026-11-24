@@ -79,6 +79,21 @@ export interface ListenerStatus {
   webSockets: number;
 }
 
+/**
+ * A listener of an instance with its index among the instance's listeners, and whether it
+ * listens, besides what `status()` reports of it.
+ *
+ * @deprecated `status()` reports each listener as a {@link ListenerStatus}, without the `index`
+ *   and `listening` that this type adds. It goes in the next major version.
+ * @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#listenerstatus-is-the-type-of-a-listeners-status
+ */
+export interface ListenerState extends ListenerStatus {
+  /** Its index among the instance's listeners. */
+  index: number;
+  /** It is bound and takes new connections. */
+  listening: boolean;
+}
+
 /** A certificate of a listener, as `status()` shows it. */
 export interface CertificateInfo {
   subject: string;

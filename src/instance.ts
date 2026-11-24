@@ -107,8 +107,11 @@ export interface InstanceHost {
   onAsk(instance: Instance, ask: ReserveAsk): Promise<unknown>;
 }
 
-/** A listener of an instance with its counters, as `status()` shows it. */
-export interface ListenerState extends ListenerReport {
+/**
+ * A listener of an instance as the main thread reads it: the Worker host's report, with its
+ * index and whether it listens, and its counters. `status()` shows it as a `ListenerStatus`.
+ */
+export interface InstanceListener extends ListenerReport {
   requests: number;
   webSockets: number;
 }
@@ -284,7 +287,7 @@ export class Instance {
   }
 
   /** The instance's listeners, with their requests in flight and open WebSockets. */
-  get listeners(): ListenerState[] {
+  get listeners(): InstanceListener[] {
     return this.listenerReports.map((report) => ({
       ...report,
       requests: Atomics.load(this.#gauge, SHARED_LISTENERS + 2 * report.index),

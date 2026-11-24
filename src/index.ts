@@ -63,7 +63,6 @@ export {
   type RackErrorCode,
   type WireError,
 } from "./errors.ts";
-export type { ListenerState, WatchdogStatus } from "./instance.ts";
 export {
   fileResponse,
   type Listener,
@@ -120,4 +119,5 @@ export {
   type UpdateCause,
   type UpdateRecord,
 } from "./rack.ts";
+export type { ListenerState, ListenerStatus, WatchdogStatus } from "./reports.ts";
 export type { StandardSchemaV1 } from "./schema.ts";

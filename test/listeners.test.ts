@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { connect as tlsConnect } from "node:tls";
 import {
   fileResponse,
+  type ListenerStatus,
   type RackError,
   type RackHandle,
   rack,
@@ -182,9 +183,10 @@ describe("listeners", () => {
     expect(await text(new URL("/who", url))).toMatch(/^v1:\w+ 1$/);
     // Bun counts a request until its response is written; the counters catch up at once after.
     await waitFor(() => statusOf(running).listeners[0]?.requests === 0);
-    expect(statusOf(running).listeners).toEqual([
-      { url: url.href, certificates: [], requests: 0, webSockets: 0 },
-    ]);
+    // racku's ListenerStatus is the type of what status() reports of a listener.
+    // @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#listenerstatus-is-the-type-of-a-listeners-status
+    const listeners: ListenerStatus[] = statusOf(running).listeners;
+    expect(listeners).toEqual([{ url: url.href, certificates: [], requests: 0, webSockets: 0 }]);
     expect(rec.logs).toContainEqual(
       expect.objectContaining({
         device: "listener",
