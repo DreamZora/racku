@@ -152,7 +152,9 @@ export type EventRecord = RackEvent & {
    * Present when the record was longer than 4,096 characters as JSON: it lost its `data` and its
    * error's `data`, and its messages were cut to 1,024 characters, the last of them `…`. A record
    * still too long then, such as one whose messages are full of characters that JSON escapes,
-   * had its messages, its device's name, and its error's code cut shorter, until it fit.
+   * had its messages, its device's name, its error's code, and a swap's `from` and `to` cut
+   * shorter, until it fit. A record that JSON can't write, or that its cuts leave too long, keeps
+   * only its `seq`, `time`, `type`, and device's name, cut short.
    */
   cut?: true;
 };

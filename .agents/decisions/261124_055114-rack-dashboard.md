@@ -282,25 +282,31 @@ Measured on 2026-11-24 with Bun 1.4.4 on Linux, with probes outside the reposito
 ## Implementation
 
 - **The feed:**
-  - `src/rack.ts` keeps it, each record as its JSON text, with the bounds `FEED_LIMIT`, `RECORD_MAX`, and `CUT_MESSAGE`. A record still too long after the cut, such as one whose messages are full of characters that JSON escapes, or whose device's name is thousands of characters long, has its messages, its device's name, and its error's code cut further, by half each time, until it fits.
+  - `src/rack.ts` keeps it, each record as its JSON text, with the bounds `FEED_LIMIT`, `RECORD_MAX`, and `CUT_MESSAGE`. A record still too long after the cut, such as one whose messages are full of characters that JSON escapes, or whose device's name or swap's `to` runs to thousands of characters, has those texts cut further, by half each time, and a `to` that isn't a string is cut as its `String()`. A record that JSON can't write, or that its cuts leave too long, keeps only its `seq`, `time`, `type`, and device's name cut to `MINIMAL_NAME` characters.
+  - The rack spends a `seq` only on a record that it keeps, and keeping one never throws, so that the records stay numbered without gaps, and every subscriber still gets the event.
   - `events()` is a method of `RackHandle`, and `src/control.ts` serves the operation `events`.
-  - `src/log.ts` exports what the log and the feed share: `bigints` and `detailText`, which write details, and `oneLine`, which escapes control characters.
+  - `src/log.ts` exports `bigints` and `detailText`, which write details for the log and the feed alike, and `oneLine`, which escapes control characters for the text log and for the dashboard's output.
   - `EventRecord`, and the other shapes of the reports, are in `src/reports.ts`, which `src/rack.ts` and the modules that held them re-export.
 - **The command lines:**
-  - `src/commands.ts` finds a rack's endpoint for `rack ctl` and the dashboard, in `rackTarget`, `findEndpoint`, and `postOperation`.
+  - `src/commands.ts` finds a rack's endpoint for `rack ctl` and the dashboard, in `rackTarget`, `findEndpoint`, and `postOperation`, and parses `rack ctl events --after` in `ctlArgs`. `rack dashboard` runs `runDashboard` of `src/dashboard/server.ts`. `src/cli.ts` and `src/executable.ts` call both.
   - `postOperation` sends operations with `proxy: false`. Bun 1.4.4's `fetch` sends a request for `127.0.0.1`, its `Authorization` header included, through the proxy that `HTTP_PROXY` names, unless `NO_PROXY` names the host, as a probe confirmed on 2026-11-24. Before, `rack ctl` sent a TCP endpoint's token to such a proxy.
-  - `rack ctl events` and `rack dashboard` are in `src/cli.ts`, and an executable's `ctl events` and `dashboard` in `src/executable.ts`.
-- **The server:** `src/dashboard/server.ts`, with `openDashboard`, `runDashboard`, and the bounds `WAITING_LIMIT`, `BODY_LIMIT`, `READ_TIMEOUT_MS`, and `OPERATION_TIMEOUT_MS`. Bun may end a connection whose request waits past its idle timeout, so a read's connection gets an idle timeout past its bound, and an operation's gets none, and closes after its answer.
+  - With a signal, as the dashboard gives it, `postOperation` also sends `timeout: false`, so that the dashboard's bounds decide how long it waits, and not Bun's idle timeout of `fetch`, which `BUN_CONFIG_HTTP_IDLE_TIMEOUT` sets to 5 minutes. `rack ctl` sends no signal, so that idle timeout still ends an operation of its own after 5 to 7 minutes.
+- **The server:** `src/dashboard/server.ts`, with `openDashboard` and the bounds `WAITING_LIMIT`, `BODY_LIMIT`, `READ_TIMEOUT_MS`, and `OPERATION_TIMEOUT_MS`.
+  - It listens with `reusePort: false`. Bun 1.4.4 sets `SO_REUSEPORT` on a server with `development: false` unless told not to, so a dashboard would otherwise share a `--port` with another dashboard, or with a device's listener, which `ctx.serve` binds with `reusePort`.
+  - Whether the rack answers, for the lines that the dashboard prints, comes from its answers to `status` alone, as the page's connection does. A rack still running racku 1.0.0 answers 404 to `events`, and that is the page's note, not a line.
+  - Rollback's options take only `to`, a string of at most 128 characters, and restart's only `cascade`, a boolean; other options get 400.
+  - A read's connection gets an idle timeout past its bound, and an operation's gets none and closes after its answer, since Bun ended a pending request without a body at its idle timeout in a probe.
 - **The page:** `src/dashboard/page/`: `index.html`, `main.ts`, and the views, with the DOM; and, without it, the modules that tests run in Bun, such as `api.ts`, `poller.ts`, `rates.ts`, `feed.ts`, `connection.ts`, and `token.ts`. What the decision leaves open:
-  - The page asks for the records after the one before the newest it holds, so that the newest comes back. An empty answer, or another record under that `seq`, shows a rack that started again, whose feed the page then reads from `seq` 1.
   - Rolling back to the known-good firmware sends its hash as `to`, since `rollback()` without `to` goes to the firmware before the current one.
+  - An answer of `metrics()` that comes more than `LATE_READING_MS`, 1 s, after its request gives no device a rate for its interval or the next one, since the rack reads each device's counters as its Worker answers, and waits for the slowest. The calls from outside keep their rates, since the rack reads them last.
   - The page gives up on a read after 70 s, and on an operation after 610 s, so that the dashboard's 504 comes first.
   - Its colors passed the palette validator of the dataviz skill, for light and dark.
+- **A departure, which awaits the user's confirmation:** [The page](#the-page) says that `events` asks for the records after the last one the page holds. The page asks for the records after the one before it, so that the newest comes back. An empty answer, or another record under that `seq`, shows a rack that started again, even within a second, which the page then reads from `seq` 1, as [What can go wrong](#what-can-go-wrong) has a rack that starts again appear. Asking after the newest, the page couldn't tell such a rack from one without new records.
 - **Tests:**
-  - `test/events.test.ts`: the feed, its bounds and cuts, and the operation on both transports; `test/control.test.ts`: `rack ctl events` against a rack.
-  - `test/dashboard.test.ts`: `rack dashboard` against racks and stand-in endpoints; `test/cli.test.ts` and `test/executable.test.ts`: the command lines, and the page that an executable serves.
+  - `test/events.test.ts`: the feed, its bounds and cuts, records that JSON can't write, and the operation on both transports; `test/control.test.ts`: `rack ctl events` against a rack.
+  - `test/dashboard.test.ts`: `rack dashboard` against racks and stand-in endpoints, a `--port` that another listener holds, waits past Bun's idle timeout, and the lines from `status`; `test/cli.test.ts` and `test/executable.test.ts`: the command lines, and an executable's `ctl events --after` and `dashboard --port`.
   - `test/dashboard-page.test.ts`: the page's logic.
-  - `test/dashboard-browser.test.ts`: the page in headless Chrome, which `test/fixtures/browser.ts` drives over the DevTools protocol.
+  - `test/dashboard-browser.test.ts`: the page in headless Chrome, which `test/fixtures/browser.ts` drives over the DevTools protocol: the devices, a crash, every operation with its dialog and Cancel, the page without the URL's fragment and in another page's frame, and a screen 320 px wide.
   - `test/reference.test.ts`: the bounds that Limits gives, against the code.
 
 ## Confirmation
