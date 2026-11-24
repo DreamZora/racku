@@ -603,6 +603,28 @@ describe("the feed's records", () => {
     expect(fault.summary).toBe("cache faulted, firmware aaaa1111; the rack resets it");
     expect(fault.error).toBe("RACK_DEVICE_FAULT: x is undefined");
   });
+
+  test("a record that the rack kept at its minimum shows its type and device, without the fields it lost", () => {
+    // The rack keeps a record so when JSON can't write it, such as a swap to a circular object.
+    const minimal = (type: string, device?: string) =>
+      describeRecord({
+        seq: 7,
+        time: 0,
+        type,
+        ...(device === undefined ? {} : { device }),
+        cut: true,
+      } as unknown as EventRecord);
+    for (const type of ["power", "swap", "fault", "log"]) {
+      expect(minimal(type, "talker\nx")).toEqual({
+        summary: `talker\\nx: a ${type} record that the rack kept only as its number, time, and type`,
+        error: null,
+        data: null,
+      });
+    }
+    expect(minimal("log").summary).toBe(
+      "a log record that the rack kept only as its number, time, and type",
+    );
+  });
 });
 
 // ---- The connection ----

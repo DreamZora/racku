@@ -191,6 +191,14 @@ export interface RecordText {
  * @returns Its summary, error, and data.
  */
 export function describeRecord(record: EventRecord): RecordText {
+  if (record.cut === true && isMinimal(record)) {
+    const device = (record as { device?: unknown }).device;
+    return {
+      summary: `${typeof device === "string" ? `${visibleText(device)}: ` : ""}a ${record.type} record that the rack kept only as its number, time, and type`,
+      error: null,
+      data: null,
+    };
+  }
   switch (record.type) {
     case "power":
       return {
@@ -220,6 +228,26 @@ export function describeRecord(record: EventRecord): RecordText {
         error: null,
         data: record.data === undefined ? null : formatData(record.data),
       };
+  }
+}
+
+/**
+ * Whether the rack kept a record at its minimum, its `seq`, `time`, `type`, and device's name,
+ * without the fields of its type, as it does for an event that JSON can't write.
+ *
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+ */
+function isMinimal(record: EventRecord): boolean {
+  const fields = record as Partial<Record<"state" | "action" | "error" | "message", unknown>>;
+  switch (record.type) {
+    case "power":
+      return fields.state === undefined;
+    case "swap":
+      return fields.action === undefined;
+    case "fault":
+      return fields.error === undefined;
+    default:
+      return fields.message === undefined;
   }
 }
 
