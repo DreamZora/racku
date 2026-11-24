@@ -143,6 +143,7 @@ test("the defaults of start() in the reference are the ones the code has", async
 
 // @doc docs/reference/limits.md#supervision-and-history
 // @doc docs/reference/limits.md#the-dashboard
+// @doc docs/reference/limits.md#rack-ctl
 // @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
 test("the bounds of the feed, the dashboard, and its page in the reference are the ones the code has", async () => {
   const dashboard = await import("../src/dashboard/server.ts");
@@ -175,6 +176,12 @@ test("the bounds of the feed, the dashboard, and its page in the reference are t
   expect(value("An operation's wait for the rack")).toBe(
     `${dashboard.OPERATION_TIMEOUT_MS / 60_000} minutes`,
   );
+  expect(value("A read's wait of `rack ctl`: `status`, `metrics`, `history`, and `events`")).toBe(
+    `${dashboard.READ_TIMEOUT_MS / 1000} s`,
+  );
+  expect(
+    value("An operation's wait of `rack ctl`: `reload`, `swap`, `restart`, `rollback`, and `stop`"),
+  ).toBe(`${dashboard.OPERATION_TIMEOUT_MS / 60_000} minutes`);
   expect(value("Records of the feed that the page keeps")).toBe(spaced(PAGE_RECORDS));
   expect(value("Readings of the counters that the page keeps per device, for its charts")).toBe(
     String(READINGS_PER_DEVICE),

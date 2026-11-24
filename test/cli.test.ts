@@ -10,6 +10,7 @@ import { lstat, rm, rmdir, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { boundOf, OPERATION_TIMEOUT_MS, READ_TIMEOUT_MS, unanswered } from "../src/commands.ts";
 import {
   Cli,
   FIXTURES,
@@ -665,4 +666,44 @@ describe("rack ctl", () => {
       await proxy.stop(true);
     }
   });
+
+  // @doc docs/reference/limits.md#rack-ctl
+  // @doc docs/reference/cli.md#operations-of-rack-ctl
+  // @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#rack-ctl-waits-within-bounds
+  test("rack ctl waits within its bounds alone, past Bun's idle timeout of fetch, for a read and an operation", async () => {
+    const { dir } = await app();
+    // An endpoint that answers after 10 s, which Bun's idle timeout of 1 s, about 8 s in steps,
+    // would have cut.
+    const endpoint = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch() {
+        await Bun.sleep(10_000);
+        return Response.json({ ok: true, value: [] });
+      },
+    });
+    try {
+      const env = { RACK_CONTROL_TOKEN: "t".repeat(43), BUN_CONFIG_HTTP_IDLE_TIMEOUT: "1" };
+      const read = run(["ctl", "status", "--url", endpoint.url.origin], dir, env);
+      const operation = run(["ctl", "reload", "--url", endpoint.url.origin], dir, env);
+      expect([await read.exited(), await operation.exited()]).toEqual([0, 0]);
+      expect([JSON.parse(read.output), JSON.parse(operation.output)]).toEqual([[], []]);
+    } finally {
+      await endpoint.stop(true);
+    }
+
+    // The bounds, and what rack ctl says when the rack didn't answer within one.
+    expect([boundOf("status"), boundOf("events"), boundOf("reload"), boundOf("stop")]).toEqual([
+      READ_TIMEOUT_MS,
+      READ_TIMEOUT_MS,
+      OPERATION_TIMEOUT_MS,
+      OPERATION_TIMEOUT_MS,
+    ]);
+    expect(unanswered("metrics", READ_TIMEOUT_MS)).toBe(
+      "the rack didn't answer metrics within 60 s",
+    );
+    expect(unanswered("reload", OPERATION_TIMEOUT_MS)).toBe(
+      "the rack didn't answer reload within 10 min; it may still run, and rack ctl history will show its outcome",
+    );
+  }, 30_000);
 });

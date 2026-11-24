@@ -101,6 +101,15 @@ See [Faults and overload](../guides/faults.md), [Updates](../guides/updates.md#h
 
 The page asks for the rack's state, its history, and its events every second, and for its counters every 2 seconds, one request of each kind at a time. See [The dashboard](../guides/managing.md#the-dashboard).
 
+## rack ctl
+
+| Bound | Value | Beyond it |
+|---|---|---|
+| A read's wait of `rack ctl`: `status`, `metrics`, `history`, and `events` | 60 s | `rack ctl` exits with code 1, saying that the rack didn't answer within it. |
+| An operation's wait of `rack ctl`: `reload`, `swap`, `restart`, `rollback`, and `stop` | 10 minutes | `rack ctl` exits with code 1, saying that the operation may still run, and that `rack ctl history` will show its outcome. |
+
+An executable's `ctl` waits as long. See [rack ctl](../guides/managing.md#rack-ctl).
+
 ## Executables
 
 | Bound | Value | Beyond it |

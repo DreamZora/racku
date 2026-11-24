@@ -49,7 +49,7 @@ The two exclude each other, and a rack placed by hand takes neither.
 
 ## Operations of rack ctl
 
-`rack ctl` runs one operation of the rack handle on the rack whose base directory is the current directory, prints its result as JSON, and exits with code 0, or prints the error and exits with code 1.
+`rack ctl` runs one operation of the rack handle on the rack whose base directory is the current directory, prints its result as JSON, and exits with code 0, or prints the error and exits with code 1. It waits 60 s for the answer to a read, and 10 minutes for an operation that changes the rack, as [Limits](limits.md#rack-ctl) gives.
 
 | Operation | Runs |
 |---|---|

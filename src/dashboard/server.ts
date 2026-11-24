@@ -18,9 +18,12 @@ import {
   describeError,
   fail,
   findEndpoint,
+  OPERATION_TIMEOUT_MS,
   postOperation,
   type RackTarget,
+  READ_TIMEOUT_MS,
   rackTarget,
+  unanswered,
 } from "../commands.ts";
 import { oneLine } from "../log.ts";
 import page from "./page/index.html";
@@ -31,14 +34,9 @@ export const WAITING_LIMIT = 16;
 /** The largest body of a request, in bytes: 64 KiB. A larger one gets 413. */
 export const BODY_LIMIT = 64 * 1024;
 
-/**
- * How long a read waits for the rack's answer, in ms: 60 s, more than the default `hookTimeout`
- * of 30 s for which `metrics()` waits for a device. Then 504.
- */
-export const READ_TIMEOUT_MS = 60_000;
-
-/** How long an operation waits for the rack's answer, in ms: 10 minutes. Then 504. */
-export const OPERATION_TIMEOUT_MS = 10 * 60_000;
+// How long a read and an operation wait for the rack's answer, then 504: the bounds that
+// rack ctl shares.
+export { OPERATION_TIMEOUT_MS, READ_TIMEOUT_MS };
 
 /** The bounds of a dashboard, which {@link DashboardOptions.bounds} shortens for tests. */
 export interface DashboardBounds {
@@ -223,7 +221,7 @@ export function openDashboard(options: DashboardOptions): Dashboard {
     waiting++;
     let answer: Answer;
     try {
-      answer = await ask(target, op, args, limit, spec.kind);
+      answer = await ask(target, op, args, limit);
     } finally {
       waiting--;
     }
@@ -311,7 +309,6 @@ async function ask(
   op: string,
   args: unknown[],
   limit: number,
-  kind: Forwarded["kind"],
 ): Promise<Answer> {
   const endpoint = await findEndpoint(target);
   if (typeof endpoint === "string") return { status: 502, message: endpoint };
@@ -324,12 +321,7 @@ async function ask(
     text = await response.text();
   } catch (error) {
     if ((error as { name?: unknown }).name === "TimeoutError") {
-      const after =
-        kind === "operation" ? "; it may still run, and the history will show its outcome" : "";
-      return {
-        status: 504,
-        message: `the rack didn't answer ${op} within ${duration(limit)}${after}`,
-      };
+      return { status: 504, message: unanswered(op, limit, "the history") };
     }
     return { status: 502, message: `cannot reach the rack: ${describeError(error)}` };
   }
@@ -477,11 +469,6 @@ function problem(status: number, message: string, headers: Record<string, string
 /** An argument, as a printed line shows it: a device's name as it is, anything else as JSON. */
 function word(arg: unknown): string {
   return typeof arg === "string" ? arg : JSON.stringify(arg);
-}
-
-/** A bound in ms, for people: `60 s`, or `10 min` from 2 minutes up. */
-function duration(ms: number): string {
-  return ms >= 120_000 && ms % 60_000 === 0 ? `${ms / 60_000} min` : `${ms / 1000} s`;
 }
 
 /** What {@link runDashboard} runs. */

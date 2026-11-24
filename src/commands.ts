@@ -169,14 +169,20 @@ export async function sendOperation(
   const args = ctlArgs(op, rest, flags, usage);
   const endpoint = await findEndpoint(await rackTarget(flags, dir));
   if (typeof endpoint === "string") fail(endpoint);
+  // The bound of the dashboard's wait, which covers the answer's body as well as its arrival.
+  // @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#rack-ctl-waits-within-bounds
+  const limit = boundOf(op);
   let response: Response;
+  let text: string;
   try {
-    response = await postOperation(endpoint, op, args);
+    response = await postOperation(endpoint, op, args, AbortSignal.timeout(limit));
+    text = await response.text();
   } catch (error) {
+    if ((error as { name?: unknown }).name === "TimeoutError") fail(unanswered(op, limit));
     fail(`cannot reach the rack: ${describeError(error)}`);
   }
   if (!response.ok) fail(`the rack answered ${response.status} ${response.statusText}`);
-  const body = (await response.json()) as
+  const body = JSON.parse(text) as
     | { ok: true; value: unknown }
     | { ok: false; error: { code: string; message: string } };
   if (!body.ok) fail(`${body.error.code}: ${body.error.message}`);
@@ -357,6 +363,59 @@ function ctlArgs(
     default:
       return usage();
   }
+}
+
+/**
+ * How long `rack ctl` and the dashboard wait for the rack's answer to a read, in ms: 60 s, more
+ * than the default `hookTimeout` of 30 s for which `metrics()` waits for a device.
+ *
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
+ * @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#rack-ctl-waits-within-bounds
+ */
+export const READ_TIMEOUT_MS = 60_000;
+
+/**
+ * How long `rack ctl` and the dashboard wait for the rack's answer to an operation that changes
+ * it, in ms: 10 minutes, more than any of the rack's own timeouts.
+ *
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
+ * @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#rack-ctl-waits-within-bounds
+ */
+export const OPERATION_TIMEOUT_MS = 10 * 60_000;
+
+/** The operations of the management endpoint that read the rack; the others change it. */
+export const READS: ReadonlySet<string> = new Set(["status", "metrics", "history", "events"]);
+
+/**
+ * How long a command waits for the rack's answer to an operation.
+ *
+ * @param op The operation, such as `status` or `reload`.
+ * @returns {@link READ_TIMEOUT_MS} for a read, and {@link OPERATION_TIMEOUT_MS} otherwise.
+ */
+export function boundOf(op: string): number {
+  return READS.has(op) ? READ_TIMEOUT_MS : OPERATION_TIMEOUT_MS;
+}
+
+/**
+ * What a command says when the rack didn't answer an operation within its bound: for an
+ * operation that changes the rack, also that it may still run, and where its outcome shows.
+ *
+ * @param op The operation.
+ * @param limit The bound it waited, in ms.
+ * @param history Where the outcome shows; by default `rack ctl history`.
+ */
+export function unanswered(op: string, limit: number, history = "rack ctl history"): string {
+  const after = READS.has(op) ? "" : `; it may still run, and ${history} will show its outcome`;
+  return `the rack didn't answer ${op} within ${duration(limit)}${after}`;
+}
+
+/**
+ * A bound in ms, for people: `60 s`, or `10 min` from 2 minutes up.
+ *
+ * @param ms The bound.
+ */
+export function duration(ms: number): string {
+  return ms >= 120_000 && ms % 60_000 === 0 ? `${ms / 60_000} min` : `${ms / 1000} s`;
 }
 
 /** What {@link runRack} runs. */
