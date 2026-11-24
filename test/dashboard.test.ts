@@ -762,6 +762,7 @@ describe("the rack it watches", () => {
 
   // @doc docs/reference/cli.md#flags-of-rack-dashboard
   // @doc docs/reference/cli.md#exit-codes
+  // @doc docs/reference/cli.md#environment-variables
   test("reaches a TCP endpoint by --url with its token, and answers 502 naming the rack's 401 to a wrong one", async () => {
     const created = await app();
     const { running } = await startRack(SPEC, { baseDir: created.dir, control: { port: 0 } });

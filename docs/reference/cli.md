@@ -117,7 +117,7 @@ An executable that `rack compile` made starts the rack it packaged, as `rack sta
 
 | Variable | Meaning |
 |---|---|
-| `RACK_CONTROL_TOKEN` | The token of the TCP management endpoint, for `rack start` and `rack dev`, in place of a random one. It needs 32 characters or more: a shorter one, an empty one included, fails the start with `RACK_MANIFEST`. `rack ctl --url` sends it when `--token-file` gives no token; without `--url`, `rack ctl` sends the token of the rack's control file instead, and only while the process that the file names runs. |
+| `RACK_CONTROL_TOKEN` | The token of the TCP management endpoint, for `rack start` and `rack dev`, in place of a random one. It needs 32 characters or more: a shorter one, an empty one included, fails the start with `RACK_MANIFEST`. `rack ctl --url` and `rack dashboard --url` send it when `--token-file` gives no token; without `--url`, they send the token of the rack's control file instead, and only while the process that the file names runs. |
 | `XDG_RUNTIME_DIR` | On Linux and macOS, the management endpoint's socket and control file live in `$XDG_RUNTIME_DIR/racku/`. An empty or relative value counts as unset, as for the two below. |
 | `XDG_STATE_HOME` | Without `XDG_RUNTIME_DIR`, they live in `$XDG_STATE_HOME/racku/control/`, and without either in `~/.local/state/racku/control/`. |
 | `LOCALAPPDATA` | On Windows, the control file lives in `%LOCALAPPDATA%\racku\control\`. |
