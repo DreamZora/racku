@@ -3,8 +3,9 @@
  * dashboard's. It speaks the DevTools protocol over Bun's WebSocket, so it needs no dependency:
  * {@link findBrowser} finds the browser, {@link browserForTests} decides whether a test runs or
  * skips, and {@link launchBrowser} starts the browser with a profile of its own. Each
- * {@link Page} navigates, evaluates expressions, waits for them, clicks as a user does, and
- * collects what the page reports outside its DOM, so that a test can assert that there is none.
+ * {@link Page} navigates, evaluates expressions in its document or in a frame of it, waits for
+ * them, clicks as a user does, and collects what the page reports outside its DOM, so that a test
+ * can assert that there is none.
  *
  * Every wait is bounded: the launch by {@link LAUNCH_MS}; a command's answer, a page's load,
  * `waitFor`, and `click` by {@link TIMEOUT_MS} unless the call names its own bound; and each step
@@ -51,6 +52,9 @@ const TEXT_MAX = 2_000;
 /** The most characters of the browser's standard error that are kept, for the errors of a launch. */
 const STDERR_MAX = 16_384;
 
+/** The name of the worlds in which `evaluateInFrame` evaluates, apart from the frames' scripts. */
+const WORLD_NAME = "racku-test";
+
 /** Where Google Chrome and Chromium install on macOS. */
 const MAC_INSTALLS = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -84,6 +88,16 @@ export interface PageMessage {
   text: string;
   /** The URL of the script or document it came from, when the browser names one. */
   url?: string;
+}
+
+/** A frame of a tab's document, as {@link Page.frames} lists it. */
+export interface Frame {
+  /** The browser's id of the frame, which {@link Page.evaluateInFrame} takes. */
+  id: string;
+  /** The id of the frame that holds it; absent for the top one. */
+  parentId?: string;
+  /** The URL of its document, without the fragment. */
+  url: string;
 }
 
 /**
@@ -130,6 +144,31 @@ export interface Page {
    *   has closed.
    */
   evaluate<T = unknown>(expression: string, timeoutMs?: number): Promise<T>;
+
+  /**
+   * Lists the frames of the tab's document, as the browser has them: the top one first, and each
+   * frame before the frames below it. A frame from another site, which the browser runs in a
+   * process of its own, isn't listed.
+   *
+   * @param timeoutMs The bound on the answer; {@link TIMEOUT_MS} by default.
+   * @throws Error when the browser doesn't answer within the bound, or when the page or the
+   *   browser has closed.
+   */
+  frames(timeoutMs?: number): Promise<Frame[]>;
+
+  /**
+   * Evaluates a JavaScript expression in a frame of the tab's document, as {@link evaluate} does
+   * in the top one, but in a world of the driver's own: it shares the frame's DOM, storage, and
+   * performance timeline, and none of the globals of the frame's scripts, so that it reads the
+   * frame the same whatever those scripts did.
+   *
+   * @param frameId The frame's id, as {@link frames} lists it.
+   * @param expression An expression, such as `document.title`.
+   * @param timeoutMs The bound on each of the two commands that it sends, which make the world and
+   *   evaluate in it; {@link TIMEOUT_MS} by default.
+   * @throws Error as {@link evaluate} does, and when the tab has no frame with the id.
+   */
+  evaluateInFrame<T = unknown>(frameId: string, expression: string, timeoutMs?: number): Promise<T>;
 
   /**
    * Evaluates `expression` every 50 ms until its value is truthy, and returns that value. An
@@ -826,6 +865,12 @@ interface ExceptionDetails {
   stackTrace?: { callFrames: { url: string }[] };
 }
 
+/** The frames of a page's document, as the protocol describes them. */
+interface FrameTree {
+  frame: { id: string; parentId?: string; url: string };
+  childFrames?: FrameTree[];
+}
+
 /** An evaluation in the page that threw. */
 class EvaluationError extends Error {
   /** Whether the exception is a `SyntaxError`, such as for an invalid selector, which no retry fixes. */
@@ -935,10 +980,53 @@ class ChromePage implements Page {
     }
   }
 
-  async evaluate<T = unknown>(expression: string, timeoutMs = TIMEOUT_MS): Promise<T> {
+  evaluate<T = unknown>(expression: string, timeoutMs = TIMEOUT_MS): Promise<T> {
+    return this.#evaluate<T>(expression, timeoutMs);
+  }
+
+  async frames(timeoutMs = TIMEOUT_MS): Promise<Frame[]> {
+    const { frameTree } = await this.send<{ frameTree: FrameTree }>(
+      "Page.getFrameTree",
+      {},
+      timeoutMs,
+    );
+    const frames: Frame[] = [];
+    const visit = (tree: FrameTree) => {
+      const { id, parentId, url } = tree.frame;
+      frames.push(parentId === undefined ? { id, url } : { id, parentId, url });
+      for (const child of tree.childFrames ?? []) visit(child);
+    };
+    visit(frameTree);
+    return frames;
+  }
+
+  async evaluateInFrame<T = unknown>(
+    frameId: string,
+    expression: string,
+    timeoutMs = TIMEOUT_MS,
+  ): Promise<T> {
+    // A new world for each call: the browser ends a frame's worlds when the frame navigates.
+    const { executionContextId } = await this.send<{ executionContextId: number }>(
+      "Page.createIsolatedWorld",
+      { frameId, worldName: WORLD_NAME },
+      timeoutMs,
+    );
+    return this.#evaluate<T>(expression, timeoutMs, executionContextId);
+  }
+
+  /**
+   * Evaluates `expression` in the top document's own world, or in the context that `contextId`
+   * names, and returns its value as {@link evaluate} describes.
+   */
+  async #evaluate<T>(expression: string, timeoutMs: number, contextId?: number): Promise<T> {
     const answer = await this.send<{ result: RemoteObject; exceptionDetails?: ExceptionDetails }>(
       "Runtime.evaluate",
-      { expression, awaitPromise: true, returnByValue: true },
+      {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+        ...(contextId === undefined ? {} : { contextId }),
+      },
       timeoutMs,
     );
     const details = answer.exceptionDetails;

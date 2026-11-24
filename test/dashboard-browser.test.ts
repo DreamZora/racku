@@ -3,8 +3,9 @@
  * `rack dashboard` prints, and sees the rack's devices and their states, and a crash as it
  * happens. The page runs Restart, Swap, Reload, Roll back, and Stop once their dialogs are
  * confirmed, and nothing for a dialog that is cancelled; it keeps a device's details within a
- * phone's screen, and shows nothing of the rack without the URL's fragment. The tests run where a
- * browser is found; in CI, which has one on each system, a missing browser fails them instead.
+ * phone's screen, and shows nothing of the rack without the URL's fragment, or in another page's
+ * frame. The tests run where a browser is found; in CI, which has one on each system, a missing
+ * browser fails them instead.
  *
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#tests
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-page
@@ -46,8 +47,10 @@ afterAll(() => {
 const apps: TempApp[] = [];
 const processes: Cli[] = [];
 const pages: Page[] = [];
+const servers: ReturnType<typeof Bun.serve>[] = [];
 afterEach(async () => {
   await Promise.all(pages.splice(0).map((page) => page.close()));
+  await Promise.all(servers.splice(0).map((server) => server.stop(true)));
   await Promise.all(processes.splice(0).map((cli) => cli.stop()));
   await Promise.all(apps.splice(0).map((app) => app.remove()));
 });
@@ -63,6 +66,12 @@ const TEST_MS = 60_000;
 
 /** How long the page may take to show a change, which it reads within a second or two. */
 const SHOWN_MS = 15_000;
+
+/**
+ * How long a test watches a page that is to do nothing: past the first second, after which a page
+ * that runs has asked the dashboard twice.
+ */
+const QUIET_MS = 1_500;
 
 /** Starts a rack in a new app, with its management endpoint, and `rack dashboard` for it. */
 async function rackWithDashboard() {
@@ -410,6 +419,63 @@ describe.skipIf(chrome === undefined)("the dashboard's page in a browser", () =>
           "performance.getEntriesByType('resource').filter((entry) => entry.name.includes('/api/')).length",
         ),
       ).toBe(0);
+      expect(page.messages).toEqual([]);
+    },
+    TEST_MS,
+  );
+
+  // @decision .agents/decisions/261124_055114-rack-dashboard.md#who-can-use-the-dashboard
+  test(
+    "shows nothing in another page's frame, even with the URL's fragment, and takes no token or asks anything there",
+    async () => {
+      const { url, origin } = await rackWithDashboard();
+      // Another origin of 127.0.0.1, on a port of its own, frames the URL that the dashboard
+      // printed. The page's check is the same for any page that frames it; one of the same site
+      // keeps the frame in the page's process, where the driver reaches it.
+      const site = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: () =>
+          new Response(
+            `<!doctype html><title>another site</title><iframe src="${url}" onload="window.framed = true"></iframe>`,
+            { headers: { "content-type": "text/html" } },
+          ),
+      });
+      servers.push(site);
+      const page = await newPage();
+      await page.navigate(`http://127.0.0.1:${site.port}/`);
+      await page.waitFor("window.framed === true", SHOWN_MS);
+      const frame = (await page.frames()).find((each) => each.url.startsWith(`${origin}/`));
+      if (frame === undefined) throw new Error(`no frame of ${origin} in the page`);
+      // A page that started would draw at once, move the token to its storage, and ask the
+      // dashboard every second.
+      await Bun.sleep(QUIET_MS);
+      expect(
+        await page.evaluateInFrame(
+          frame.id,
+          `(() => {
+            const loaded = performance.getEntriesByType('resource');
+            return {
+              top: window.top === window.self,
+              hash: location.hash,
+              script: loaded.some((entry) => entry.initiatorType === 'script'),
+              app: document.getElementById('app')?.childElementCount,
+              token: sessionStorage.getItem('racku-dashboard-token'),
+              stored: sessionStorage.length,
+              asked: loaded.filter((entry) => new URL(entry.name).pathname.startsWith('/api/')).length,
+            };
+          })()`,
+        ),
+      ).toEqual({
+        top: false,
+        // The frame holds the token in its URL, and loaded the page's script, which did nothing.
+        hash: url.slice(url.indexOf("#")),
+        script: true,
+        app: 0,
+        token: null,
+        stored: 0,
+        asked: 0,
+      });
       expect(page.messages).toEqual([]);
     },
     TEST_MS,
