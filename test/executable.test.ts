@@ -11,7 +11,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SlotStatus, UpdateRecord } from "racku";
+import type { EventRecord, SlotStatus, UpdateRecord } from "racku";
 import { Cli, type TempApp, tempApp, useControlDir, WINDOWS, waitFor } from "./fixtures/app.ts";
 
 useControlDir();
@@ -545,7 +545,9 @@ describe("an executable with --watch", () => {
 // @decision .agents/decisions/261124_055114-rack-dashboard.md#how-the-page-is-built
 // @doc docs/reference/cli.md#the-command-line-of-an-executable
 describe("an executable's dashboard", () => {
-  test("serves the page that rack compile packaged, and the rack that the executable runs for its base directory", async () => {
+  // @doc docs/reference/cli.md#flags-of-rack-dashboard
+  // @doc docs/reference/cli.md#operations-of-rack-ctl
+  test("serves the page that rack compile packaged on a free port or --port, with the rack that the executable runs for its base directory, whose feed ctl events --after reads", async () => {
     const dir = await baseDir();
     await run(dir);
     const dashboard = new Cli([], tmpdir(), {}, [exe, "dashboard", "--base-dir", dir], "console");
@@ -593,6 +595,40 @@ describe("an executable's dashboard", () => {
     ]);
     dashboard.kill("SIGINT");
     expect(await dashboard.exited()).toBe(0);
+
+    // The flags that take a value, which a wrong command line alone can't tell from flags that
+    // take none: ctl's --after, and the dashboard's --port.
+    const records = await ctl<EventRecord[]>(dir, "events");
+    const after = records[Math.floor(records.length / 2)]?.seq ?? 0;
+    const later = records.filter((record) => record.seq > after);
+    expect([later.length > 0, later.length < records.length]).toEqual([true, true]);
+    const read = await ctl<EventRecord[]>(dir, "events", "--after", String(after));
+    // Records that the rack added since the first read come after.
+    expect(read.slice(0, later.length)).toEqual(later);
+    expect(read.every((record) => record.seq > after)).toBe(true);
+
+    const free = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+    const port = free.port as number;
+    await free.stop(true);
+    const onPort = new Cli([], tmpdir(), {}, [
+      exe,
+      "dashboard",
+      "--base-dir",
+      dir,
+      "--port",
+      String(port),
+    ]);
+    running.push(onPort);
+    const [, listening = ""] = await onPort.waitFor(
+      /^dashboard of .+ at (http:\/\/127\.0\.0\.1:\d+)\/#token=[\w-]+$/m,
+    );
+    expect(listening).toBe(`http://127.0.0.1:${port}`);
+    const served = await fetch(`${listening}/`);
+    expect([served.status, served.headers.get("content-type")?.split(";")[0]]).toEqual([
+      200,
+      "text/html",
+    ]);
+    expect(await served.text()).toContain('http-equiv="Content-Security-Policy"');
   }, 30_000);
 
   // @doc docs/reference/cli.md#operations-of-rack-ctl
