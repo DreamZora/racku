@@ -11,7 +11,7 @@ The documentation ships with the package, and this skill names each document by 
 
 ## The workflow of an app
 
-1. **Add racku** in the app's directory, once its `package.json` exists. racku isn't on npm yet, so it comes from its repository through git, at the tag of its newest version: `bun add git+https://github.com/DreamZora/racku.git#v1.0.0 valibot`. In a directory without a `package.json`, `bun add` changes the nearest one above it, another project's, without a warning. For a commit that isn't released yet, racku comes the same way, at that commit. Once racku is installed, `node_modules/racku/docs/getting-started.md#add-racku` says more.
+1. **Add racku** in the app's directory, once its `package.json` exists. racku isn't on npm yet, so it comes from its repository through git, at the tag of its newest version: `bun add git+https://github.com/DreamZora/racku.git#v1.1.0 valibot`. In a directory without a `package.json`, `bun add` changes the nearest one above it, another project's, without a warning. For a commit that isn't released yet, racku comes the same way, at that commit. Once racku is installed, `node_modules/racku/docs/getting-started.md#add-racku` says more.
 2. **Define the connectors** between the devices, with a schema for every input, output, and event: `node_modules/racku/docs/guides/connectors.md`.
 3. **Write the devices**, one file each, which provide some connectors and need others: `node_modules/racku/docs/guides/devices.md`.
 4. **Mount them in a rack**, in a manifest, `rack.ts` by default: by hand in slots, or scanned from directories: `node_modules/racku/docs/guides/racks.md`.

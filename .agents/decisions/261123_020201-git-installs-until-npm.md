@@ -56,7 +56,7 @@ Status: accepted
 
 ## Implementation
 
-- `docs/getting-started.md`, `README.md`, and `skills/racku/SKILL.md` add racku with `bun add git+https://github.com/DreamZora/racku.git#v1.0.0 valibot`, and getting started says that an app needs git.
+- `docs/getting-started.md`, `README.md`, and `skills/racku/SKILL.md` add racku with `bun add git+https://github.com/DreamZora/racku.git#v1.1.0 valibot`, and getting started says that an app needs git.
 - `test/getting-started.test.ts`:
   - "the app of the getting-started guide installs, runs, tests, and reloads as written" checks the command against the repository and the version in `package.json`, and installs the tarball of `bun pm pack` in its place;
   - "racku installs through git from its repository at a tag or a commit, which package.json keeps" installs both, from a repository of the files under test that `repository()` tags with the version.

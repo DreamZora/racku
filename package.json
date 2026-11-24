@@ -1,6 +1,6 @@
 {
   "name": "racku",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A Bun framework of hot-swappable devices mounted in a 42U-style rack",
   "keywords": [
     "bun",

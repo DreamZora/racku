@@ -26,7 +26,7 @@ Make a directory for the app, and write this `package.json` in it, whose scripts
 racku isn't on npm yet, so an app adds it through git, from racku's repository at the tag of a version, which Bun clones with git. In the app's directory, add racku at its newest version, and valibot for the schemas:
 
 ```sh
-bun add git+https://github.com/DreamZora/racku.git#v1.0.0 valibot
+bun add git+https://github.com/DreamZora/racku.git#v1.1.0 valibot
 ```
 
 - Run `bun add` in the app's directory, next to its `package.json`. In a directory without one, Bun adds the packages to the nearest `package.json` above it, another project's, without a warning.
