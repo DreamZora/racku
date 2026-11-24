@@ -247,6 +247,12 @@ export function openDashboard(options: DashboardOptions): Dashboard {
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: options.port,
+    // A port that another server holds is refused, not shared. Bun 1.4.4 sets SO_REUSEPORT for
+    // a server with `development: false` unless told not to, and would then share the port with
+    // another dashboard, or with a device's listener, which binds with reusePort: each would take
+    // part of the other's connections.
+    // @decision .agents/decisions/261124_055114-rack-dashboard.md#what-can-go-wrong
+    reusePort: false,
     // Bun bundles the page's modules and stylesheet itself, without its development tools, and
     // an executable carries them as rack compile bundled them.
     // @decision .agents/decisions/261124_055114-rack-dashboard.md#how-the-page-is-built

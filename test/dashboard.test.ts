@@ -862,6 +862,28 @@ describe("the command", () => {
     expect(cli.stdout).toBe("");
   });
 
+  // Holders that set SO_REUSEPORT, as Bun 1.4.4 also does for a server with
+  // `development: false` unless told not to: a dashboard that shared a port with one would take
+  // part of its connections.
+  // @doc docs/reference/cli.md#flags-of-rack-dashboard
+  // @doc docs/reference/cli.md#exit-codes
+  test("exits with code 1, naming the port, when a device's listener or another rack dashboard holds --port", async () => {
+    // A device's listener binds with reusePort, so that the next instance of the device can take
+    // its port over in a swap.
+    const { running } = await startRack({ slots: { 1: slot("./devices/listener.ts") } });
+    const listener = new URL(running.status()[0]?.listeners[0]?.url ?? "");
+    const other = await dashboard(["--dir", FIXTURES]);
+    for (const port of [Number(listener.port), other.port]) {
+      const cli = run(["dashboard", "--dir", FIXTURES, "--port", String(port)], FIXTURES);
+      expect([port, await cli.exited()]).toEqual([port, 1]);
+      expect(cli.output).toContain(`rack: cannot listen on 127.0.0.1:${port}`);
+      expect(cli.stdout).toBe("");
+    }
+    // The holders still serve their ports.
+    expect(await (await fetch(new URL("/who", listener))).text()).toStartWith("v1:");
+    expect((await fetch(`${other.origin}/`)).status).toBe(200);
+  }, 30_000);
+
   // @doc docs/reference/cli.md#flags-of-rack-dashboard
   // @doc docs/reference/cli.md#exit-codes
   test("exits with code 2 for a wrong command line", async () => {
