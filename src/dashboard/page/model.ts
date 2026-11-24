@@ -14,7 +14,7 @@ import { type Failure, Freshness, isFinal } from "./connection.ts";
 import { Feed } from "./feed.ts";
 import { errorText } from "./format.ts";
 import { POLL_INTERVALS, Poller, type PollKind, type Scheduler } from "./poller.ts";
-import { OutsideTrack, Tracks } from "./rates.ts";
+import { LATE_READING_MS, OutsideTrack, Tracks } from "./rates.ts";
 
 /** The kinds of reads that the page polls. */
 export type ReadKind = "status" | "metrics" | "history" | "events" | "about";
@@ -88,11 +88,16 @@ export class Model {
    *
    * @param outcome How the request ended.
    * @param time When it ended, a millisecond timestamp of the page's clock.
+   * @param asked When the page sent it; by default `time`. An answer that came more than
+   *   {@link LATE_READING_MS} after it gives no device a rate, for the interval it ends or the
+   *   next one.
    */
-  takeMetrics(outcome: Outcome, time: number): void {
+  takeMetrics(outcome: Outcome, time: number, asked = time): void {
     const ok = this.#settle("metrics", outcome, time, isMetrics, (metrics) => {
       const present = this.status === null ? null : this.status.map((device) => device.name);
-      this.tracks.take(time, metrics.devices, present);
+      // The rack reads each device's counters as that device's Worker answers, and waits for the
+      // slowest; it reads the counters of the calls from outside last, as it answers.
+      this.tracks.take(time, metrics.devices, present, time - asked > LATE_READING_MS);
       this.outside.take(time, metrics.outside);
     });
     if (!ok) this.tracks.fail(time);
@@ -330,7 +335,8 @@ export function pollKinds(
       model.takeEvents(asked, await ask("events", asked), now());
     }),
     kind("metrics", POLL_INTERVALS.metrics, async () => {
-      model.takeMetrics(await ask("metrics", []), now());
+      const asked = now();
+      model.takeMetrics(await ask("metrics", []), now(), asked);
     }),
     kind("about", POLL_INTERVALS.status, async () => {
       // What the dashboard watches doesn't change while it runs.

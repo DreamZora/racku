@@ -1,8 +1,10 @@
 /**
  * Rates from the rack's counters: the difference between two readings, over the time between
  * them. A device's counters restart when its instance changes, which its `firmware` or `since`
- * shows, and that interval gives no rate. The page keeps 60 readings per device for its charts.
- * This module uses no API of the DOM or of Bun, so that tests run it in Bun.
+ * shows, and that interval gives no rate. Nor do the interval that a reading which came late
+ * ends, and the next one, since the page doesn't know when the rack read it. The page keeps 60
+ * readings per device for its charts. This module uses no API of the DOM or of Bun, so that tests
+ * run it in Bun.
  *
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-page
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
@@ -18,6 +20,17 @@ import type {
 
 /** The most readings the page keeps per device, 2 minutes of them at one every 2 s. */
 export const READINGS_PER_DEVICE = 60;
+
+/**
+ * How long an answer of `metrics()` may take, in ms, for the page to date its devices' counters
+ * by the answer: 1 s. The rack reads each device's counters when that device's Worker answers,
+ * and waits for the slowest up to `hookTimeout`, so the counters in a later answer were read at
+ * times that the page doesn't know: while one device blocks its event loop for seconds, the
+ * others would show a false dip, then a spike. Such a reading gives no device a rate, for the
+ * interval it ends or the next one, as a failed read and a restarted instance give none. The
+ * calls from outside keep their rates: the rack reads their counters last, as it answers.
+ */
+export const LATE_READING_MS = 1_000;
 
 /** The counters of one member of a port or a need, of any kind. */
 export type MemberCounters =
@@ -167,6 +180,12 @@ export interface DeviceRates {
    * the one before, as its `firmware` or `since` shows, so the interval gives no rate.
    */
   restarted: boolean;
+  /**
+   * Whether the reading, or the one before it, came late, more than {@link LATE_READING_MS} after
+   * its request: the page doesn't know when the rack read the counters, so the interval gives no
+   * rate.
+   */
+  late: boolean;
   /** The rates of the members of the ports it provides. */
   provides: RatesByMember;
   /** The rates of the members of its needs. */
@@ -233,7 +252,7 @@ export class DeviceTrack {
   latest: DeviceRates | null = null;
   /** Whether the last answer of `metrics()` left the device out, or failed. */
   missing = false;
-  #last: { time: number; counters: DeviceMetrics } | null = null;
+  #last: { time: number; counters: DeviceMetrics; late: boolean } | null = null;
 
   /** The last reading of the device's counters, or `null` before one. */
   get counters(): DeviceMetrics | null {
@@ -250,16 +269,29 @@ export class DeviceTrack {
    *
    * @param time When it came, a millisecond timestamp of the page's clock.
    * @param counters The device's entry of `metrics()`.
+   * @param late Whether it came more than {@link LATE_READING_MS} after its request, so that the
+   *   page doesn't know when the rack read it: then neither the interval it ends nor the next one
+   *   gives a rate.
    */
-  add(time: number, counters: DeviceMetrics): void {
+  add(time: number, counters: DeviceMetrics, late = false): void {
     const last = this.#last;
     const restarted = last !== null && !sameInstance(last.counters, counters);
     const seconds = last === null ? 0 : (time - last.time) / 1000;
-    const rated = last !== null && !restarted && seconds > 0;
+    // The page dates a reading by its answer, and a late answer may come seconds after the rack
+    // read the counters: an interval that starts or ends at such a reading has no known length.
+    const undated = late || last?.late === true;
+    const rated = last !== null && !restarted && !undated && seconds > 0;
     const before = rated ? last.counters : undefined;
     const provides = ratesOf(before?.provides, counters.provides, rated ? seconds : null);
     const needs = ratesOf(before?.needs, counters.needs, rated ? seconds : null);
-    this.latest = { time, seconds: Math.max(0, seconds), restarted, provides, needs };
+    this.latest = {
+      time,
+      seconds: Math.max(0, seconds),
+      restarted,
+      late: undated,
+      provides,
+      needs,
+    };
     const served = callSum(counters.provides, provides, "rate");
     const made = callSum(counters.needs, needs, "rate");
     const servedErrors = callSum(counters.provides, provides, "errors");
@@ -271,7 +303,7 @@ export class DeviceTrack {
       errors:
         rated && servedErrors !== null && madeErrors !== null ? servedErrors + madeErrors : null,
     });
-    this.#last = { time, counters };
+    this.#last = { time, counters, late };
     this.missing = false;
   }
 
@@ -321,8 +353,15 @@ export class Tracks {
    * @param devices The answer's `devices`.
    * @param present The names of the devices that `status()` last reported, or `null` before it
    *   answered once.
+   * @param late Whether the answer came more than {@link LATE_READING_MS} after its request: then
+   *   no device gets a rate for the interval it ends, or for the next one.
    */
-  take(time: number, devices: readonly DeviceMetrics[], present: readonly string[] | null): void {
+  take(
+    time: number,
+    devices: readonly DeviceMetrics[],
+    present: readonly string[] | null,
+    late = false,
+  ): void {
     const seen = new Set<string>();
     for (const counters of devices) {
       seen.add(counters.device);
@@ -331,7 +370,7 @@ export class Tracks {
         track = new DeviceTrack();
         this.#tracks.set(counters.device, track);
       }
-      track.add(time, counters);
+      track.add(time, counters, late);
     }
     for (const [name, track] of this.#tracks) {
       if (seen.has(name)) continue;

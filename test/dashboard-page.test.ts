@@ -72,6 +72,7 @@ import {
   counterRate,
   DeviceTrack,
   intervalMean,
+  LATE_READING_MS,
   memberRates,
   OutsideTrack,
   READINGS_PER_DEVICE,
@@ -326,6 +327,119 @@ describe("rates of the counters", () => {
     tracks.fail(2_000);
     expect(tracks.get("cache")?.missing).toBe(true);
     expect(tracks.get("cache")?.points).toHaveLength(2);
+  });
+
+  test("a reading that came late gives no rate for its interval, or for the next one", () => {
+    const track = new DeviceTrack();
+    track.add(0, reading({ servedCalls: 0 }));
+    track.add(2_000, reading({ servedCalls: 40 }));
+    expect(track.latest?.late).toBe(false);
+    // The rack read these counters at some time between the request and its late answer.
+    track.add(14_000, reading({ servedCalls: 80 }), true);
+    expect(track.points[2]).toEqual({ time: 14_000, served: null, made: null, errors: null });
+    expect(track.latest?.late).toBe(true);
+    expect(track.latest?.restarted).toBe(false);
+    expect(track.latest?.provides.kv?.get).toEqual({ rate: null, errors: null, meanMs: null });
+    // They are still the device's newest totals, which the page shows.
+    expect(track.counters).toEqual(reading({ servedCalls: 80 }));
+    // The next interval starts at the late reading, whose time the page doesn't know either.
+    track.add(16_000, reading({ servedCalls: 320 }));
+    expect(track.points[3]?.served).toBeNull();
+    expect(track.latest?.late).toBe(true);
+    track.add(18_000, reading({ servedCalls: 360 }));
+    expect(track.points[4]?.served).toBe(20);
+    expect(track.latest?.late).toBe(false);
+  });
+
+  // The rack reads each device's counters as that device's Worker answers, and waits for the
+  // slowest, up to hookTimeout; it reads the counters of the calls from outside last.
+  test("an answer of metrics() that came late gives no device a rate, while the calls from outside keep theirs", async () => {
+    const scheduler = new FakeScheduler();
+    const waiting: Array<ReturnType<typeof deferred<Outcome>>> = [];
+    const reads: Record<string, unknown> = {
+      status: [status("cache", "online")],
+      about: { target: "/srv/a" },
+    };
+    let time = 0;
+    const model = new Model();
+    const poller = startPolling(
+      model,
+      (op) => {
+        if (op !== "metrics") return Promise.resolve({ kind: "value", value: reads[op] ?? [] });
+        const answer = deferred<Outcome>();
+        waiting.push(answer);
+        return answer.promise;
+      },
+      scheduler,
+      () => time,
+    );
+    // The device serves 20 calls/s, which the rack reads at `readAt`; 10 calls/s come from
+    // outside, which it reads as it answers, now.
+    const answer = async (readAt: number) => {
+      waiting.shift()?.resolve({
+        kind: "value",
+        value: {
+          devices: [reading({ servedCalls: readAt / 50 })],
+          outside: {
+            ports: { "cache.kv": { get: called(time / 100, time / 100, {}, 0) } },
+            unrouted: 0,
+          },
+        } satisfies RackMetrics,
+      });
+      await settle();
+    };
+    const rates = () => [
+      model.tracks.get("cache")?.points.at(-1)?.served,
+      model.outside.rows[0]?.rates.rate,
+    ];
+    await settle();
+    await answer(0);
+    time = 2_000;
+    scheduler.fire(POLL_INTERVALS.metrics);
+    await answer(2_000);
+    expect(rates()).toEqual([20, 10]);
+    // Another device blocks its event loop for 12 s: the rack reads this device's counters at
+    // once, and answers once the other device does. Ticks in between are skipped.
+    time = 4_000;
+    scheduler.fire(POLL_INTERVALS.metrics);
+    time = 10_000;
+    scheduler.fire(POLL_INTERVALS.metrics);
+    time = 16_000;
+    await answer(4_000);
+    expect(rates()).toEqual([null, 10]);
+    expect(model.tracks.get("cache")?.latest?.late).toBe(true);
+    time = 18_000;
+    scheduler.fire(POLL_INTERVALS.metrics);
+    await answer(18_000);
+    expect(rates()).toEqual([null, 10]);
+    time = 20_000;
+    scheduler.fire(POLL_INTERVALS.metrics);
+    await answer(20_000);
+    expect(rates()).toEqual([20, 10]);
+    // Dated by their answers, the readings would show 20/s, 2.9/s, 140/s, and 20/s.
+    expect(model.tracks.get("cache")?.points.map((point) => point.served)).toEqual([
+      null,
+      20,
+      null,
+      null,
+      20,
+    ]);
+    poller.stop();
+  });
+
+  test(`an answer of metrics() is late when it comes more than ${LATE_READING_MS} ms after its request`, () => {
+    expect(LATE_READING_MS).toBe(1_000);
+    const model = new Model();
+    const metrics = (calls: number): Outcome => ({
+      kind: "value",
+      value: { devices: [reading({ servedCalls: calls })], outside: { ports: {}, unrouted: 0 } },
+    });
+    const served = () => model.tracks.get("cache")?.points.at(-1)?.served;
+    model.takeMetrics(metrics(0), LATE_READING_MS, 0);
+    model.takeMetrics(metrics(40), 2_000 + LATE_READING_MS, 2_000);
+    expect(served()).toBe(20);
+    model.takeMetrics(metrics(80), 4_000 + LATE_READING_MS + 1, 4_000);
+    expect(served()).toBeNull();
   });
 
   test("a device that the rack no longer has is forgotten, so what the page keeps stays bounded", () => {

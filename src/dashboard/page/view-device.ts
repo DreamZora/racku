@@ -24,6 +24,7 @@ import {
 import { icon } from "./icons.ts";
 import type { Model } from "./model.ts";
 import { rollbackTargets } from "./operations.ts";
+import { LATE_READING_MS } from "./rates.ts";
 import { ChartView } from "./view-chart.ts";
 import { counterTables, HistoryTable, hashCell, tableOf } from "./view-tables.ts";
 
@@ -429,15 +430,22 @@ export class DeviceView {
         `${why} Its counters are missing; these are from ${formatTime(readAt, now)}, ${formatAge(now - readAt)} ago.`,
       );
     }
-    if (track.latest?.restarted === true) {
+    const latest = track.latest;
+    if (latest?.restarted === true) {
       notes.push(
         "The counters restarted at the last reading, since the instance changed: that interval gives no rate.",
       );
     }
+    if (latest?.late === true) {
+      notes.push(
+        `The rack took more than ${LATE_READING_MS / 1000} s to answer metrics(), at the last reading or the one before, as when it waits for a device that is slow to answer: the page doesn't know when it read these counters, so that interval gives no rate.`,
+      );
+    }
+    // A late reading gives no rate for the next interval either.
     const rates =
-      track.latest === null || track.latest.seconds === 0 || track.latest.restarted
-        ? "Rates come with the next reading"
-        : `Rates over the last ${formatDuration(track.latest.seconds * 1000)}`;
+      latest === null || latest.seconds === 0 || latest.restarted || latest.late
+        ? `Rates come with ${latest?.late === true ? "a later" : "the next"} reading`
+        : `Rates over the last ${formatDuration(latest.seconds * 1000)}`;
     notes.push(
       `${rates}; totals since the instance booted, ${formatWhen(counters.since, now)}, with firmware ${shortHash(counters.firmware)}.`,
     );
