@@ -346,14 +346,21 @@ describe.skipIf(chrome === undefined)("the dashboard's page in a browser", () =>
       await waitFor(() => running.status().length === 0, SHOWN_MS);
       expect(operationLines(cli.stdout)).toEqual(["stop: ok"]);
 
-      // The page says since when the rack doesn't answer, and why, and dims the last data.
+      // The page says since when the rack doesn't answer, and why, and dims the last data. A read
+      // that comes between the endpoint's close and the removal of its socket or control file
+      // can't connect, and gives another reason; the next read names the base directory.
       await page.waitFor(
         "document.querySelector('.connection')?.dataset.state === 'down'",
         SHOWN_MS,
       );
-      const banner = await page.evaluate<string>("document.querySelector('.banner').innerText");
+      const banner = await page.waitFor<string>(
+        `(() => {
+          const text = document.querySelector('.banner:not([hidden])')?.innerText ?? '';
+          return text.includes(${JSON.stringify(`no running rack has the base directory ${app.dir}`)}) && text;
+        })()`,
+        SHOWN_MS,
+      );
       expect(banner).toContain("No answer from the rack since");
-      expect(banner).toContain(`no running rack has the base directory ${app.dir}`);
       expect(
         await page.evaluate("document.querySelector('.front-panel').classList.contains('stale')"),
       ).toBe(true);
