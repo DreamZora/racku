@@ -111,6 +111,7 @@ The history keeps at most `historyLimit` records, 256 by default, in memory, and
 - The rack keeps the last 1 000 records, in memory: a new one beyond them drops the oldest. A restart of the rack starts the feed empty, from `seq` 1, as it does the history.
 - A reader that asks for the records after the last `seq` it read, and gets a first record whose `seq` is greater than that `seq` plus 1, knows that the records between them dropped out before it read them.
 - A record holds at most 4 096 characters as JSON. A longer one loses its `data` and its error's `data`, and its message and its error's message are cut to 1 024 characters, the last of them `…`; it then carries `cut: true`. One that is still longer, as when its messages are full of characters that JSON escapes, or its device's name, its error's code, or a swap's `to` runs to thousands of characters, has those texts cut shorter until it fits, and a `to` that isn't a string is cut as its `String()`.
+- A record that JSON can't write keeps only its `seq`, `time`, `type`, and device's name, the name cut short when it is long, and carries `cut: true`. Only code that breaks the types makes one, such as code that gives `rollback()` a circular `to`.
 - `data` is kept as `--log json` writes it: a `bigint` as a string ending in `n`, such as `"12345678901234567890n"`, and details that JSON can't hold otherwise, such as circular ones, as their `String()`.
 
 The management endpoint serves the same records as the operation `events`, `{ "args": [after?] }`, which `rack ctl events [--after <seq>]` runs.

@@ -413,23 +413,36 @@ describe("the bounds", () => {
     expect(named).toBe("[object Object]");
   });
 
-  test("on a device whose name runs to thousands of characters, a rollback to a number leaves records within 4 096 characters, the number cut as its String()", async () => {
+  test("on a device whose name runs to thousands of characters, a rollback to a number or to a circular object leaves records within 4 096 characters: the number as its String(), and the other record at its minimum", async () => {
     const name = `t${"x".repeat(4_999)}`;
     const { running } = await talkerRack(
       {},
       { slots: { 1: slot("./devices/talker.ts", { name }) } },
     );
     const read = running.events().at(-1)?.seq ?? 0;
-    const error = await errorOf(running.rollback(name, { to: 12_345 as unknown as string }));
-    expect(error.code).toBe("RACK_SWAP_REJECTED");
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    for (const to of [12_345, loop]) {
+      const error = await errorOf(running.rollback(name, { to: to as unknown as string }));
+      expect(error.code).toBe("RACK_SWAP_REJECTED");
+    }
     const records = running.events(read);
     for (const record of records) expect(length(record)).toBeLessThanOrEqual(4_096);
-    // The name makes the record too long, and the cut writes its to as text.
-    expect(records.find((record) => record.type === "swap")).toMatchObject({
+    const swaps: EventRecord[] = records.filter((record) => record.type === "swap");
+    const [number, circular] = swaps;
+    // The name makes the first record too long, and the cut writes its to as text.
+    expect(number).toMatchObject({ type: "swap", to: "12345", cut: true });
+    // JSON can't write the second, which keeps only its seq, time, type, and device's name, cut.
+    const device = circular?.device ?? "";
+    expect(device.length).toBeLessThan(1_024);
+    expect(device).toBe(`${name.slice(0, device.length - 1)}…`);
+    expect(circular).toEqual({
+      seq: circular?.seq,
+      time: circular?.time,
       type: "swap",
-      to: "12345",
+      device,
       cut: true,
-    });
+    } as EventRecord);
   });
 });
 
@@ -460,6 +473,40 @@ describe("reading the feed", () => {
     const fresh = again.events();
     expect(fresh[0]?.seq).toBe(1);
     expect(fresh.map(messageOf)).not.toContain("before the stop");
+  });
+
+  test("an event whose record JSON can't write, as of a rollback to a circular object, still reaches subscribers, and is kept at its minimum, with no gap in the seqs", async () => {
+    const { running, rec } = await talkerRack();
+    const read = running.events().at(-1)?.seq ?? 0;
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    // The rollback fails with the rack's own code, not with the TypeError of JSON for the loop.
+    const error = await errorOf(running.rollback("talker", { to: loop as unknown as string }));
+    expect(error.code).toBe("RACK_SWAP_REJECTED");
+    expect(
+      rec.events.some((event) => event.type === "swap" && (event.to as unknown) === loop),
+    ).toBe(true);
+    // The failure's log entry, which follows the swap event, is written and kept.
+    const failed = "swap of talker failed: firmware [object Object] of talker is no longer kept";
+    expect(rec.logs.map((entry) => entry.message)).toContain(failed);
+    await say(running, { level: "info", message: "after the loop" });
+    await logRecord(running, (message) => message === "after the loop");
+
+    const records = running.events();
+    expect(records.map((record) => record.seq)).toEqual(records.map((_, index) => index + 1));
+    const newest = records.at(-1)?.seq ?? 0;
+    for (let after = 0; after <= newest + 1; after++) {
+      expect(running.events(after)).toEqual(records.filter((record) => record.seq > after));
+    }
+    const swap = records.find((record) => record.seq > read && record.type === "swap");
+    expect(swap).toEqual({
+      seq: swap?.seq,
+      time: swap?.time,
+      type: "swap",
+      device: "talker",
+      cut: true,
+    } as EventRecord);
+    expect(messageOf(records.find((record) => record.seq === (swap?.seq ?? 0) + 1))).toBe(failed);
   });
 });
 

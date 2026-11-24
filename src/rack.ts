@@ -4138,15 +4138,18 @@ class Rack implements InstanceHost {
   /**
    * Keeps an event in the feed as the JSON text of its record, unless it is a log entry of level
    * `debug`, which costs nothing: a device's debugging can't push the other records out. A
-   * record beyond {@link FEED_LIMIT} drops the oldest.
+   * record beyond {@link FEED_LIMIT} drops the oldest. It never throws, so that the listeners
+   * that `#emit` calls next still get the event.
    *
    * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
    */
   #keep(event: RackEvent): void {
     if (event.type === "log" && event.level === "debug") return;
     // A log entry keeps its own time, which the spread puts in place of the rack's.
-    const record: EventRecord = { seq: ++this.#feedSeq, time: Date.now(), ...event };
+    const record: EventRecord = { seq: this.#feedSeq + 1, time: Date.now(), ...event };
     this.#feed.push(recordText(record));
+    // The number is spent only on a record that the feed holds, so that #events finds no gaps.
+    this.#feedSeq = record.seq;
     if (this.#feed.length > FEED_LIMIT) this.#feed.shift();
   }
 
@@ -4160,7 +4163,8 @@ class Rack implements InstanceHost {
     if (!(Number.isInteger(after) && after >= 0)) {
       throw new RackError("RACK_INVALID_INPUT", "events: after must be a whole number, 0 or more");
     }
-    // The records are numbered without gaps, so the newest one's number places the first to read.
+    // #keep numbers the records it holds without gaps, so the newest one's number places the first
+    // to read.
     const first = Math.max(0, this.#feed.length - (this.#feedSeq - after));
     return this.#feed.slice(first).map((text) => JSON.parse(text) as EventRecord);
   }
@@ -4227,29 +4231,39 @@ const MINIMAL_NAME = 256;
  * `to` thousands of characters long: those texts are then cut shorter, by half each time, until
  * the record fits, and a `from` or `to` that isn't a string is cut as its `String()`.
  *
- * Its text never exceeds the bound: a record that the cuts leave too long is kept at its minimum,
- * as {@link minimalText} writes it.
+ * It never throws, and its text never exceeds the bound: a record that JSON can't write, or that
+ * the cuts leave too long, is kept at its minimum, as {@link minimalText} writes it.
  *
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
  */
 function recordText(record: EventRecord): string {
-  let text = recordJson(record);
-  for (let limit = CUT_MESSAGE; text.length > RECORD_MAX && limit >= 1; limit >>= 1) {
-    text = recordJson(cutRecord(record, limit, limit < CUT_MESSAGE));
+  try {
+    let text = recordJson(record);
+    for (let limit = CUT_MESSAGE; text.length > RECORD_MAX && limit >= 1; limit >>= 1) {
+      text = recordJson(cutRecord(record, limit, limit < CUT_MESSAGE));
+    }
+    if (text.length <= RECORD_MAX) return text;
+  } catch {
+    // A field other than the details holds what JSON can't write, such as a circular `to` that
+    // code gave rollback() against its type; the minimum below holds none of those fields.
   }
-  return text.length <= RECORD_MAX ? text : minimalText(record);
+  return minimalText(record);
 }
 
 /**
  * A record as JSON, with its details as `--log json` writes them: a `bigint` as a string ending in
  * `n`, and details that JSON can't hold otherwise, such as circular ones, as their `String()`.
  * A log record's details are its `data`, and a swap's or a fault's, its error's `data`.
+ *
+ * @throws TypeError when a field other than the details holds what JSON can't write, which only
+ *   code that breaks the types gives, such as a circular `to` of rollback().
  */
 function recordJson(record: EventRecord): string {
   try {
     return JSON.stringify(record, bigints);
   } catch {
-    // Only the details can fail: every other field is a string, a number, a boolean, or null.
+    // The rack's own fields are strings, numbers, booleans, or null, so the details failed,
+    // unless code gave a value against its type, which this throws for again.
     return JSON.stringify(detailsAsText(record));
   }
 }
