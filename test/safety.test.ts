@@ -332,6 +332,30 @@ describe("active rollback", () => {
     ]);
   });
 
+  // @doc docs/reference/errors.md#codes
+  // @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#rollback-and-restart-check-their-options
+  test("rollback and restart refuse options of the wrong kind with RACK_INVALID_INPUT, before they do anything", async () => {
+    const created = await app({ "devices/base.ts": BASE, "devices/counter.ts": counter("v1") });
+    const { running } = await startRack(COUNTER_RACK, { baseDir: created.dir });
+    const history = running.history();
+    const events = running.events();
+    const wrong = [
+      running.rollback("counter", { to: 12345 as unknown as string }),
+      running.rollback("counter", { to: "f".repeat(129) }),
+      running.rollback("counter", "v1" as unknown as { to?: string }),
+      running.restart("counter", { cascade: "false" as unknown as boolean }),
+      running.restart("counter", null as unknown as { cascade?: boolean }),
+    ];
+    for (const attempt of wrong) expect((await errorOf(attempt)).code).toBe("RACK_INVALID_INPUT");
+    // Nothing happened: no update, no record in the feed, and no error on the device.
+    expect(running.history()).toEqual(history);
+    expect(running.events()).toEqual(events);
+    expect(counterStatus(running)?.error).toBeUndefined();
+    // A to of the right kind that the rack doesn't keep fails as before.
+    const unknown = await errorOf(running.rollback("counter", { to: "f".repeat(128) }));
+    expect(unknown.code).toBe("RACK_SWAP_REJECTED");
+  });
+
   test("rolling back a device of a group replacement takes the whole group back", async () => {
     const created = await app({ "devices/store.ts": STORE, "devices/client.ts": CLIENT });
     const { running } = await startRack(

@@ -20,6 +20,7 @@ import {
 } from "racku";
 import { type ControlFile, controlPaths } from "../src/control.ts";
 import { formatLogJson } from "../src/log.ts";
+import { recordText } from "../src/rack.ts";
 import {
   CONTROL_DIR,
   errorOf,
@@ -392,57 +393,62 @@ describe("the bounds", () => {
     });
   });
 
-  test("a failed rollback whose to runs to thousands of characters, or is an object, leaves records within 4 096 characters, with that to cut", async () => {
+  // @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#rollback-and-restart-check-their-options
+  test("a rollback whose to runs to thousands of characters, or isn't a string, fails with RACK_INVALID_INPUT, and the feed keeps no record of it", async () => {
     const { running } = await talkerRack();
-    const read = running.events().at(-1)?.seq ?? 0;
+    const before = running.events();
     const long = "f".repeat(60_000);
-    // Only the type of rollback() keeps code from giving an object, and the endpoint passes on
-    // what a request's JSON holds.
-    const object = { hash: long } as unknown as string;
-    for (const to of [long, object]) {
-      expect((await errorOf(running.rollback("talker", { to }))).code).toBe("RACK_SWAP_REJECTED");
-    }
-    const records = running.events(read);
-    for (const record of records) expect(length(record)).toBeLessThanOrEqual(4_096);
-    const swaps = records.filter((record) => record.type === "swap");
-    expect(swaps.map((record) => record.cut)).toEqual([true, true]);
-    const [text, named] = swaps.map((record) => record.to);
-    expect(text?.length).toBeLessThan(1_024);
-    expect(text).toBe(`${long.slice(0, (text?.length ?? 0) - 1)}…`);
-    // A to that isn't a string becomes its String().
-    expect(named).toBe("[object Object]");
-  });
-
-  test("on a device whose name runs to thousands of characters, a rollback to a number or to a circular object leaves records within 4 096 characters: the number as its String(), and the other record at its minimum", async () => {
-    const name = `t${"x".repeat(4_999)}`;
-    const { running } = await talkerRack(
-      {},
-      { slots: { 1: slot("./devices/talker.ts", { name }) } },
-    );
-    const read = running.events().at(-1)?.seq ?? 0;
     const loop: Record<string, unknown> = {};
     loop.self = loop;
-    for (const to of [12_345, loop]) {
-      const error = await errorOf(running.rollback(name, { to: to as unknown as string }));
-      expect(error.code).toBe("RACK_SWAP_REJECTED");
+    // Only the type of rollback() keeps code from giving these, and the endpoint passes on what
+    // a request's JSON holds.
+    for (const to of [long, { hash: long }, 12_345, loop]) {
+      const error = await errorOf(running.rollback("talker", { to: to as unknown as string }));
+      expect(error.code).toBe("RACK_INVALID_INPUT");
     }
-    const records = running.events(read);
-    for (const record of records) expect(length(record)).toBeLessThanOrEqual(4_096);
-    const swaps: EventRecord[] = records.filter((record) => record.type === "swap");
-    const [number, circular] = swaps;
-    // The name makes the first record too long, and the cut writes its to as text.
-    expect(number).toMatchObject({ type: "swap", to: "12345", cut: true });
-    // JSON can't write the second, which keeps only its seq, time, type, and device's name, cut.
-    const device = circular?.device ?? "";
+    expect(running.events()).toEqual(before);
+  });
+
+  test("a swap record whose to runs to thousands of characters, or isn't a string, is cut within 4 096 characters, and one that JSON can't write is kept at its minimum", () => {
+    // rollback() refuses such a to, so only a record built here reaches these cuts, which keep
+    // the bound whatever an event holds.
+    const swap = (fields: Record<string, unknown>) =>
+      ({
+        seq: 7,
+        time: 1,
+        type: "swap",
+        device: "talker",
+        action: "swap",
+        mode: "hot",
+        from: null,
+        to: null,
+        ...fields,
+      }) as unknown as EventRecord;
+    const kept = (record: EventRecord): EventRecord => {
+      const text = recordText(record);
+      expect(text.length).toBeLessThanOrEqual(4_096);
+      return JSON.parse(text) as EventRecord;
+    };
+    const long = "f".repeat(60_000);
+    const text = kept(swap({ to: long }));
+    const to = text.type === "swap" ? (text.to ?? "") : "";
+    expect([text.cut, to.length < 1_024]).toEqual([true, true]);
+    expect(to).toBe(`${long.slice(0, to.length - 1)}…`);
+    // A to that isn't a string is cut as its String().
+    expect(kept(swap({ to: { hash: long } }))).toMatchObject({ to: "[object Object]", cut: true });
+    // A device's name of thousands of characters makes the record too long, and the cut writes a
+    // number as its text.
+    const name = `t${"x".repeat(4_999)}`;
+    expect(kept(swap({ device: name, to: 12_345 }))).toMatchObject({ to: "12345", cut: true });
+    // JSON can't write a circular to, so the record keeps only its seq, time, type, and device's
+    // name, cut; writing it doesn't throw.
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    const minimal = kept(swap({ device: name, to: loop }));
+    const device = minimal.device ?? "";
     expect(device.length).toBeLessThan(1_024);
     expect(device).toBe(`${name.slice(0, device.length - 1)}…`);
-    expect(circular).toEqual({
-      seq: circular?.seq,
-      time: circular?.time,
-      type: "swap",
-      device,
-      cut: true,
-    } as EventRecord);
+    expect(minimal).toEqual({ seq: 7, time: 1, type: "swap", device, cut: true } as EventRecord);
   });
 });
 
@@ -473,40 +479,6 @@ describe("reading the feed", () => {
     const fresh = again.events();
     expect(fresh[0]?.seq).toBe(1);
     expect(fresh.map(messageOf)).not.toContain("before the stop");
-  });
-
-  test("an event whose record JSON can't write, as of a rollback to a circular object, still reaches subscribers, and is kept at its minimum, with no gap in the seqs", async () => {
-    const { running, rec } = await talkerRack();
-    const read = running.events().at(-1)?.seq ?? 0;
-    const loop: Record<string, unknown> = {};
-    loop.self = loop;
-    // The rollback fails with the rack's own code, not with the TypeError of JSON for the loop.
-    const error = await errorOf(running.rollback("talker", { to: loop as unknown as string }));
-    expect(error.code).toBe("RACK_SWAP_REJECTED");
-    expect(
-      rec.events.some((event) => event.type === "swap" && (event.to as unknown) === loop),
-    ).toBe(true);
-    // The failure's log entry, which follows the swap event, is written and kept.
-    const failed = "swap of talker failed: firmware [object Object] of talker is no longer kept";
-    expect(rec.logs.map((entry) => entry.message)).toContain(failed);
-    await say(running, { level: "info", message: "after the loop" });
-    await logRecord(running, (message) => message === "after the loop");
-
-    const records = running.events();
-    expect(records.map((record) => record.seq)).toEqual(records.map((_, index) => index + 1));
-    const newest = records.at(-1)?.seq ?? 0;
-    for (let after = 0; after <= newest + 1; after++) {
-      expect(running.events(after)).toEqual(records.filter((record) => record.seq > after));
-    }
-    const swap = records.find((record) => record.seq > read && record.type === "swap");
-    expect(swap).toEqual({
-      seq: swap?.seq,
-      time: swap?.time,
-      type: "swap",
-      device: "talker",
-      cut: true,
-    } as EventRecord);
-    expect(messageOf(records.find((record) => record.seq === (swap?.seq ?? 0) + 1))).toBe(failed);
   });
 });
 

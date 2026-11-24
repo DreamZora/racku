@@ -215,8 +215,10 @@ export interface RackHandle {
    * @param name The device.
    * @param options `cascade: false` leaves the consumers running.
    * @returns One result per device replaced, in order.
-   * @throws RackError `RACK_NO_ROUTE` for an unknown device, or `RACK_SWAP_REJECTED` when the
-   *   device cannot be rebuilt, does not fit, or fails to start; its slot then resets.
+   * @throws RackError `RACK_INVALID_INPUT`, before anything happens, for options that aren't an
+   *   object or a `cascade` that isn't a boolean; `RACK_NO_ROUTE` for an unknown device; or
+   *   `RACK_SWAP_REJECTED` when the device cannot be rebuilt, does not fit, or fails to start;
+   *   its slot then resets.
    */
   restart(name: string, options?: RestartOptions): Promise<ReloadResult[]>;
   /**
@@ -226,8 +228,10 @@ export interface RackHandle {
    * @param name The device.
    * @param options `to` names the firmware hash; by default, the firmware before the current one.
    * @returns One result per device replaced.
-   * @throws RackError `RACK_NO_ROUTE` for an unknown device, or `RACK_SWAP_REJECTED` when there
-   *   is no such firmware, it no longer fits the running plan, or the replacement fails.
+   * @throws RackError `RACK_INVALID_INPUT`, before anything happens, for options that aren't an
+   *   object or a `to` that isn't a string of at most 128 characters; `RACK_NO_ROUTE` for an
+   *   unknown device; or `RACK_SWAP_REJECTED` when there is no such firmware, it no longer fits
+   *   the running plan, or the replacement fails.
    */
   rollback(name: string, options?: RollbackOptions): Promise<ReloadResult[]>;
   /**
@@ -560,10 +564,16 @@ class Rack implements InstanceHost {
       [SWEEP_FIRMWARE]: () => this.#sweepFirmware(),
       swap: (name: string, source?: string | URL) =>
         this.#operate("swap", () => this.#swap(name, source)),
-      restart: (name: string, options: RestartOptions = {}) =>
-        this.#operate("restart", () => this.#restart(name, options.cascade ?? true)),
-      rollback: (name: string, options: RollbackOptions = {}) =>
-        this.#operate("rollback", () => this.#rollback(name, options.to)),
+      restart: (name: string, options: RestartOptions = {}) => {
+        const wrong = wrongOptions("restart", options);
+        if (wrong !== undefined) return Promise.reject(wrong);
+        return this.#operate("restart", () => this.#restart(name, options.cascade ?? true));
+      },
+      rollback: (name: string, options: RollbackOptions = {}) => {
+        const wrong = wrongOptions("rollback", options);
+        if (wrong !== undefined) return Promise.reject(wrong);
+        return this.#operate("rollback", () => this.#rollback(name, options.to));
+      },
       history: (name?: string) =>
         this.#history.filter((record) => name === undefined || record.device === name).reverse(),
       events: (after?: number) => this.#events(after),
@@ -4193,6 +4203,40 @@ class Rack implements InstanceHost {
 }
 
 /**
+ * The most characters of the firmware hash that `rollback()` takes as `to`: far more than a hash
+ * has, and few enough that a wrong one can't swell what the rack records of the rollback.
+ *
+ * @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#rollback-and-restart-check-their-options
+ */
+const TO_MAX = 128;
+
+/**
+ * Why the options of `restart()` or `rollback()` are of the wrong kind, as an error to fail with
+ * before the rack does anything; `undefined` for options it takes. Code that breaks the types,
+ * and the management endpoint, which passes on what a client sent, can give such options.
+ *
+ * @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#rollback-and-restart-check-their-options
+ */
+function wrongOptions(op: "restart" | "rollback", options: unknown): RackError | undefined {
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    return new RackError("RACK_INVALID_INPUT", `${op}: its options must be an object`);
+  }
+  if (op === "restart") {
+    const { cascade } = options as { cascade?: unknown };
+    return cascade === undefined || typeof cascade === "boolean"
+      ? undefined
+      : new RackError("RACK_INVALID_INPUT", "restart: cascade must be true or false");
+  }
+  const { to } = options as { to?: unknown };
+  return to === undefined || (typeof to === "string" && to.length <= TO_MAX)
+    ? undefined
+    : new RackError(
+        "RACK_INVALID_INPUT",
+        `rollback: to must be a firmware hash, a string of at most ${TO_MAX} characters`,
+      );
+}
+
+/**
  * The most records the feed of recent events keeps: a new one beyond them drops the oldest.
  *
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
@@ -4234,9 +4278,13 @@ const MINIMAL_NAME = 256;
  * It never throws, and its text never exceeds the bound: a record that JSON can't write, or that
  * the cuts leave too long, is kept at its minimum, as {@link minimalText} writes it.
  *
+ * Exported for the tests of the feed, since `rollback()` refuses a `to` that would need these
+ * cuts; racku's entry points don't export it.
+ *
  * @decision .agents/decisions/261124_055114-rack-dashboard.md#the-rack-keeps-its-recent-events
+ * @decision .agents/decisions/261124_100151-after-the-dashboard-review.md#rollback-and-restart-check-their-options
  */
-function recordText(record: EventRecord): string {
+export function recordText(record: EventRecord): string {
   try {
     let text = recordJson(record);
     for (let limit = CUT_MESSAGE; text.length > RECORD_MAX && limit >= 1; limit >>= 1) {
