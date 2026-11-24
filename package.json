@@ -41,7 +41,7 @@
     "README.md"
   ],
   "scripts": {
-    "typecheck": "tsc -p .",
+    "typecheck": "tsc -p . && tsc -p src/dashboard/page",
     "lint": "biome check .",
     "format": "biome check --write .",
     "check:decisions": "bun scripts/check-decisions.ts",

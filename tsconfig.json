@@ -19,6 +19,7 @@
   "include": ["src", "test", "examples", "scripts"],
   "exclude": [
     "**/.rack",
+    "src/dashboard/page",
     "examples/net-tool/app/src",
     "examples/net-tool/app/src-tauri",
     "examples/net-tool/app/node_modules",
