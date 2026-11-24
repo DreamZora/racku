@@ -1,7 +1,8 @@
 /**
  * What the `rack` command and an executable that `rack compile` made share: their arguments,
  * running a rack with its management endpoint until a signal, `rack ctl stop`, or the end of
- * standard input stops it, printing a plan, and sending an operation to a running rack.
+ * standard input stops it, printing a plan, sending an operation to a running rack, and finding
+ * that rack's endpoint, which `rack dashboard` also reaches it by.
  *
  * @decision .agents/decisions/261112_043034-device-api.md#command-line
  * @decision .agents/decisions/261115_222025-p0-api-details.md#command-line
@@ -11,6 +12,7 @@
  * @decision .agents/decisions/261118_173838-running-under-another-program.md
  * @decision .agents/decisions/261120_011627-single-executables.md#running-an-executable
  * @decision .agents/decisions/261120_221450-watching-outside-files.md#on-command-or-as-files-change
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#rack-dashboard
  */
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
@@ -165,39 +167,11 @@ export async function sendOperation(
 ): Promise<void> {
   const [op = "", ...rest] = positional;
   const args = ctlArgs(op, rest, flags, usage);
-  let url = flags.get("--url");
-  const tokenFile = flags.get("--token-file");
-  let token: string | undefined;
-  let unix: string | undefined;
-  // @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
-  if (url === undefined) {
-    if (tokenFile !== undefined) fail("--token-file goes with --url");
-    const paths = controlPaths(dir);
-    const none = `no running rack has the base directory ${dir}`;
-    if (process.platform !== "win32" && existsSync(paths.socket)) unix = paths.socket;
-    else if (existsSync(paths.file)) {
-      const file = (await Bun.file(paths.file).json()) as ControlFile;
-      // A file left by a rack that ended names a process that no longer runs; its token would
-      // go to whatever listens on its port now.
-      if (!alive(file.pid)) fail(none);
-      url = file.url;
-      token = file.token;
-    } else fail(none);
-  } else {
-    token = tokenFile === undefined ? process.env.RACK_CONTROL_TOKEN : await tokenIn(tokenFile);
-    if (token === undefined) fail("--url needs --token-file or RACK_CONTROL_TOKEN");
-  }
+  const endpoint = await findEndpoint(await rackTarget(flags, dir));
+  if (typeof endpoint === "string") fail(endpoint);
   let response: Response;
   try {
-    response = await fetch(`${url ?? "http://localhost"}/v1/${op}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(token === undefined || unix !== undefined ? {} : { authorization: `Bearer ${token}` }),
-      },
-      body: JSON.stringify({ args }),
-      ...(unix === undefined ? {} : { unix }),
-    });
+    response = await postOperation(endpoint, op, args);
   } catch (error) {
     fail(`cannot reach the rack: ${describeError(error)}`);
   }
@@ -207,6 +181,112 @@ export async function sendOperation(
     | { ok: false; error: { code: string; message: string } };
   if (!body.ok) fail(`${body.error.code}: ${body.error.message}`);
   console.log(JSON.stringify(body.value, null, 2));
+}
+
+/**
+ * The rack that a command reaches: the one whose base directory is a path, or the one whose TCP
+ * endpoint answers at a URL, with its token.
+ */
+export type RackTarget = { dir: string } | { url: string; token: string };
+
+/** A running rack's management endpoint, as {@link findEndpoint} finds it. */
+export interface Endpoint {
+  /** The origin that operations go to: `http://localhost` on a Unix socket. */
+  url: string;
+  /** The path of the Unix socket, when the endpoint is one. */
+  unix?: string;
+  /** The bearer token of a TCP endpoint. */
+  token?: string;
+}
+
+/**
+ * The rack that `--url` names, with the token on the first line of `--token-file`, or else in
+ * `RACK_CONTROL_TOKEN`; without `--url`, the rack whose base directory is `dir`. No token goes
+ * on the command line, where other users could read it.
+ *
+ * Exits with code 1, printing why, for `--token-file` without `--url`, a token file that it can't
+ * read or whose first line is empty, and `--url` without a token.
+ *
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
+ */
+export async function rackTarget(
+  flags: ReadonlyMap<string, string>,
+  dir: string,
+): Promise<RackTarget> {
+  const url = flags.get("--url");
+  const tokenFile = flags.get("--token-file");
+  if (url === undefined) {
+    if (tokenFile !== undefined) fail("--token-file goes with --url");
+    return { dir };
+  }
+  const token = tokenFile === undefined ? process.env.RACK_CONTROL_TOKEN : await tokenIn(tokenFile);
+  if (token === undefined) fail("--url needs --token-file or RACK_CONTROL_TOKEN");
+  return { url, token };
+}
+
+/**
+ * Finds the management endpoint of a running rack, as `rack ctl` and `rack dashboard` reach it.
+ * For a base directory, it is the rack's Unix socket, or else the URL and token in its control
+ * file, which it reads at each call, so that it finds a rack that started since the last one.
+ * A URL target is its own endpoint.
+ *
+ * @returns The endpoint, or a message for people when no running rack has the base directory,
+ *   or its control file can't be read.
+ * @decision .agents/decisions/261122_011655-security-review-fixes.md#the-management-endpoint-and-rack-ctl
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#rack-dashboard
+ */
+export async function findEndpoint(target: RackTarget): Promise<Endpoint | string> {
+  if ("url" in target) return { url: target.url, token: target.token };
+  const paths = controlPaths(target.dir);
+  const none = `no running rack has the base directory ${target.dir}`;
+  if (process.platform !== "win32" && existsSync(paths.socket)) {
+    return { url: "http://localhost", unix: paths.socket };
+  }
+  if (!existsSync(paths.file)) return none;
+  let file: Partial<ControlFile>;
+  try {
+    file = (await Bun.file(paths.file).json()) as Partial<ControlFile>;
+  } catch (error) {
+    // The rack removes its file as it stops, which may come between the check and the read.
+    if (!existsSync(paths.file)) return none;
+    return `cannot read the control file ${paths.file}: ${describeError(error)}`;
+  }
+  if (
+    typeof file.url !== "string" ||
+    typeof file.token !== "string" ||
+    typeof file.pid !== "number"
+  ) {
+    return `the control file ${paths.file} has no url, token, and pid`;
+  }
+  // A file left by a rack that ended names a process that no longer runs; its token would go to
+  // whatever listens on its port now.
+  if (!alive(file.pid)) return none;
+  return { url: file.url, token: file.token };
+}
+
+/**
+ * Posts one operation to a management endpoint, as `{ "args": [...] }`.
+ *
+ * @param signal Aborts the request, and the reading of its answer.
+ * @returns The endpoint's answer.
+ * @throws What `fetch` throws when nothing answers, or when `signal` aborts.
+ */
+export function postOperation(
+  endpoint: Endpoint,
+  op: string,
+  args: unknown[],
+  signal?: AbortSignal,
+): Promise<Response> {
+  return fetch(`${endpoint.url}/v1/${op}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(endpoint.token === undefined ? {} : { authorization: `Bearer ${endpoint.token}` }),
+    },
+    body: JSON.stringify({ args }),
+    ...(endpoint.unix === undefined ? {} : { unix: endpoint.unix }),
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 /** The token on the first line of a file, for `--token-file`. */
