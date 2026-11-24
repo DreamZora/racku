@@ -99,12 +99,13 @@ dashboard of /srv/shop-api at http://127.0.0.1:43117/#token=<token>
 
 ## The command line of an executable
 
-An executable that `rack compile` made starts the rack it packaged, as `rack start` starts a manifest, with the same flags, signals, and exit codes, and two flags of its own, `--base-dir` and `--watch`. With `ctl`, it operates the rack that it runs for the same base directory, with the operations of `rack ctl` and its flags, `--base-dir` in place of `--dir`. It reads neither a `.env` file nor a `bunfig.toml` in the directory where it starts, as `bun` would: its environment comes from the program that starts it.
+An executable that `rack compile` made starts the rack it packaged, as `rack start` starts a manifest, with the same flags, signals, and exit codes, and two flags of its own, `--base-dir` and `--watch`. With `ctl`, it operates the rack that it runs for the same base directory, with the operations of `rack ctl` and its flags, `--base-dir` in place of `--dir`. With `dashboard`, it serves the dashboard of that rack, as `rack dashboard` does, with its flags, `--base-dir` in place of `--dir`; the executable holds the page. It reads neither a `.env` file nor a `bunfig.toml` in the directory where it starts, as `bun` would: its environment comes from the program that starts it.
 
 ```sh
 ./app --base-dir /var/lib/app --log json   # start the rack
 ./app --base-dir /var/lib/app --watch      # start it, and apply outside files as they change
 ./app ctl status --base-dir /var/lib/app   # operate it
+./app dashboard --base-dir /var/lib/app    # serve its dashboard
 ```
 
 | Flag | Meaning |

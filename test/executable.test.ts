@@ -541,6 +541,79 @@ describe("an executable with --watch", () => {
   }, 60_000);
 });
 
+// @decision .agents/decisions/261124_055114-rack-dashboard.md#rack-dashboard
+// @decision .agents/decisions/261124_055114-rack-dashboard.md#how-the-page-is-built
+// @doc docs/reference/cli.md#the-command-line-of-an-executable
+describe("an executable's dashboard", () => {
+  test("serves the page that rack compile packaged, and the rack that the executable runs for its base directory", async () => {
+    const dir = await baseDir();
+    await run(dir);
+    const dashboard = new Cli([], tmpdir(), {}, [exe, "dashboard", "--base-dir", dir], "console");
+    running.push(dashboard);
+    const [, target, url = ""] = await dashboard.waitFor(
+      /^dashboard of (.+) at (http:\/\/127\.0\.0\.1:\d+\/#token=[\w-]+)$/m,
+    );
+    expect(target).toBe(dir);
+    const { origin, hash } = new URL(url);
+    const page = await fetch(`${origin}/`);
+    expect([page.status, page.headers.get("content-type")?.split(";")[0]]).toEqual([
+      200,
+      "text/html",
+    ]);
+    const html = await page.text();
+    expect(html).toContain('http-equiv="Content-Security-Policy"');
+    // The page's script and stylesheet, which Bun bundled into the executable.
+    const script = /<script type="module"[^>]* src="(\/[^"]+)"/.exec(html)?.[1];
+    const style = /<link rel="stylesheet"[^>]* href="(\/[^"]+)"/.exec(html)?.[1];
+    for (const [path, type] of [
+      [script, "text/javascript"],
+      [style, "text/css"],
+    ] as const) {
+      const asset = await fetch(`${origin}${path}`);
+      expect([path, asset.status, asset.headers.get("content-type")?.split(";")[0]]).toEqual([
+        path,
+        200,
+        type,
+      ]);
+    }
+    const status = await fetch(`${origin}/api/v1/status`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${hash.slice("#token=".length)}` },
+      body: JSON.stringify({ args: [] }),
+    });
+    const body = (await status.json()) as { ok: boolean; value: SlotStatus[] };
+    expect([body.ok, body.value.map((slot) => [slot.name, slot.packaged])]).toEqual([
+      true,
+      [
+        ["sqlite", true],
+        ["store", true],
+        ["hello", true],
+        ["http-panel", true],
+      ],
+    ]);
+    dashboard.kill("SIGINT");
+    expect(await dashboard.exited()).toBe(0);
+  }, 30_000);
+
+  // @doc docs/reference/cli.md#operations-of-rack-ctl
+  test("takes the flags of rack dashboard and rack ctl events, with --base-dir for --dir", async () => {
+    const wrong = [
+      ["dashboard", "--dir", "."],
+      ["dashboard", "--port", "http"],
+      ["dashboard", "--token-file", "token"],
+      ["dashboard", "status"],
+      ["ctl", "events", "--after", "-1"],
+      ["ctl", "events", "--after", "x"],
+    ];
+    const runs = wrong.map((args) => new Cli([], tmpdir(), {}, [exe, ...args]));
+    for (const [index, cli] of runs.entries()) {
+      expect([wrong[index], await cli.exited()]).toEqual([wrong[index], 2]);
+      expect(cli.output).toContain("dashboard [--base-dir <dir>] [--port <port>]");
+      expect(cli.output).toContain("ctl events [--after <seq>]");
+    }
+  }, 30_000);
+});
+
 // @doc docs/reference/cli.md#commands
 // @doc docs/reference/cli.md#flags-of-rack-compile
 describe("rack compile", () => {

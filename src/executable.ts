@@ -2,13 +2,16 @@
  * The command line of an executable that `rack compile` made. Without a command, it starts the
  * rack it packaged, as `rack start` starts a manifest, with the same flags, `--base-dir`, and
  * `--watch`, which also applies outside files as they change; with `ctl`, it operates the rack
- * that it runs for the same base directory, as `rack ctl` does.
+ * that it runs for the same base directory, as `rack ctl` does; with `dashboard`, it serves the
+ * dashboard of that rack, as `rack dashboard` does.
  *
  * @decision .agents/decisions/261120_011627-single-executables.md#running-an-executable
  * @decision .agents/decisions/261120_221450-watching-outside-files.md#on-command-or-as-files-change
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#rack-dashboard
  */
 import { basename, dirname, resolve } from "node:path";
 import { fail, parseArgs, runRack, sendOperation, setProgram } from "./commands.ts";
+import { runDashboard } from "./dashboard/server.ts";
 import { isDeviceFileOrJson } from "./dev.ts";
 import { isRackManifest } from "./manifest.ts";
 import { type PackagedTable, setPackaged } from "./packaged.ts";
@@ -25,6 +28,8 @@ const START_FLAGS = [
 
 const CTL_FLAGS = ["--base-dir", "--url", "--token-file", "--no-cascade", "--to", "--after"];
 
+const DASHBOARD_FLAGS = ["--base-dir", "--port", "--url", "--token-file"];
+
 /** Flags that take a value, as `--flag value` or `--flag=value`. */
 const VALUE_FLAGS = new Set([
   "--base-dir",
@@ -34,6 +39,7 @@ const VALUE_FLAGS = new Set([
   "--token-file",
   "--to",
   "--after",
+  "--port",
 ]);
 
 /**
@@ -60,20 +66,33 @@ export async function runExecutable(
         `       ${name} ctl rollback <device> [--to <firmware>] | history [device]`,
         `       ${name} ctl events [--after <seq>]`,
         "         [--base-dir <dir>] [--url <url> [--token-file <file>]]",
+        `       ${name} dashboard [--base-dir <dir>] [--port <port>]`,
+        `       ${name} dashboard --url <url> [--token-file <file>] [--port <port>]`,
       ].join("\n"),
     );
     process.exit(2);
   };
   const { positional, flags } = parseArgs(process.argv.slice(2), VALUE_FLAGS, usage);
-  const ctl = positional[0] === "ctl";
-  const known = ctl ? CTL_FLAGS : START_FLAGS;
+  const command = positional[0] === "ctl" || positional[0] === "dashboard" ? positional[0] : "";
+  const known =
+    command === "ctl" ? CTL_FLAGS : command === "dashboard" ? DASHBOARD_FLAGS : START_FLAGS;
   if ([...flags.keys()].some((flag) => !known.includes(flag))) usage();
-  if (!ctl && positional.length > 0) usage();
+  if (command === "" && positional.length > 0) usage();
   // The base directory stands for the manifest's directory: by default, the executable's own.
   const baseDir = resolve(flags.get("--base-dir") ?? dirname(process.execPath));
   setPackaged(table, baseDir);
-  if (ctl) {
+  if (command === "ctl") {
     await sendOperation(positional.slice(1), flags, baseDir, usage);
+    return;
+  }
+  if (command === "dashboard") {
+    await runDashboard({
+      positional: positional.slice(1),
+      flags,
+      dir: baseDir,
+      dirFlag: "--base-dir",
+      usage,
+    });
     return;
   }
   await runRack({

@@ -227,8 +227,9 @@ test("the reference of the rack command lists every command, flag, and operation
   expect(listedFlags("Flags of rack dashboard")).toEqual(flagsOf("dashboard"));
 
   // An executable takes the flags of rack start with two of its own, --base-dir and --watch, and
-  // those of rack ctl with --base-dir for --dir.
+  // those of rack ctl and rack dashboard with --base-dir for --dir.
   // @decision .agents/decisions/261120_221450-watching-outside-files.md#on-command-or-as-files-change
+  // @decision .agents/decisions/261124_055114-rack-dashboard.md#rack-dashboard
   const executable = await read("src/executable.ts");
   const listOf = (name: string) =>
     (new RegExp(`const ${name} = \\[([^\\]]*)\\]`).exec(executable)?.[1] ?? "")
@@ -240,6 +241,11 @@ test("the reference of the rack command lists every command, flag, and operation
   expect(listOf("START_FLAGS")).toEqual([...flagsOf("start"), "--base-dir", "--watch"].sort());
   expect(listOf("CTL_FLAGS")).toEqual(
     flagsOf("ctl")
+      .map((flag) => (flag === "--dir" ? "--base-dir" : flag))
+      .sort(),
+  );
+  expect(listOf("DASHBOARD_FLAGS")).toEqual(
+    flagsOf("dashboard")
       .map((flag) => (flag === "--dir" ? "--base-dir" : flag))
       .sort(),
   );
