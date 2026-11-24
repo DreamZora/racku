@@ -25,7 +25,13 @@ import {
   useRacks,
   waitFor,
 } from "./fixtures/app.ts";
-import { type Browser, browserForTests, launchBrowser, type Page } from "./fixtures/browser.ts";
+import {
+  type Browser,
+  browserForTests,
+  LAUNCH_MS,
+  launchBrowser,
+  type Page,
+} from "./fixtures/browser.ts";
 
 /** The browser's executable; `undefined` skips the tests, outside CI only. */
 const chrome = browserForTests();
@@ -44,6 +50,19 @@ afterAll(() => {
   else process.env.XDG_RUNTIME_DIR = savedRuntime;
 });
 
+/**
+ * How long the hook that launches the browser may take, in ms: the driver's bound on a launch,
+ * twice, since a browser without its sandbox starts once more, and some time besides. bun:test
+ * gives a hook 5 s, which a cold start of Chrome on a CI runner passed.
+ */
+const LAUNCH_HOOK_MS = 2 * LAUNCH_MS + 10_000;
+
+/**
+ * How long a hook that closes the browser, its tabs, the dashboards, and the apps may take, in
+ * ms: past the 20 s that the driver's close() may wait for the browser and its profile.
+ */
+const CLOSE_HOOK_MS = 30_000;
+
 const apps: TempApp[] = [];
 const processes: Cli[] = [];
 const pages: Page[] = [];
@@ -53,7 +72,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.stop(true)));
   await Promise.all(processes.splice(0).map((cli) => cli.stop()));
   await Promise.all(apps.splice(0).map((app) => app.remove()));
-});
+}, CLOSE_HOOK_MS);
 
 /** A rack of two devices: the counter at U1, and a device three U high from U3 up. */
 const SPEC = { slots: { 1: slot("./devices/counter.ts"), 3: slot("./devices/tall.ts") } };
@@ -130,10 +149,10 @@ describe.skipIf(chrome === undefined)("the dashboard's page in a browser", () =>
   let browser: Browser | undefined;
   beforeAll(async () => {
     browser = await launchBrowser(chrome);
-  });
+  }, LAUNCH_HOOK_MS);
   afterAll(async () => {
     await browser?.close();
-  });
+  }, CLOSE_HOOK_MS);
 
   async function newPage(): Promise<Page> {
     if (browser === undefined) throw new Error("the browser didn't start");
