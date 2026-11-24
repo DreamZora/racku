@@ -339,8 +339,7 @@ export type PortImpl<M extends Members> = {
 /** Implementations of every provided port, as returned by `powerOn`. */
 export type PortImpls<P extends Ports> = { [K in keyof P]: PortImpl<P[K]["members"]> };
 
-/** Log levels of {@link DeviceLog}. */
-export type LogLevel = "debug" | "info" | "warn" | "error";
+export type { LogLevel } from "./log.ts";
 
 /** Device logging; entries reach the rack over the management bus. */
 export interface DeviceLog {

@@ -31,7 +31,7 @@ import type { Dirent } from "node:fs";
 import { readdir, rename, stat, unlink } from "node:fs/promises";
 import { basename, join, relative, resolve as resolvePath, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Backplane, type EveryWiring, type Slot, type SlotState } from "./backplane.ts";
+import { Backplane, type EveryWiring, type Slot } from "./backplane.ts";
 import { type ConnectorInfo, isConnectorId } from "./connector.ts";
 import { alive, type Control, openControl } from "./control.ts";
 import type { CallOptions } from "./device.ts";
@@ -43,13 +43,7 @@ import {
   type PackagedBuild,
   sweepFirmware,
 } from "./firmware.ts";
-import {
-  Instance,
-  type InstanceHost,
-  timedOut,
-  type WatchdogStatus,
-  type Wire,
-} from "./instance.ts";
+import { Instance, type InstanceHost, timedOut, type Wire } from "./instance.ts";
 import { consoleLogger, type LogEntry, type Logger } from "./log.ts";
 import {
   checkDeviceName,
@@ -77,7 +71,6 @@ import {
   type RunningInstance,
 } from "./plan.ts";
 import {
-  type CertificateInfo,
   type DataFromWorker,
   type Fru,
   type InheritedListener,
@@ -89,158 +82,34 @@ import {
   type ReserveAsk,
   WATCHDOG_MIN,
 } from "./protocol.ts";
+import type {
+  ListenerStatus,
+  RackEvent,
+  ReloadMode,
+  ReloadResult,
+  SlotState,
+  SlotStatus,
+  StuckThread,
+  SwapAction,
+  UpdateCause,
+  UpdateRecord,
+} from "./reports.ts";
 import { cancelStreams } from "./streams.ts";
 import { detach, transferList } from "./transfer.ts";
 
-export type { SlotState } from "./backplane.ts";
-
-/** State of one device, as returned by {@link RackHandle.status}. */
-export interface SlotStatus {
-  name: string;
-  model: string;
-  u: number;
-  height: number;
-  state: SlotState;
-  /** Firmware hash of the installed instance; `null` when none is installed. */
-  firmware: string | null;
-  /**
-   * Absolute path of the device file. In an executable, a device of the app names the path of
-   * its outside file under the base directory, whether or not that file exists.
-   */
-  source: string;
-  /**
-   * In an executable, `true` while the device runs the firmware packaged inside it; absent
-   * otherwise.
-   */
-  packaged?: true;
-  /** Calls the installed instance is processing, from other devices and from outside the rack. */
-  inFlight: number;
-  /** Crashes within the last 60 seconds. */
-  crashes: number;
-  /** For a copy that serves an `own` need: the instance whose need it serves. */
-  owner?: string;
-  /**
-   * `true` for a device from a hot-plug directory, and for a copy that one owns; absent
-   * otherwise.
-   *
-   * @decision .agents/decisions/261121_065823-hot-plug-directories.md#observation
-   */
-  hotplug?: true;
-  /** Hash of the firmware the device falls back to when a new instance crashes on probation. */
-  knownGood: string | null;
-  /** While the installed instance is on probation: when probation ends, a millisecond timestamp. */
-  probationUntil?: number;
-  /**
-   * The installed instance's watchdogs, the event loop's first; empty when watchdogs are off or
-   * no instance is installed.
-   */
-  watchdogs: WatchdogStatus[];
-  /**
-   * Threads of the device's earlier instances that didn't stop within `hookTimeout` of their
-   * termination, stuck in native code. No other instance of the device starts until they stop.
-   */
-  stuck: StuckThread[];
-  /** The last failed swap or crash. */
-  error?: WireError;
-  /** One entry per listener of the installed instance; empty when none is installed. */
-  listeners: ListenerStatus[];
-}
-
-/**
- * A listener of an instance, as `status()` shows it.
- *
- * @decision .agents/decisions/261118_070617-panels-as-devices.md#observation
- */
-export interface ListenerStatus {
-  /** For example `https://127.0.0.1:3443/`. */
-  url: string;
-  /** The certificates new connections get; empty without TLS. */
-  certificates: CertificateInfo[];
-  /** Requests in flight, as Bun counts them. */
-  requests: number;
-  /** Open WebSockets, as Bun counts them. */
-  webSockets: number;
-}
-
-/**
- * A thread of an ended instance that is still running, stuck in native code.
- *
- * @decision .agents/decisions/261117_185131-ending-instances.md#observation
- */
-export interface StuckThread {
-  /** Firmware hash of the instance. */
-  firmware: string;
-  /** When the rack terminated the instance, a millisecond timestamp. */
-  since: number;
-  /**
-   * The listeners the thread hadn't stopped, which keep their ports until it stops; the system
-   * still accepts connections to them, and nothing answers.
-   */
-  listeners: ListenerStatus[];
-}
-
-/** What a management operation did to a device. */
-export type SwapAction = "plug" | "unplug" | "swap";
-
-/**
- * How an instance was replaced: a `hot` swap overlaps the old and the new instance, a `cold`
- * swap stops the old one first, and a `restart` also starts the new one without the old state.
- */
-export type ReloadMode = "hot" | "cold" | "restart" | "plug" | "unplug";
-
-/** An event of the rack, delivered to {@link RackHandle.subscribe} listeners. */
-export type RackEvent =
-  | { type: "power"; device: string; firmware: string; state: "on" | "off" }
-  | {
-      type: "swap";
-      device: string;
-      action: SwapAction;
-      mode: ReloadMode;
-      from: string | null;
-      to: string | null;
-      error?: WireError;
-    }
-  | { type: "fault"; device: string; firmware: string; error: WireError; reset: boolean }
-  | ({ type: "log" } & LogEntry);
-
-/** One device that {@link RackHandle.reload} or {@link RackHandle.restart} tried to replace. */
-export interface ReloadResult {
-  device: string;
-  from: string | null;
-  to: string | null;
-  mode: ReloadMode;
-  error?: WireError;
-}
-
-/** What asked for an update. */
-export type UpdateCause =
-  | "reload"
-  | "swap"
-  | "restart"
-  | "rollback"
-  | "fallback"
-  | "plug"
-  | "unplug";
-
-/** One update of a device, as {@link RackHandle.history} reports it. */
-export interface UpdateRecord {
-  /** Increases by one per record within the rack process. */
-  seq: number;
-  /** When the operation that made the update started, a millisecond timestamp. */
-  time: number;
-  device: string;
-  mode: ReloadMode;
-  cause: UpdateCause;
-  /** Firmware hash before the update. */
-  from: string | null;
-  /** Firmware hash the update installed, or tried to install. */
-  to: string | null;
-  ok: boolean;
-  /** Why the update failed, or why the device fell back. */
-  error?: WireError;
-  /** `seq` of the first record of the same group replacement. */
-  group?: number;
-}
+export type {
+  EventRecord,
+  ListenerStatus,
+  RackEvent,
+  ReloadMode,
+  ReloadResult,
+  SlotState,
+  SlotStatus,
+  StuckThread,
+  SwapAction,
+  UpdateCause,
+  UpdateRecord,
+} from "./reports.ts";
 
 /** Options of {@link RackHandle.rollback}. */
 export interface RollbackOptions {

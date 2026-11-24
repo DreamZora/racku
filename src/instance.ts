@@ -37,6 +37,7 @@ import {
   SHARED_WATCHDOGS,
   type WatchdogNotice,
 } from "./protocol.ts";
+import type { WatchdogStatus } from "./reports.ts";
 
 const WORKER_URL = new URL("./worker.ts", import.meta.url).href;
 
@@ -112,13 +113,7 @@ export interface ListenerState extends ListenerReport {
   webSockets: number;
 }
 
-/** A watchdog of an instance, as `status()` reports it. */
-export interface WatchdogStatus {
-  name: string;
-  timeout: number;
-  /** When the rack last saw a feed, or began to check, a millisecond timestamp. */
-  lastFed: number;
-}
+export type { WatchdogStatus } from "./reports.ts";
 
 /** A wire from one need of an instance to a provider port. */
 export interface Wire {

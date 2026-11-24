@@ -17,6 +17,7 @@
 import type { ConnectorInfo } from "./connector.ts";
 import type { HookName, LogLevel } from "./device.ts";
 import type { WireError } from "./errors.ts";
+import type { CertificateInfo } from "./reports.ts";
 import type { StreamMessage, StreamSlot } from "./streams.ts";
 
 /**
@@ -53,14 +54,7 @@ export const SHARED_LISTENERS = SHARED_WATCHDOGS + WATCHDOG_LIMIT;
 /** Number of `Int32` elements in the shared memory of an instance. */
 export const SHARED_LENGTH = SHARED_LISTENERS + 2 * LISTENER_LIMIT;
 
-/** A certificate of a listener, as `status()` shows it. */
-export interface CertificateInfo {
-  subject: string;
-  /** The server name it serves, for one of a list of certificates for SNI. */
-  serverName?: string;
-  /** When it expires, a millisecond timestamp. */
-  notAfter: number;
-}
+export type { CertificateInfo } from "./reports.ts";
 
 /** A listener of an instance, as the Worker host reports it; its counters are shared memory. */
 export interface ListenerReport {

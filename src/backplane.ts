@@ -31,6 +31,7 @@ import type {
   Marker,
   MemberInfo,
 } from "./protocol.ts";
+import type { SlotState } from "./reports.ts";
 import {
   armTimer,
   cancelStreams,
@@ -42,8 +43,7 @@ import {
 } from "./streams.ts";
 import { detach, moveInto, transferList } from "./transfer.ts";
 
-/** Lifecycle state of a slot as reported by `status()`. */
-export type SlotState = "online" | "swapping" | "degraded" | "resetting" | "faulted";
+export type { SlotState } from "./reports.ts";
 
 type Outcome = { ok: true; value: unknown } | { ok: false; error: WireError };
 

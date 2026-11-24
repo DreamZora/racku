@@ -3,7 +3,8 @@
  *
  * @decision .agents/decisions/261115_222025-p0-api-details.md#rack-handle
  */
-import type { LogLevel } from "./device.ts";
+/** Log levels of a device's `ctx.log`, and of the rack's own entries. */
+export type LogLevel = "debug" | "info" | "warn" | "error";
 
 /** One log entry, written by a device (`device` set) or by the rack itself. */
 export interface LogEntry {
