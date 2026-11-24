@@ -9,14 +9,15 @@
 | `rack plan [manifest]` | Prints the plan without starting the rack. For a scanned rack, `--write` writes the plan file, and `--check` checks it. |
 | `rack compile [manifest]` | Packages the rack in `manifest` into one executable, as [A rack in one executable](../guides/running.md#a-rack-in-one-executable) describes, and prints each device it packaged with its firmware hash, and the executable's path and size. A device that fails to build fails it, with exit code 1, and no executable is written. |
 | `rack ctl <operation>` | Operates the rack that runs from the current directory, as [Managing a running rack](../guides/managing.md) describes. |
+| `rack dashboard` | Serves a page in the browser that shows the rack that runs from the current directory, and operates it, as [Flags of rack dashboard](#flags-of-rack-dashboard) describes. It prints the page's URL, which holds a token: whoever has the URL can operate the rack. |
 
 ## Exit codes
 
 | Code | When |
 |---|---|
-| 0 | The rack shut down in order. |
-| 1 | The rack failed to start, or a second stop came during the shutdown and ended it at once. |
-| 2 | The command line is wrong, such as an unknown command or flag. |
+| 0 | The rack shut down in order, or `rack dashboard` closed on a signal. |
+| 1 | The rack failed to start, or a second stop came during the shutdown and ended it at once. `rack dashboard` couldn't start, such as on a `--port` that is taken, or a `--token-file` that it can't read. |
+| 2 | The command line is wrong, such as an unknown command or flag, or a `--port` that isn't a port number. |
 
 ## Flags of rack start and rack dev
 
@@ -71,6 +72,30 @@ The two exclude each other, and a rack placed by hand takes neither.
 | `--no-cascade` | With `restart`: leave the device's consumers running. |
 | `--to <firmware>` | With `rollback`: go back to this firmware, which the history keeps. |
 | `--after <seq>` | With `events`: only the records whose `seq` is greater than `seq`, a whole number of 0 or more. Another value is a wrong command line, with exit code 2. |
+
+## Flags of rack dashboard
+
+```sh
+rack dashboard [--dir <path>] [--port <port>]
+rack dashboard --url <url> [--token-file <file>] [--port <port>]
+```
+
+`rack dashboard` runs as a process of its own, and listens on `127.0.0.1` only. It prints one line with the page's URL, whose fragment holds a token that is new at each start:
+
+```text
+dashboard of /srv/shop-api at http://127.0.0.1:43117/#token=<token>
+```
+
+- It reaches the rack through its management endpoint, as `rack ctl` does, and finds the endpoint again for each request. So it starts while no rack runs, and follows a rack that stops and starts again for the same base directory.
+- Through the page, whoever has the URL can read the rack, and reload, swap, restart, roll back, and stop it, as `rack ctl` does. A swap there rebuilds the device's own file: plugging, unplugging, and a swap to another file stay with `rack ctl` and code.
+- It also prints a line when the rack stops answering, and when it answers again, and one line per operation it forwards, with `ok`, or the error's code and message. It prints the token nowhere else.
+- It closes on `SIGINT` and `SIGTERM`, and on Windows `SIGBREAK`, with exit code 0.
+
+| Flag | Meaning |
+|---|---|
+| `--dir <path>` | Serve the dashboard of the rack whose base directory is `path`, in place of the current directory. |
+| `--port <port>` | Listen on this port, in place of a free one. A port that is taken ends `rack dashboard` with exit code 1, naming the port. |
+| `--url <url>`, `--token-file <file>` | Reach a rack's TCP endpoint at `url`, with the token on the first line of `file`, or else `RACK_CONTROL_TOKEN`, as `rack ctl` does. `--dir` with `--url`, and `--token-file` without it, are wrong command lines, with exit code 2. |
 
 ## The command line of an executable
 

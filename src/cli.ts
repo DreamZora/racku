@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
 /**
  * The `rack` command line: `rack start [manifest]`, `rack dev [manifest]`, `rack plan [manifest]`,
- * `rack compile [manifest]`, and `rack ctl <operation>`.
+ * `rack compile [manifest]`, `rack ctl <operation>`, and `rack dashboard`.
  *
  * `start`, `dev`, `plan`, and `compile` load the manifest, which references devices only by path,
  * and use the manifest's directory as the base directory. `start` and `dev` run the rack with its
  * management endpoint, and shut down in order on `SIGINT`, `SIGTERM`, `SIGBREAK`, or
  * `rack ctl stop`, and with `--stop-on-stdin-close` when their standard input closes; `plan`
  * prints the plan without starting the rack; `compile` packages the rack into one executable.
- * `ctl` sends one operation to a running rack. `commands.ts` holds what an executable shares.
+ * `ctl` sends one operation to a running rack, and `dashboard` serves a page that shows it and
+ * operates it. `commands.ts` holds what an executable shares.
  *
  * @decision .agents/decisions/261112_043034-device-api.md#command-line
  * @decision .agents/decisions/261115_222025-p0-api-details.md#command-line
@@ -16,6 +17,7 @@
  * @decision .agents/decisions/261117_005821-management-endpoint.md#the-command
  * @decision .agents/decisions/261118_173838-running-under-another-program.md
  * @decision .agents/decisions/261120_011627-single-executables.md#compiling-a-rack
+ * @decision .agents/decisions/261124_055114-rack-dashboard.md#rack-dashboard
  */
 import { dirname, relative, resolve } from "node:path";
 import {
@@ -28,6 +30,7 @@ import {
   sendOperation,
 } from "./commands.ts";
 import { compileRack } from "./compile.ts";
+import { runDashboard } from "./dashboard/server.ts";
 
 const USAGE = [
   "usage: rack <start|dev> [manifest path, default rack.ts] [--no-plan] [--no-watchdog]",
@@ -39,6 +42,8 @@ const USAGE = [
   "       rack ctl rollback <device> [--to <firmware>] | history [device]",
   "       rack ctl events [--after <seq>]",
   "         [--dir <base directory>] [--url <url> [--token-file <file>]]",
+  "       rack dashboard [--dir <base directory>] [--port <port>]",
+  "       rack dashboard --url <url> [--token-file <file>] [--port <port>]",
 ].join("\n");
 
 const FLAGS: Record<string, readonly string[]> = {
@@ -47,6 +52,7 @@ const FLAGS: Record<string, readonly string[]> = {
   plan: ["--write", "--check"],
   compile: ["--outfile", "--target"],
   ctl: ["--dir", "--url", "--token-file", "--no-cascade", "--to", "--after"],
+  dashboard: ["--dir", "--port", "--url", "--token-file"],
 };
 
 /** Flags that take a value, as `--flag value` or `--flag=value`. */
@@ -57,6 +63,7 @@ const VALUE_FLAGS = new Set([
   "--token-file",
   "--to",
   "--after",
+  "--port",
   "--log",
   "--outfile",
   "--target",
@@ -93,6 +100,16 @@ async function main(args: string[]): Promise<void> {
   if (known === undefined || [...flags.keys()].some((flag) => !known.includes(flag))) usage();
   if (command === "ctl") {
     await sendOperation(positional, flags, resolve(flags.get("--dir") ?? process.cwd()), usage);
+    return;
+  }
+  if (command === "dashboard") {
+    await runDashboard({
+      positional,
+      flags,
+      dir: resolve(flags.get("--dir") ?? process.cwd()),
+      dirFlag: "--dir",
+      usage,
+    });
     return;
   }
   if (positional.length > 1) usage();
