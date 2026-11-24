@@ -17,7 +17,7 @@ The documentation ships with the package, and this skill names each document by 
 4. **Mount them in a rack**, in a manifest, `rack.ts` by default: by hand in slots, or scanned from directories: `node_modules/racku/docs/guides/racks.md`.
 5. **Test each device on the bench**, with a stub for each of its needs: `node_modules/racku/docs/guides/testing.md`.
 6. **Run the rack** with `rack dev` while you work, which replaces the devices whose files change, and with `rack start` otherwise: `node_modules/racku/docs/guides/running.md`.
-7. **Look at what it reports**: `status()`, `metrics()`, `history()`, and the log, also through `rack ctl`: `node_modules/racku/docs/guides/managing.md` and `node_modules/racku/docs/reference/reports.md`.
+7. **Look at what it reports**: `status()`, `metrics()`, `history()`, `events()`, and the log, also through `rack ctl`, or in the browser with `rack dashboard`: `node_modules/racku/docs/guides/managing.md` and `node_modules/racku/docs/reference/reports.md`.
 
 ## Rules that keep devices swappable
 

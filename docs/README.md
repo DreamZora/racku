@@ -26,7 +26,7 @@ Each guide covers one part of racku. Together they build one small app, a greete
 - [Listeners](guides/listeners.md): HTTP and WebSocket servers that devices open, which the rack hands over across swaps, and the bodies and files they answer with.
 - [Updates](guides/updates.md): swaps, reloads, changed plans, fallback, rollback, and history.
 - [Faults and overload](guides/faults.md): crashes, hangs and watchdogs, stuck threads, and bounded backlogs.
-- [Managing a running rack](guides/managing.md): `rack ctl` and the management endpoint.
+- [Managing a running rack](guides/managing.md): `rack ctl`, the dashboard, and the management endpoint.
 - [Storage devices](guides/storage.md): `memkv` and `sqlite`.
 
 ## Reference

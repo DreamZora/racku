@@ -96,4 +96,4 @@ A scanned rack can name hot-plug directories, whose devices start on their own a
 
 ## Watching a rack
 
-A running rack reports what it does: `status()` gives each device's state and firmware, `metrics()` counts calls and events, `history()` lists the updates, and the log says what the rack and each device did. `rack ctl` reaches the same operations from a terminal, through a management endpoint that only the rack's user can use. [Managing a running rack](guides/managing.md) and [Reports](reference/reports.md) describe them.
+A running rack reports what it does: `status()` gives each device's state and firmware, `metrics()` counts calls and events, `history()` lists the updates, `events()` keeps the recent events, such as crashes and swaps, and the log says what the rack and each device did. `rack ctl` reaches the same operations from a terminal, through a management endpoint that only the rack's user can use, and `rack dashboard` shows the rack in the browser and runs them there. [Managing a running rack](guides/managing.md) and [Reports](reference/reports.md) describe them.

@@ -12,6 +12,7 @@ rack ctl swap <device> [source]
 rack ctl restart <device> [--no-cascade]
 rack ctl rollback <device> [--to <firmware>]
 rack ctl history [device]
+rack ctl events [--after <seq>]          # the rack's recent events, such as crashes
 rack ctl stop                            # shut down in order, like Ctrl-C
 ```
 
@@ -39,3 +40,26 @@ Each operation is `POST /v1/<operation>` with the body `{ "args": [...] }`, and 
 - Operations from the endpoint and from code share one queue, so they run one at a time, in call order.
 
 From code, `start(manifest, { control: true })` opens the same endpoint.
+
+## The dashboard
+
+`rack dashboard` shows the rack that runs from the current directory, or `--dir <path>`, in the browser, and runs operations on it:
+
+```sh
+rack dashboard
+# dashboard of /srv/shop-api at http://127.0.0.1:43117/#token=…
+```
+
+Open the URL that it prints. The page reads the rack every second, and its counters every 2 seconds, and shows:
+- the rack: how many devices are in each state, the calls from outside per second, and how old what it shows is; while the rack doesn't answer, since when and why;
+- the rack's front, with each device in its slots, and its state as a word and an icon. Select a device for its details: everything `status()` reports, its calls and errors per second, the mean duration of its calls, its event loop's delay, a chart of its calls over the last 2 minutes, and its updates;
+- the calls from outside the rack, the history of updates, and the rack's recent events, which `events()` keeps, narrowed to a level or a device.
+
+Buttons run Reload and Stop for the rack, and Swap, Restart, and Roll back for a device. Each asks first, and shows its outcome; the rack runs them in its queue, with those of `rack ctl`. A swap rebuilds the device's own file: plugging, unplugging, and a swap to another file stay with `rack ctl` and code.
+
+The dashboard is a process of its own, which reaches the rack as `rack ctl` does, and the rack opens nothing new for it. It goes on while the rack stops and starts again. [Flags of rack dashboard](../reference/cli.md#flags-of-rack-dashboard) lists its flags, such as `--url` for a rack's TCP endpoint, and an executable serves its own with `dashboard`.
+
+Who can use it:
+- The URL holds a token, new at each start, in its fragment, which the browser doesn't send to the server; the page keeps it in its tab. Whoever has the URL can do through the page what `rack ctl` does, so keep it as secret as the rack's control token. A log that receives the dashboard's output, such as a service manager's, holds the URL too.
+- The dashboard listens on `127.0.0.1` only, and refuses the requests that pages of other sites send. From another machine, forward a port, such as with `ssh -L 8080:127.0.0.1:43117 <host>`, and open the URL with `localhost:8080` in place of `127.0.0.1:43117`.
+- [Limits](../reference/limits.md#the-dashboard) gives its bounds.

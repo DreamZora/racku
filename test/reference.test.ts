@@ -141,6 +141,50 @@ test("the defaults of start() in the reference are the ones the code has", async
   ]);
 });
 
+// @doc docs/reference/limits.md#supervision-and-history
+// @doc docs/reference/limits.md#the-dashboard
+// @decision .agents/decisions/261124_055114-rack-dashboard.md#bounds
+test("the bounds of the feed, the dashboard, and its page in the reference are the ones the code has", async () => {
+  const dashboard = await import("../src/dashboard/server.ts");
+  const { FEED_LIMIT: PAGE_RECORDS } = await import("../src/dashboard/page/feed.ts");
+  const { READINGS_PER_DEVICE } = await import("../src/dashboard/page/rates.ts");
+  const { POLL_INTERVALS } = await import("../src/dashboard/page/poller.ts");
+  const rack = await read("src/rack.ts");
+  const constant = (name: string) =>
+    Number(new RegExp(`const ${name} = ([\\d_]+);`).exec(rack)?.[1]?.replaceAll("_", ""));
+  /** A number as the reference writes it, with a space between each group of three digits. */
+  const spaced = (value: number) => String(value).replace(/\B(?=(\d{3})+$)/g, " ");
+
+  const limits = await read("docs/reference/limits.md");
+  const bounds = new Map(
+    rows(limits, "| Bound | Value | Beyond it |").map(([bound = "", value = ""]) => [bound, value]),
+  );
+  const value = (bound: string) => bounds.get(bound) ?? `no row "${bound}"`;
+  expect(value("Records of the feed of recent events, which `events()` reads")).toBe(
+    spaced(constant("FEED_LIMIT")),
+  );
+  expect(value("One record of the feed, as JSON")).toBe(
+    `${spaced(constant("RECORD_MAX"))} characters`,
+  );
+  expect(limits).toContain(`its messages are cut to ${spaced(constant("CUT_MESSAGE"))} characters`);
+  expect(value("Requests of `rack dashboard` that wait for the rack")).toBe(
+    String(dashboard.WAITING_LIMIT),
+  );
+  expect(value("A request's body")).toBe(`${dashboard.BODY_LIMIT / 1024} KiB`);
+  expect(value("A read's wait for the rack")).toStartWith(`${dashboard.READ_TIMEOUT_MS / 1000} s,`);
+  expect(value("An operation's wait for the rack")).toBe(
+    `${dashboard.OPERATION_TIMEOUT_MS / 60_000} minutes`,
+  );
+  expect(value("Records of the feed that the page keeps")).toBe(spaced(PAGE_RECORDS));
+  expect(value("Readings of the counters that the page keeps per device, for its charts")).toBe(
+    String(READINGS_PER_DEVICE),
+  );
+  expect(POLL_INTERVALS).toEqual({ status: 1_000, history: 1_000, events: 1_000, metrics: 2_000 });
+  expect(limits).toContain(
+    "The page asks for the rack's state, its history, and its events every second, and for its counters every 2 seconds",
+  );
+});
+
 // @doc docs/reference/api.md#the-rack-handle
 test("the rack handle's table lists every method of RackHandle, with the type it returns", async () => {
   const source = await read("src/rack.ts");

@@ -321,6 +321,7 @@ describe("forwarding to a running rack", () => {
     expect(printed.length).toBe(8);
   }, 30_000);
 
+  // @doc docs/guides/managing.md#the-dashboard
   test("refuses plug, unplug, a swap to another device file, and arguments that an operation doesn't take", async () => {
     const created = await app();
     const { running } = await startRack(SPEC, { baseDir: created.dir, control: true });
@@ -467,6 +468,7 @@ describe("forwarding to a running rack", () => {
 
 describe("who can use the dashboard", () => {
   // @doc docs/reference/cli.md#flags-of-rack-dashboard
+  // @doc docs/guides/managing.md#the-dashboard
   test("answers 401 to a token that is missing, wrong, bare, or of an earlier start, and sends no CORS headers", async () => {
     const endpoint = stub();
     const created = await app();
@@ -501,6 +503,7 @@ describe("who can use the dashboard", () => {
     }
   }, 30_000);
 
+  // @doc docs/guides/managing.md#the-dashboard
   test("answers 403 to a foreign Host, Origin, or Sec-Fetch-Site, which only another site's page sends", async () => {
     const endpoint = stub();
     const created = await app();
@@ -705,6 +708,7 @@ describe("bounds", () => {
 
 describe("the rack it watches", () => {
   // @doc docs/reference/cli.md#flags-of-rack-dashboard
+  // @doc docs/guides/managing.md#the-dashboard
   test("starts while no rack runs, and follows a rack that starts, stops, and starts again for its base directory", async () => {
     const created = await app();
     // From the rack's directory, which names it by its real path, as macOS gives it.
@@ -829,6 +833,7 @@ describe("the rack it watches", () => {
 
 describe("the command", () => {
   // @doc docs/reference/cli.md#flags-of-rack-dashboard
+  // @doc docs/guides/managing.md#the-dashboard
   test("listens on 127.0.0.1 only, on the --port given", async () => {
     const free = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
     const port = free.port as number;

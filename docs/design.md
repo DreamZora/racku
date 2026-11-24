@@ -107,4 +107,4 @@ racku runs on Bun, which provides Workers, the bundler that builds firmware, HTT
 - **Native code:** a thread blocked in native code, such as a long SQLite query, stops only when the call returns. Only a restart of the rack reclaims a thread whose call never returns, as [Faults and overload](guides/faults.md#stuck-threads) describes.
 - **State:** a crash or a restart loses a device's in-memory state. State that matters belongs in a storage device.
 - **Bun:** racku works around two bugs of Bun 1.4.4: an import or a build that Bun reports missing a file on disk is tried again, and a body of 15 KiB or more is sent in a form that Bun writes in one piece, as [`wholeResponse()`](guides/listeners.md#bodies-in-memory) does.
-- **Not built yet:** devices in child processes, racks connected to each other, and a management dashboard, as the [README](../README.md#not-supported-yet) lists.
+- **Not built yet:** devices in child processes, and racks connected to each other, as the [README](../README.md#not-supported-yet) lists.

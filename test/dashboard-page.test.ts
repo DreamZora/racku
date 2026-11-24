@@ -268,6 +268,7 @@ describe("rates of the counters", () => {
     expect(track.latest?.needs.db?.query).toEqual({ rate: 2, errors: 0, meanMs: 5 });
   });
 
+  // @doc docs/guides/managing.md#the-dashboard
   test("counters that restart with a new firmware or a new boot give no rate for that interval", () => {
     const track = new DeviceTrack();
     track.add(0, reading({ servedCalls: 500 }));
@@ -451,6 +452,7 @@ describe("the feed's records", () => {
     ).toBe("info");
   });
 
+  // @doc docs/guides/managing.md#the-dashboard
   test("the operator narrows the records to a level and a device, newest first", () => {
     const list: EventRecord[] = [
       logRecord(1, { device: "web", level: "error" } as Partial<EventRecord>),
@@ -492,6 +494,7 @@ describe("the feed's records", () => {
 // ---- The connection ----
 
 describe("the connection and the data's age", () => {
+  // @doc docs/guides/managing.md#the-dashboard
   test("connecting, live with the data's age, down since the first failure, and live again", () => {
     const status = new Freshness();
     expect(connectionOf(status, 0)).toEqual({ state: "connecting" });
@@ -603,6 +606,7 @@ describe("polling", () => {
     expect(runs).toBe(1);
   });
 
+  // @doc docs/guides/managing.md#the-dashboard
   test("the page asks for status, history, and events every second, and metrics every 2 s", () => {
     expect(POLL_INTERVALS).toEqual({
       status: 1_000,

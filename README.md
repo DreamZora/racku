@@ -65,7 +65,7 @@ curl localhost:3000     # Hello again
 - **[Devices](docs/concepts.md#devices)** run in Workers of their own, so a crash, a leak, or a blocked event loop stays in its device.
 - **[Connectors](docs/concepts.md#connectors-and-ports)** are the contracts between devices, such as `notes/v1`, with a schema for everything that crosses. No device imports another.
 - **[Swaps](docs/concepts.md#swaps)** start a new version beside the old one, which hands over its calls in one step, and its state. A new version that fails leaves the old firmware in its slot.
-- **[Supervision](docs/concepts.md#faults)** resets devices that crash, catches those that hang, bounds every backlog, and falls back from updates that fail. `status()`, `metrics()`, `history()`, and the log report it all.
+- **[Supervision](docs/concepts.md#faults)** resets devices that crash, catches those that hang, bounds every backlog, and falls back from updates that fail. `status()`, `metrics()`, `history()`, `events()`, and the log report it all, and `rack dashboard` shows it in the browser.
 
 ## Why it is built this way
 
@@ -116,6 +116,7 @@ What works, on Linux, macOS, and Windows:
 - crash resets, watchdogs, bounded backlogs, and threads stuck in native code;
 - listeners that devices open, and the HTTP panel, with WebSocket, files sent from disk, and certificates that change without a restart;
 - the standard `memkv` and `sqlite` devices, the `rack` command, a test bench, injected faults, counters, and logs for other programs;
+- a dashboard in the browser, from `rack dashboard`, that shows a running rack and its recent events, and operates it;
 - a rack in one executable, from `rack compile`, whose devices files beside it replace, at a reload or, with `--watch`, as they change;
 - hot-plug directories, whose devices come and go with their files and are left out when they can't run, every needs that reach them, and commands that hosts discover.
 
@@ -124,7 +125,6 @@ racku follows semantic versioning from 1.0.0: only a major version breaks the pu
 ### Not supported yet
 
 - Devices in child processes. No device ever runs on the rack's main thread.
-- A management dashboard.
 - Racks connected to each other.
 
 ## Documentation

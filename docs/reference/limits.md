@@ -78,13 +78,28 @@ See [The HTTP panel](../guides/http.md).
 | Armed watchdogs of a device | 16 | `scope.watchdog()` throws a `RangeError`. |
 | Fallbacks per update, a start in an executable included | 1 | |
 | `historyLimit`, a `start()` option: update records | 256 | The oldest records go. |
+| Records of the feed of recent events, which `events()` reads | 1 000 | The oldest records go. A reader sees how many by the gap in `seq`. |
+| One record of the feed, as JSON | 4 096 characters | The record loses its details, its messages are cut to 1 024 characters, and it carries `cut: true`. |
 | Firmware bundles under `.rack/firmware/`, with every file that their builds wrote | those that an instance, a known-good firmware, or a kept record needs | The rack deletes the others. A rack that holds its base directory's management endpoint, as under `rack start`, also deletes at its start those that earlier runs and `rack plan` left. |
 | Imports of a firmware bundle that Bun reports missing while it is on disk | 4 attempts, 10 ms apart | The error of the last one. |
 | Builds of firmware whose relative imports Bun reports missing while their files are on disk | 4 attempts, 10 ms apart | The error of the last one. |
 | Macros in a device file's imports | none | The build fails, with Bun's "Macros are disabled". |
 | Memory of a device | none of its own: its Worker shares the rack's process, and Bun 1.4.4 doesn't apply a Worker's `resourceLimits` | A device that exhausts memory can end the rack's process, which its service manager then starts again. |
 
-See [Faults and overload](../guides/faults.md) and [Updates](../guides/updates.md#history).
+See [Faults and overload](../guides/faults.md), [Updates](../guides/updates.md#history), and [events()](reports.md#events).
+
+## The dashboard
+
+| Bound | Value | Beyond it |
+|---|---|---|
+| Requests of `rack dashboard` that wait for the rack | 16 | 503; the page asks again at its next tick. |
+| A request's body | 64 KiB | 413. |
+| A read's wait for the rack | 60 s, more than the default `hookTimeout` for which `metrics()` waits for a device | 504; the page keeps what it showed, with its age. |
+| An operation's wait for the rack | 10 minutes | 504; the operation may still run, and the history shows its outcome. |
+| Records of the feed that the page keeps | 1 000 | The oldest go. |
+| Readings of the counters that the page keeps per device, for its charts | 60 | The oldest go. |
+
+The page asks for the rack's state, its history, and its events every second, and for its counters every 2 seconds, one request of each kind at a time. See [The dashboard](../guides/managing.md#the-dashboard).
 
 ## Executables
 
