@@ -50,6 +50,7 @@ This file defines the project background, architectural constraints, and working
   - [The fixes from the security review](.agents/decisions/261122_011655-security-review-fixes.md) came in v0.7.0, with [panel response bodies of 1 MiB or more in watched pieces](.agents/decisions/261122_061938-panel-bodies-in-watched-pieces.md).
   - [The trial round on the newer features](.agents/decisions/261122_005441-trials-of-the-newer-features.md) ran on 2026-11-22, and its issues, #23 to #30, are fixed in 1.0.0.
 - The project and its package are named racku, as [The project and its package are named racku](.agents/decisions/261122_044025-the-name-racku.md) decides; the informal tags up to v0.6.0, and the decisions before that one, keep the name rack42u.
+- [rack dashboard, a page in the browser that monitors and operates a running rack, and the feed of the rack's recent events](.agents/decisions/261124_055114-rack-dashboard.md) is implemented, for the next minor version: `events()` keeps the rack's last 1 000 events, which the management endpoint and `rack ctl events` serve, and `rack dashboard` serves a page on loopback, behind a token in its URL's fragment, that shows the rack and runs operations on it, as a client of the endpoint. The page is TypeScript with the DOM's types in `src/dashboard/page/`, which `bun run typecheck` checks as a program of its own, and shares the types of the reports in `src/reports.ts` with racku.
 - The repository is public since 2026-11-22, as `DreamZora/racku`, as [The repository is public before the first formal release](.agents/decisions/261122_062703-public-before-the-first-release.md) records: with `SECURITY.md`, private vulnerability reporting, and actions pinned by commit.
 - Do not assume that a module, command, or directory exists; trust the actual repository content.
 
@@ -211,6 +212,7 @@ Read [Decision records](.agents/decisions/261112_035939-decision-records.md) bef
 | Run the type check, lint, decision gate, documentation gate, and tests in order | `bun run check` |
 | Run the example app | `bun src/cli.ts start examples/shop-api/rack.ts` |
 | Run the example app with hot reload | `bun src/cli.ts dev examples/shop-api/rack.ts` |
+| Serve the dashboard of the running example app | `bun src/cli.ts dashboard --dir examples/shop-api` |
 
 ## Coding standards
 
@@ -266,8 +268,13 @@ src/                 framework source
   instance.ts        the main thread's handle on one device Worker
   worker.ts          the Worker host: firmware, hooks, link traffic, and counters
   metrics.ts         the counter shapes rack.metrics() returns
+  reports.ts         the shapes of status(), history(), events(), and the events of subscribe(),
+                     without Bun, which the dashboard's page shares
   plan.ts            the planner of scanned racks, and the plan file
   control.ts         the management endpoint that rack ctl talks to
+  dashboard/         rack dashboard: server.ts serves the page and forwards its requests to the
+                     management endpoint; page/ is the page, TypeScript with the DOM's types and
+                     a tsconfig.json of its own, which Bun bundles with its HTML imports
   transfer.ts        checks and moves the buffers that calls and results transfer
   streams.ts         both ends of the byte streams in calls, on a link or the data channel
   listeners.ts       the listeners that devices open with ctx.serve, in the Worker host
@@ -278,7 +285,8 @@ src/                 framework source
     http-panel.ts    the standard HTTP panel device
     commands.ts      the commands/v1 connector and commands(), through which devices offer calls
 test/                bun:test tests, named *.test.ts
-  fixtures/          test devices, connectors, and helpers; no tests
+  fixtures/          test devices, connectors, and helpers, such as browser.ts, which drives
+                     headless Chrome for the page's tests; no tests
 examples/shop-api/   the example app
 examples/net-tool/   a TCP and UDP tool: its rack, devices, and connector, which the suite checks
   app/               the window, Vue 3 and Quasar with its own package.json, src-tauri/, the

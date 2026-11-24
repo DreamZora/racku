@@ -279,6 +279,30 @@ Measured on 2026-11-24 with Bun 1.4.4 on Linux, with probes outside the reposito
 - **Release:** the work goes on its own branch, and comes as racku 1.1.0. The merge into `main` and the tag wait for the user's word.
 - **Later:** the operations that the dashboard doesn't offer, such as plugging and unplugging devices, access from other machines, and a streamed feed each need a decision of their own.
 
+## Implementation
+
+- **The feed:**
+  - `src/rack.ts` keeps it, each record as its JSON text, with the bounds `FEED_LIMIT`, `RECORD_MAX`, and `CUT_MESSAGE`. A record still too long after the cut, such as one whose messages are full of characters that JSON escapes, or whose device's name is thousands of characters long, has its messages, its device's name, and its error's code cut further, by half each time, until it fits.
+  - `events()` is a method of `RackHandle`, and `src/control.ts` serves the operation `events`.
+  - `src/log.ts` exports what the log and the feed share: `bigints` and `detailText`, which write details, and `oneLine`, which escapes control characters.
+  - `EventRecord`, and the other shapes of the reports, are in `src/reports.ts`, which `src/rack.ts` and the modules that held them re-export.
+- **The command lines:**
+  - `src/commands.ts` finds a rack's endpoint for `rack ctl` and the dashboard, in `rackTarget`, `findEndpoint`, and `postOperation`.
+  - `postOperation` sends operations with `proxy: false`. Bun 1.4.4's `fetch` sends a request for `127.0.0.1`, its `Authorization` header included, through the proxy that `HTTP_PROXY` names, unless `NO_PROXY` names the host, as a probe confirmed on 2026-11-24. Before, `rack ctl` sent a TCP endpoint's token to such a proxy.
+  - `rack ctl events` and `rack dashboard` are in `src/cli.ts`, and an executable's `ctl events` and `dashboard` in `src/executable.ts`.
+- **The server:** `src/dashboard/server.ts`, with `openDashboard`, `runDashboard`, and the bounds `WAITING_LIMIT`, `BODY_LIMIT`, `READ_TIMEOUT_MS`, and `OPERATION_TIMEOUT_MS`. Bun may end a connection whose request waits past its idle timeout, so a read's connection gets an idle timeout past its bound, and an operation's gets none, and closes after its answer.
+- **The page:** `src/dashboard/page/`: `index.html`, `main.ts`, and the views, with the DOM; and, without it, the modules that tests run in Bun, such as `api.ts`, `poller.ts`, `rates.ts`, `feed.ts`, `connection.ts`, and `token.ts`. What the decision leaves open:
+  - The page asks for the records after the one before the newest it holds, so that the newest comes back. An empty answer, or another record under that `seq`, shows a rack that started again, whose feed the page then reads from `seq` 1.
+  - Rolling back to the known-good firmware sends its hash as `to`, since `rollback()` without `to` goes to the firmware before the current one.
+  - The page gives up on a read after 70 s, and on an operation after 610 s, so that the dashboard's 504 comes first.
+  - Its colors passed the palette validator of the dataviz skill, for light and dark.
+- **Tests:**
+  - `test/events.test.ts`: the feed, its bounds and cuts, and the operation on both transports; `test/control.test.ts`: `rack ctl events` against a rack.
+  - `test/dashboard.test.ts`: `rack dashboard` against racks and stand-in endpoints; `test/cli.test.ts` and `test/executable.test.ts`: the command lines, and the page that an executable serves.
+  - `test/dashboard-page.test.ts`: the page's logic.
+  - `test/dashboard-browser.test.ts`: the page in headless Chrome, which `test/fixtures/browser.ts` drives over the DevTools protocol.
+  - `test/reference.test.ts`: the bounds that Limits gives, against the code.
+
 ## Confirmation
 
 - On 2026-11-24 the Agent asked the user whether they accept this decision, with two open questions: whether the feed keeps log entries of level `debug` as well, and whether an environment variable fixes the dashboard's token, so that its URL lasts across restarts. The user's answer: "accept, you could use workflow to implement it with multi agent to speed up." The decision is accepted as written: the feed leaves out `debug` entries, and the dashboard's token is new at each start.
