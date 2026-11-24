@@ -22,6 +22,7 @@ import {
   type RackTarget,
   rackTarget,
 } from "../commands.ts";
+import { oneLine } from "../log.ts";
 import page from "./page/index.html";
 
 /** How many requests may wait for the rack at once: 16. One more gets 503. */
@@ -418,38 +419,6 @@ function word(arg: unknown): string {
 /** A bound in ms, for people: `60 s`, or `10 min` from 2 minutes up. */
 function duration(ms: number): string {
   return ms >= 120_000 && ms % 60_000 === 0 ? `${ms / 60_000} min` : `${ms / 1000} s`;
-}
-
-/** The escapes that JSON writes for some control characters; the others get `\u` and 4 digits. */
-const SHORT_ESCAPES: Record<string, string> = {
-  "\b": "\\b",
-  "\t": "\\t",
-  "\n": "\\n",
-  "\f": "\\f",
-  "\r": "\\r",
-};
-
-/**
- * Text with its control characters escaped, as the rack's text log escapes them: C0 and C1
- * controls, DEL, and U+2028 and U+2029. So a device's name or an error's message that a client
- * chose can't forge another line of the dashboard's output.
- *
- * @decision .agents/decisions/261122_011655-security-review-fixes.md#code-loading-and-the-files-the-rack-writes
- */
-function oneLine(text: string): string {
-  let line = "";
-  let from = 0;
-  for (let at = 0; at < text.length; at++) {
-    const code = text.charCodeAt(at);
-    const control =
-      code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029;
-    if (!control) continue;
-    line +=
-      text.slice(from, at) +
-      (SHORT_ESCAPES[text.charAt(at)] ?? `\\u${code.toString(16).padStart(4, "0")}`);
-    from = at + 1;
-  }
-  return from === 0 ? text : line + text.slice(from);
 }
 
 /** What {@link runDashboard} runs. */

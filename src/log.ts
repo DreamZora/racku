@@ -56,9 +56,13 @@ const SHORT_ESCAPES: Record<string, string> = {
 
 /**
  * Text with its control characters escaped: C0 and C1 controls, DEL, and the separators of
- * lines and paragraphs, U+2028 and U+2029, which some readers break lines at.
+ * lines and paragraphs, U+2028 and U+2029, which some readers break lines at. The text log and
+ * `rack dashboard`'s output use it, so that text a client chose can't forge another line.
+ *
+ * @param text Any text.
+ * @returns The text, with each control character written as JSON escapes it.
  */
-function oneLine(text: string): string {
+export function oneLine(text: string): string {
   let line = "";
   let from = 0;
   for (let at = 0; at < text.length; at++) {
